@@ -1,0 +1,218 @@
+'use client'
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { apiFetch } from '@/lib/api'
+import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
+import { fmtUSD, fmtNum } from '@/lib/format'
+import { DataTable } from '@/components/data-table'
+import type { GainLossEntry, GainLossResponse, GainLossSummary } from '@/lib/types'
+
+type GainLossPageClientProps = {
+  initialEntity: string
+  initialGainLoss: GainLossEntry[]
+  initialSummary: GainLossSummary
+}
+
+export function GainLossPageClient({
+  initialEntity,
+  initialGainLoss,
+  initialSummary,
+}: GainLossPageClientProps) {
+  const [entity, setEntity] = useState(initialEntity)
+  const [gainLoss, setGainLoss] = useState<GainLossEntry[]>(initialGainLoss)
+  const [summary, setSummary] = useState<GainLossSummary>(initialSummary)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const didHydrate = useRef(false)
+
+  // Filters
+  const [tokenFilter, setTokenFilter] = useState('')
+  const [termFilter, setTermFilter] = useState('')
+  const [walletFilter, setWalletFilter] = useState('')
+
+  async function fetchData() {
+    setLoading(true)
+    try {
+      const res = await apiFetch<GainLossResponse>(`/api/treasury/gain-loss?entity=${entity}`)
+      setGainLoss(res.gainLoss)
+      setSummary(res.summary)
+      setError(null)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Unknown error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!didHydrate.current) {
+      didHydrate.current = true
+      return
+    }
+    fetchData()
+  }, [entity])
+
+  const wallets = useMemo(() => {
+    const set = new Set<string>()
+    gainLoss.forEach(g => { if (g.wallet) set.add(g.wallet) })
+    return [...set].sort()
+  }, [gainLoss])
+
+  const filtered = useMemo(() => {
+    return gainLoss.filter(g => {
+      if (tokenFilter && g.asset !== tokenFilter) return false
+      if (termFilter && g.term !== termFilter) return false
+      if (walletFilter && g.wallet !== walletFilter) return false
+      return true
+    })
+  }, [gainLoss, tokenFilter, termFilter, walletFilter])
+
+  const filteredSummary = useMemo(() => ({
+    totalGain: filtered.reduce((s, g) => s + g.gain, 0),
+    shortTermGain: filtered.filter(g => g.term === 'ST').reduce((s, g) => s + g.gain, 0),
+    longTermGain: filtered.filter(g => g.term === 'LT').reduce((s, g) => s + g.gain, 0),
+    dispositions: filtered.length,
+  }), [filtered])
+
+  const columns = [
+    {
+      key: 'soldDate', label: 'Sold Date', width: '110px',
+      render: (g: GainLossEntry) => <span style={{ fontSize: '0.72rem' }}>{new Date(g.soldDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>,
+    },
+    {
+      key: 'wallet', label: 'Wallet', width: '180px',
+      render: (g: GainLossEntry) => <span style={{ fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap', maxWidth: 170 }}>{g.wallet}</span>,
+    },
+    {
+      key: 'asset', label: 'Token', width: '70px',
+      render: (g: GainLossEntry) => {
+        const c = TOKEN_COLORS[g.asset] || '#888'
+        return <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: `${c}18`, color: c }}>{g.asset}</span>
+      },
+    },
+    {
+      key: 'qty', label: 'Qty', numeric: true, width: '100px',
+      render: (g: GainLossEntry) => <span>{fmtNum(g.qty, 2)}</span>,
+    },
+    {
+      key: 'buyPrice', label: 'Avg In', numeric: true, width: '90px',
+      render: (g: GainLossEntry) => <span style={{ color: 'var(--muted)' }}>${g.buyPrice.toFixed(4)}</span>,
+    },
+    {
+      key: 'sellPrice', label: 'Sold At', numeric: true, width: '90px',
+      render: (g: GainLossEntry) => <span>${g.sellPrice.toFixed(4)}</span>,
+    },
+    {
+      key: 'gain', label: 'Gain/Loss', numeric: true, width: '120px',
+      render: (g: GainLossEntry) => (
+        <span className={g.gain >= 0 ? 'gain-pos' : 'gain-neg'} style={{ fontWeight: 600 }}>
+          {g.gain >= 0 ? '+' : ''}{fmtUSD(g.gain)}
+        </span>
+      ),
+    },
+    {
+      key: 'term', label: 'Term', width: '50px',
+      render: (g: GainLossEntry) => (
+        <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', padding: '1px 6px', borderRadius: 3,
+          background: g.term === 'LT' ? 'var(--green-bg)' : 'var(--orange-bg)',
+          color: g.term === 'LT' ? 'var(--green)' : 'var(--orange)' }}>
+          {g.term}
+        </span>
+      ),
+    },
+    {
+      key: 'txHash', label: 'Tx', width: '100px', sortable: false,
+      render: (g: GainLossEntry) => g.txHash
+        ? <a href={`https://solscan.io/tx/${g.txHash}`} target="_blank" rel="noreferrer"
+            style={{ fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--accent)', textDecoration: 'none' }}>
+            {g.txHash.slice(0, 8)}…{g.txHash.slice(-4)}
+          </a>
+        : <span style={{ color: 'var(--muted)' }}>—</span>,
+    },
+  ]
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title">Gain / Loss</div>
+        <div className="page-sub">Realized gains and losses — FIFO cost basis</div>
+      </div>
+
+      <div className="controls-bar">
+        <div className="entity-tabs">
+          {ENTITIES.map(e => (
+            <button key={e} className={`entity-tab${entity === e ? ' active' : ''}`} onClick={() => setEntity(e)}>{e}</button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="status-bar"><span className="status-dot loading" /><span className="status-text">Computing FIFO…</span></div>
+      ) : error ? (
+        <div className="error-msg">{error}</div>
+      ) : (
+        <>
+          <div className="cards-grid">
+            <div className="card">
+              <div className="card-label">Total Realized</div>
+              <div className={`card-value ${filteredSummary.totalGain >= 0 ? 'green' : 'red'}`}>
+                {filteredSummary.totalGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.totalGain)}
+              </div>
+              <div className="card-sub">
+                {tokenFilter || termFilter || walletFilter ? 'Filtered view' : 'Full entity data'}
+              </div>
+            </div>
+            <div className="card">
+              <div className="card-label">Short Term</div>
+              <div className={`card-value ${filteredSummary.shortTermGain >= 0 ? 'green' : 'red'}`}>
+                {filteredSummary.shortTermGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.shortTermGain)}
+              </div>
+              <div className="card-sub">
+                {tokenFilter || termFilter || walletFilter ? 'Filtered view' : 'Full entity data'}
+              </div>
+            </div>
+            <div className="card">
+              <div className="card-label">Long Term</div>
+              <div className={`card-value ${filteredSummary.longTermGain >= 0 ? 'green' : 'red'}`}>
+                {filteredSummary.longTermGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.longTermGain)}
+              </div>
+              <div className="card-sub">
+                {tokenFilter || termFilter || walletFilter ? 'Filtered view' : 'Full entity data'}
+              </div>
+            </div>
+            <div className="card">
+              <div className="card-label">Dispositions</div>
+              <div className="card-value">{filteredSummary.dispositions}</div>
+              <div className="card-sub">
+                {tokenFilter || termFilter || walletFilter ? `${summary.dispositions.toLocaleString()} total` : 'Full entity data'}
+              </div>
+            </div>
+          </div>
+
+          <div className="section">
+            <div className="section-header">
+              <span className="section-title">{filtered.length} realized events</span>
+              <div className="section-filters">
+                <select className="fsel" value={tokenFilter} onChange={e => setTokenFilter(e.target.value)}>
+                  <option value="">All tokens</option>
+                  <option value="SOL">SOL</option>
+                  <option value="ORCA">ORCA</option>
+                </select>
+                <select className="fsel" value={termFilter} onChange={e => setTermFilter(e.target.value)}>
+                  <option value="">All terms</option>
+                  <option value="ST">Short Term</option>
+                  <option value="LT">Long Term</option>
+                </select>
+                <select className="fsel" value={walletFilter} onChange={e => setWalletFilter(e.target.value)}>
+                  <option value="">All wallets</option>
+                  {wallets.map(w => <option key={w} value={w}>{w}</option>)}
+                </select>
+              </div>
+            </div>
+            <DataTable data={filtered as unknown as Record<string, unknown>[]} columns={columns as any} defaultSort={{ col: 'soldDate', dir: 'desc' }} maxHeight="600px" />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

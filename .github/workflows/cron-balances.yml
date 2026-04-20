@@ -1,0 +1,19 @@
+name: Fetch Balances
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  APP_URL: ${{ vars.APP_URL || 'https://tidelog-v2.vercel.app' }}
+  CRON_SECRET: ${{ secrets.CRON_SECRET }}
+
+jobs:
+  balances:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch wallet balances
+        run: |
+          curl -sf -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/fetch-balances" | jq .

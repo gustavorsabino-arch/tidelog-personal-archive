@@ -1,0 +1,1388 @@
+'use client'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { fmtUSD } from '@/lib/format'
+import { BUDGET_DEPTS, ENTITIES } from '@/lib/constants'
+import { apiFetch, apiPost } from '@/lib/api'
+import { BudgetImportModal } from '@/components/budget-import-modal'
+import { BudgetRecoveryModal } from '@/components/budget-recovery-modal'
+import { BudgetTeamMemberModal } from '@/components/budget-team-member-modal'
+import { BudgetQbConnectModal } from '@/components/budget-qb-connect-modal'
+import { BudgetHeadcountModal } from '@/components/budget-headcount-modal'
+import { BudgetPlanBreakdownModal } from '@/components/budget-plan-breakdown-modal'
+import { BudgetActualDrillModal } from '@/components/budget-actual-drill-modal'
+import { BudgetScopeControls } from '@/components/budget-scope-controls'
+import { BudgetReportTable } from '@/components/budget-report-table'
+import { BudgetQbMappingPanel } from '@/components/budget-qb-mapping-panel'
+import { BudgetCoveragePanel } from '@/components/budget-coverage-panel'
+import { useSharedAccess } from '@/lib/access-context'
+import type { BudgetBootstrapResponse } from '@/lib/budget/bootstrap'
+import type {
+  BudgetActualDrillState,
+  BudgetCoverageState,
+  BudgetDepartment,
+  BudgetDepartmentActualScope,
+  BudgetDepartmentActualsState,
+  BudgetHeadcountActualsState,
+  BudgetDepartmentViewScope,
+  BudgetOverviewActualsState,
+  BudgetQbMappingMutationResult,
+  BudgetQbMappingRow,
+  BudgetQbMappingState,
+  BudgetImportSuccessResult,
+  BudgetPlanBreakdownState,
+  BudgetReportColumnKey,
+  BudgetReportRow,
+  BudgetState,
+  BudgetTeamMember,
+  BudgetTeamMutationResult,
+  BudgetViewState,
+} from '@/lib/budget/types'
+import type { QboStatusResponse, QboConnectionStatus } from '@/lib/qb/types'
+import {
+  canViewBudgetOverviewAllDepartments,
+  getAllowedBudgetEntities,
+  getAllowedBudgetViewModes,
+  getDefaultBudgetDepartment,
+  getVisibleBudgetTabs,
+  hasBudgetPageAccess,
+} from '@/lib/access-model'
+import {
+  filterBudgetTeam,
+  getBudgetHeadcountSummary,
+  getBudgetTeamSummary,
+  getHeadcountByDepartment,
+  sortBudgetTeam,
+  type BudgetTeamSortKey,
+} from '@/lib/budget/selectors'
+import {
+  canFetchBudgetActuals,
+  formatQboStatusSummary,
+  getMissingQboEntities,
+} from '@/lib/budget/qb-status'
+import { formatBudgetDepartmentList, getBudgetDepartmentLabel } from '@/lib/budget/departments'
+import { getBudgetActualRequest } from '@/lib/budget/actual-request'
+import {
+  canOpenBudgetActualDrill,
+  canOpenBudgetPlanBreakdown,
+  getBudgetActualDrillTitle,
+} from '@/lib/budget/drill'
+import {
+  clampBudgetViewState,
+  getBudgetScopePeriodLabel,
+  getBudgetScopeYtdLabel,
+  getDefaultBudgetViewState,
+  normalizeBudgetYear,
+} from '@/lib/budget/scope'
+import {
+  applyBudgetDepartmentActuals,
+  applyBudgetOverviewActuals,
+  buildBudgetPlanBreakdown,
+  buildBudgetDepartmentReport,
+  buildBudgetOverviewReport,
+} from '@/lib/budget/reports'
+
+function departmentPlanHasBudgetData(plan: BudgetState['plan']['departments'][BudgetDepartment]): boolean {
+  return Object.values(plan.periods ?? {}).some((lines) => !!lines && Object.keys(lines).length > 0)
+}
+
+function createEmptyBudgetState(year: number): BudgetState {
+  return {
+    plan: {
+      version: 1,
+      year,
+      departments: Object.fromEntries(
+        BUDGET_DEPTS.map((department) => [
+          department,
+          {
+            version: 1,
+            year,
+            department,
+            periods: { annual: {} },
+            source: 'placeholder-static',
+            importMeta: null,
+          },
+        ]),
+      ) as BudgetState['plan']['departments'],
+      source: 'placeholder-static',
+      lastUpdatedAt: null,
+    },
+    team: {
+      version: 1,
+      year,
+      members: [],
+      source: 'placeholder-static',
+      lastUpdatedAt: null,
+      lastUpdatedBy: null,
+    },
+  }
+}
+
+const BUDGET_TABS = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'departments', label: 'Department' },
+  { key: 'headcount', label: 'Headcount' },
+  { key: 'team', label: 'Team Tracker' },
+  { key: 'mapping', label: 'QB Mapping' },
+  { key: 'coverage', label: 'Coverage' },
+]
+const AUTO_ACTUALS_DEBOUNCE_MS = 250
+
+function getBudgetViewCacheKey(view: BudgetViewState): string {
+  return [
+    view.year,
+    view.entity,
+    view.mode,
+    view.month,
+    view.rangeStart,
+    view.rangeEnd,
+  ].join(':')
+}
+
+function getBudgetDepartmentCacheKey(view: BudgetViewState, department: BudgetDepartmentActualScope): string {
+  return `${getBudgetViewCacheKey(view)}:${department}`
+}
+
+function formatBudgetVariance(varianceUsd: number | null): string {
+  if (varianceUsd === null) return '—'
+  if (Math.abs(varianceUsd) < 0.5) return fmtUSD(0, 0)
+  return fmtUSD(varianceUsd, 0)
+}
+
+function getBudgetVarianceTone(varianceUsd: number | null): 'green' | 'red' | '' {
+  if (varianceUsd === null || Math.abs(varianceUsd) < 0.5) return ''
+  return varianceUsd < 0 ? 'green' : 'red'
+}
+
+export default function BudgetPage() {
+  const [activeTab, setActiveTab] = useState('overview')
+  const [activeDept, setActiveDept] = useState<BudgetDepartmentViewScope | ''>('')
+  const [budgetYear, setBudgetYear] = useState(() => normalizeBudgetYear(2026))
+  const [budgetView, setBudgetView] = useState<BudgetViewState>(() => getDefaultBudgetViewState(2026))
+  const [teamSearch, setTeamSearch] = useState('')
+  const [teamDeptFilter, setTeamDeptFilter] = useState('')
+  const [teamEntityFilter, setTeamEntityFilter] = useState('')
+  const [teamStatusFilter, setTeamStatusFilter] = useState('active')
+  const [teamSort, setTeamSort] = useState<{ key: BudgetTeamSortKey; direction: 'asc' | 'desc' }>({
+    key: 'name',
+    direction: 'asc',
+  })
+  const [selectedHeadcountDepartment, setSelectedHeadcountDepartment] = useState<BudgetDepartment | null>(null)
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
+  const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false)
+  const [isTeamModalOpen, setIsTeamModalOpen] = useState(false)
+  const [isQbModalOpen, setIsQbModalOpen] = useState(false)
+  const [editingMember, setEditingMember] = useState<BudgetTeamMember | null>(null)
+  const [lastActionMessage, setLastActionMessage] = useState<string | null>(null)
+  const [qbNotice, setQbNotice] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
+  const [budgetState, setBudgetState] = useState<BudgetState>(() => createEmptyBudgetState(2026))
+  const [mappingState, setMappingState] = useState<BudgetQbMappingState | null>(null)
+  const [mappingLoading, setMappingLoading] = useState(false)
+  const [mappingSaving, setMappingSaving] = useState(false)
+  const [mappingError, setMappingError] = useState<string | null>(null)
+  const [coverageState, setCoverageState] = useState<BudgetCoverageState | null>(null)
+  const [coverageLoading, setCoverageLoading] = useState(false)
+  const [coverageError, setCoverageError] = useState<string | null>(null)
+  const [suggestedMappingAccount, setSuggestedMappingAccount] = useState<string | null>(null)
+  const [headcountActualsCache, setHeadcountActualsCache] = useState<Record<string, BudgetHeadcountActualsState>>({})
+  const [headcountActualsLoading, setHeadcountActualsLoading] = useState(false)
+  const [headcountActualsError, setHeadcountActualsError] = useState<string | null>(null)
+  const [planBreakdown, setPlanBreakdown] = useState<BudgetPlanBreakdownState | null>(null)
+  const [actualDrillOpen, setActualDrillOpen] = useState(false)
+  const [actualDrillTitle, setActualDrillTitle] = useState('')
+  const [actualDrill, setActualDrill] = useState<BudgetActualDrillState | null>(null)
+  const [actualDrillLoading, setActualDrillLoading] = useState(false)
+  const [actualDrillError, setActualDrillError] = useState<string | null>(null)
+  const [overviewActualsCache, setOverviewActualsCache] = useState<Record<string, BudgetOverviewActualsState>>({})
+  const [departmentActualsCache, setDepartmentActualsCache] = useState<Record<string, BudgetDepartmentActualsState>>({})
+  const [actualsLoading, setActualsLoading] = useState(false)
+  const [qbStatuses, setQbStatuses] = useState<QboConnectionStatus[]>([])
+  const [qbStatusLoading, setQbStatusLoading] = useState(false)
+  const [budgetError, setBudgetError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [allowedBudgetMonthIndices, setAllowedBudgetMonthIndices] = useState<number[] | null>(null)
+  const attemptedAutoActualKeysRef = useRef<Set<string>>(new Set())
+  const { access, loading: accessLoading, error: accessError } = useSharedAccess()
+  const canViewBudget = hasBudgetPageAccess(access)
+  const allowedBudgetViewModes = useMemo(() => getAllowedBudgetViewModes(access), [access])
+  const allowedBudgetEntities = useMemo(() => getAllowedBudgetEntities(access), [access])
+  const canUseAllDepartmentsOverview = useMemo(() => canViewBudgetOverviewAllDepartments(access), [access])
+  const isDepartmentScopedOverview = access ? !canUseAllDepartmentsOverview : false
+  const canSelectDepartmentOnOverview = access?.role === 'budget_admin' || isDepartmentScopedOverview
+  const preferredBudgetDepartment = useMemo(() => getDefaultBudgetDepartment(access), [access])
+  const visibleBudgetTabKeys = useMemo(() => getVisibleBudgetTabs(access), [access])
+  const visibleBudgetTabs = useMemo(
+    () => BUDGET_TABS.filter((tab) => visibleBudgetTabKeys.includes(tab.key)),
+    [visibleBudgetTabKeys],
+  )
+
+  async function loadBudgetBootstrap(noCache = false) {
+    setLoading(true)
+    setQbStatusLoading(true)
+    setBudgetError(null)
+
+    try {
+      const bootstrap = await apiFetch<BudgetBootstrapResponse>(`/api/budget/bootstrap?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
+      setBudgetState(bootstrap.state)
+      setQbStatuses(bootstrap.qbStatuses)
+      setAllowedBudgetMonthIndices(bootstrap.allowedBudgetMonthIndices)
+
+      if (bootstrap.qbStatusError) {
+        setQbNotice({
+          tone: 'warn',
+          text: bootstrap.qbStatusError,
+        })
+      }
+    } catch (error) {
+      setBudgetError(error instanceof Error ? error.message : 'Failed to load budget data.')
+      setBudgetState(createEmptyBudgetState(budgetYear))
+      setQbStatuses([])
+      setAllowedBudgetMonthIndices(null)
+    } finally {
+      setLoading(false)
+      setQbStatusLoading(false)
+    }
+  }
+
+  async function loadBudgetState(noCache = false) {
+    setLoading(true)
+    setBudgetError(null)
+    try {
+      const state = await apiFetch<BudgetState>(`/api/budget/state?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
+      setBudgetState(state)
+    } catch (error) {
+      setBudgetError(error instanceof Error ? error.message : 'Failed to load budget data.')
+      setBudgetState(createEmptyBudgetState(budgetYear))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadBudgetMapping(noCache = false) {
+    setMappingLoading(true)
+    setMappingError(null)
+    try {
+      const mapping = await apiFetch<BudgetQbMappingState>(`/api/budget/mapping?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
+      setMappingState(mapping)
+    } catch (error) {
+      setMappingError(error instanceof Error ? error.message : 'Failed to load QB mapping.')
+      setMappingState(null)
+    } finally {
+      setMappingLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    setLastActionMessage(null)
+  }, [budgetYear])
+
+  useEffect(() => {
+    setMappingState(null)
+    setMappingError(null)
+    setSuggestedMappingAccount(null)
+  }, [budgetYear])
+
+  useEffect(() => {
+    setCoverageState(null)
+    setCoverageError(null)
+    setHeadcountActualsError(null)
+    setPlanBreakdown(null)
+    setActualDrillOpen(false)
+    setActualDrill(null)
+    setActualDrillError(null)
+  }, [budgetYear, budgetView.entity, budgetView.mode, budgetView.month, budgetView.rangeStart, budgetView.rangeEnd])
+
+  useEffect(() => {
+    setQbNotice(null)
+  }, [budgetYear, budgetView.entity, budgetView.mode, budgetView.month, budgetView.rangeStart, budgetView.rangeEnd])
+
+  useEffect(() => {
+    setBudgetView((current) => clampBudgetViewState({
+      ...current,
+      year: budgetYear,
+    }, {
+      allowedMonthIndices: allowedBudgetMonthIndices,
+      allowedModes: allowedBudgetViewModes,
+      allowedEntities: allowedBudgetEntities,
+    }))
+  }, [allowedBudgetEntities, allowedBudgetMonthIndices, allowedBudgetViewModes, budgetYear])
+
+  useEffect(() => {
+    if (accessLoading) return
+
+    if (!canViewBudget) {
+      setLoading(false)
+      setBudgetState(createEmptyBudgetState(budgetYear))
+      setQbStatuses([])
+      setAllowedBudgetMonthIndices(null)
+      return
+    }
+
+    void loadBudgetBootstrap()
+  }, [access, accessLoading, budgetYear, canViewBudget])
+
+  async function loadQbStatus() {
+    setQbStatusLoading(true)
+    try {
+      const response = await apiFetch<QboStatusResponse>('/api/qb/status')
+      setQbStatuses(response.entities)
+    } catch (error) {
+      setQbNotice({
+        tone: 'warn',
+        text: error instanceof Error ? error.message : 'Failed to load QuickBooks connection status.',
+      })
+    } finally {
+      setQbStatusLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!canViewBudget || activeTab !== 'mapping') return
+    if (mappingState || mappingLoading) return
+    void loadBudgetMapping()
+  }, [activeTab, canViewBudget, mappingLoading, mappingState])
+
+  useEffect(() => {
+    function handleQbAuthSuccess(event: MessageEvent) {
+      if (event.data?.type !== 'QB_AUTH_SUCCESS') return
+      setQbNotice({
+        tone: 'ok',
+        text: `QuickBooks connected for ${event.data.entity}.`,
+      })
+      void loadQbStatus()
+    }
+
+    window.addEventListener('message', handleQbAuthSuccess)
+    return () => window.removeEventListener('message', handleQbAuthSuccess)
+  }, [])
+
+  const filteredTeam = useMemo(() => {
+    return filterBudgetTeam(budgetState.team.members, {
+      dept: teamDeptFilter,
+      entity: teamEntityFilter,
+      search: teamSearch,
+      status: teamStatusFilter,
+    })
+  }, [budgetState.team.members, teamDeptFilter, teamEntityFilter, teamSearch, teamStatusFilter])
+
+  const visibleTeam = useMemo(() => {
+    return sortBudgetTeam(filteredTeam, teamSort.key, teamSort.direction)
+  }, [filteredTeam, teamSort.direction, teamSort.key])
+
+  const overviewActualsCacheKey = useMemo(() => getBudgetViewCacheKey(budgetView), [budgetView])
+  const overviewActuals = overviewActualsCache[overviewActualsCacheKey] ?? null
+  const headcountActuals = headcountActualsCache[overviewActualsCacheKey] ?? null
+
+  const headcountByDepartment = useMemo(() => {
+    return getHeadcountByDepartment(budgetState.team.members, headcountActuals?.departments ?? null)
+  }, [budgetState.team.members, headcountActuals])
+
+  const allowedDepartments = useMemo<readonly BudgetDepartment[]>(() => {
+    if (access?.role === 'admin' || access?.permissions?.budgetDepartments === null) return BUDGET_DEPTS
+
+    const scoped = access?.permissions?.budgetDepartments ?? []
+    return BUDGET_DEPTS.filter((department) => scoped.includes(department))
+  }, [access])
+  const fallbackOverviewDepartment = useMemo<BudgetDepartment | null>(() => {
+    const normalizedPreferredDepartment = preferredBudgetDepartment && allowedDepartments.includes(preferredBudgetDepartment as BudgetDepartment)
+      ? preferredBudgetDepartment as BudgetDepartment
+      : null
+    return normalizedPreferredDepartment ?? allowedDepartments[0] ?? null
+  }, [allowedDepartments, preferredBudgetDepartment])
+  const planCoverageDepartments = useMemo<readonly BudgetDepartment[]>(
+    () => canUseAllDepartmentsOverview ? BUDGET_DEPTS : allowedDepartments,
+    [allowedDepartments, canUseAllDepartmentsOverview],
+  )
+  const importedPlanDepartments = useMemo(() => (
+    planCoverageDepartments.filter((department) => {
+      const plan = budgetState.plan.departments[department]
+      return plan?.source === 'sheet-import' && departmentPlanHasBudgetData(plan)
+    })
+  ), [budgetState.plan.departments, planCoverageDepartments])
+  const missingImportedPlanDepartments = useMemo(() => (
+    budgetState.plan.source === 'sheet-import'
+      ? planCoverageDepartments.filter((department) => !importedPlanDepartments.includes(department))
+      : []
+  ), [budgetState.plan.source, importedPlanDepartments, planCoverageDepartments])
+  const canImportPlan = access?.role === 'admin' || access?.permissions?.canImportBudget === true
+  const canManageTeam = access?.role === 'admin' || access?.permissions?.canManageBudgetTeam === true
+  const canOpenQbConnect = canImportPlan
+  const canFetchOverview = canFetchBudgetActuals(budgetView.entity, qbStatuses)
+  const canUseAllDepartments = canUseAllDepartmentsOverview
+  const canUseUnclassifiedDepartment = canUseAllDepartments && qbStatuses.some((status) => status.connected)
+  const departmentOptions = useMemo<readonly BudgetDepartmentViewScope[]>(() => {
+    const options: BudgetDepartmentViewScope[] = []
+    if (canUseAllDepartments) options.push('All')
+    options.push(...allowedDepartments)
+    if (canUseUnclassifiedDepartment) options.push('Not specified')
+    return options
+  }, [allowedDepartments, canUseAllDepartments, canUseUnclassifiedDepartment])
+  const defaultDepartmentOption = useMemo<BudgetDepartmentViewScope | ''>(() => {
+    if (isDepartmentScopedOverview) {
+      return fallbackOverviewDepartment ?? ''
+    }
+
+    return departmentOptions[0] ?? ''
+  }, [departmentOptions, fallbackOverviewDepartment, isDepartmentScopedOverview])
+  const departmentActualsCacheKey = useMemo<string | null>(() => {
+    const requestedDepartment =
+      activeDept && activeDept !== 'All'
+        ? activeDept
+        : (isDepartmentScopedOverview ? fallbackOverviewDepartment : null)
+
+    if (!requestedDepartment) return null
+    return getBudgetDepartmentCacheKey(budgetView, requestedDepartment)
+  }, [activeDept, budgetView, fallbackOverviewDepartment, isDepartmentScopedOverview])
+  const departmentActuals = departmentActualsCacheKey ? departmentActualsCache[departmentActualsCacheKey] ?? null : null
+  const overviewSelectedDepartment = useMemo<BudgetDepartmentActualScope | null>(() => {
+    if (!canSelectDepartmentOnOverview) return null
+    if (activeDept && activeDept !== 'All') return activeDept
+    return defaultDepartmentOption && defaultDepartmentOption !== 'All'
+      ? defaultDepartmentOption
+      : null
+  }, [activeDept, canSelectDepartmentOnOverview, defaultDepartmentOption])
+  const selectedDepartmentScope = useMemo<BudgetDepartmentActualScope | null>(() => {
+    if (activeTab === 'overview') return overviewSelectedDepartment
+    if (activeDept && activeDept !== 'All') return activeDept
+    return null
+  }, [activeDept, activeTab, overviewSelectedDepartment])
+  const activeActualRequest = useMemo(() => getBudgetActualRequest({
+    activeDepartment: activeDept,
+    activeTab,
+    departmentCacheKey: departmentActualsCacheKey,
+    headcountCacheKey: overviewActualsCacheKey,
+    overviewCacheKey: overviewActualsCacheKey,
+    overviewDepartment: overviewSelectedDepartment,
+  }), [
+    activeDept,
+    activeTab,
+    departmentActualsCacheKey,
+    overviewActualsCacheKey,
+    overviewSelectedDepartment,
+  ])
+  const activeActualsLoaded = useMemo(() => {
+    if (!activeActualRequest) return false
+    if (activeActualRequest.kind === 'overview') return overviewActuals !== null
+    if (activeActualRequest.kind === 'department') return departmentActuals !== null
+    return headcountActuals !== null
+  }, [activeActualRequest, departmentActuals, headcountActuals, overviewActuals])
+  const activeActualsLoading = activeActualRequest?.kind === 'headcount'
+    ? headcountActualsLoading
+    : (activeActualRequest ? actualsLoading : false)
+  const overviewReport = useMemo(() => {
+    if (overviewSelectedDepartment) {
+      const report = buildBudgetDepartmentReport(budgetState.plan, overviewSelectedDepartment, budgetView)
+      return departmentActuals && departmentActuals.department === overviewSelectedDepartment
+        ? applyBudgetDepartmentActuals(report, departmentActuals)
+        : report
+    }
+
+    const report = buildBudgetOverviewReport(budgetState.plan, BUDGET_DEPTS, budgetView)
+    return overviewActuals ? applyBudgetOverviewActuals(report, overviewActuals) : report
+  }, [budgetState.plan, budgetView, departmentActuals, overviewActuals, overviewSelectedDepartment])
+  const missingQboEntities = getMissingQboEntities(budgetView.entity, qbStatuses)
+  const qbStatusText = qbStatusLoading ? 'QB: checking connection…' : formatQboStatusSummary(budgetView.entity, qbStatuses)
+  const teamSourceLabel = budgetState.team.source === 'app-managed' ? 'App-managed team' : 'Placeholder team'
+  const teamUpdatedLabel = budgetState.team.lastUpdatedAt
+    ? `${new Date(budgetState.team.lastUpdatedAt).toLocaleString()}${budgetState.team.lastUpdatedBy ? ` by ${budgetState.team.lastUpdatedBy}` : ''}`
+    : 'Not updated yet'
+  const budgetPageSub = `${budgetView.entity === 'All' ? 'All Entities' : budgetView.entity} · ${budgetYear}`
+  const visibleHeadcountByDepartment = useMemo(
+    () => headcountByDepartment.filter((entry) => allowedDepartments.includes(entry.dept)),
+    [allowedDepartments, headcountByDepartment],
+  )
+  const headcountSummary = useMemo(
+    () => getBudgetHeadcountSummary(visibleHeadcountByDepartment),
+    [visibleHeadcountByDepartment],
+  )
+  const headcountModalMembers = useMemo(() => {
+    if (!selectedHeadcountDepartment) return []
+    return sortBudgetTeam(
+      budgetState.team.members.filter((member) => (
+        member.dept === selectedHeadcountDepartment && member.status !== 'Terminated'
+      )),
+      'name',
+      'asc',
+    )
+  }, [budgetState.team.members, selectedHeadcountDepartment])
+  const headcountScopeLabel = useMemo(
+    () => `${budgetView.entity === 'All' ? 'All Entities' : budgetView.entity} · ${budgetView.mode === 'ytd' ? getBudgetScopeYtdLabel(budgetView) : getBudgetScopePeriodLabel(budgetView)}`,
+    [budgetView],
+  )
+  const teamSummary = useMemo(() => {
+    return getBudgetTeamSummary(
+      budgetState.team.members.filter((member) => allowedDepartments.includes(member.dept)),
+      { entity: teamEntityFilter || undefined },
+    )
+  }, [allowedDepartments, budgetState.team.members, teamEntityFilter])
+  const headcountTerminatedVisible = useMemo(
+    () => visibleHeadcountByDepartment.reduce((sum, entry) => sum + entry.terminatedCount, 0),
+    [visibleHeadcountByDepartment],
+  )
+  const headcountSalaryProgressPct = useMemo(() => {
+    if (headcountSummary.totalSalaryBudgetUsd <= 0 || headcountSummary.totalSalaryActualUsd <= 0) return 0
+    return Math.min((headcountSummary.totalSalaryActualUsd / headcountSummary.totalSalaryBudgetUsd) * 100, 100)
+  }, [headcountSummary.totalSalaryActualUsd, headcountSummary.totalSalaryBudgetUsd])
+  const teamSummaryScopeLabel = teamEntityFilter || 'All Entities'
+  const visibleTeamTotals = useMemo(() => ({
+    salaryUsd: visibleTeam.reduce((sum, member) => sum + (member.salary || 0), 0),
+    bonusUsd: visibleTeam.reduce((sum, member) => sum + (member.bonus || 0), 0),
+    totalCompUsd: visibleTeam.reduce((sum, member) => sum + (member.salary || 0) + (member.bonus || 0), 0),
+  }), [visibleTeam])
+
+  useEffect(() => {
+    const fallbackTab = visibleBudgetTabs[0]?.key ?? 'overview'
+    if (!visibleBudgetTabKeys.includes(activeTab)) {
+      setActiveTab(fallbackTab)
+    }
+  }, [activeTab, visibleBudgetTabKeys, visibleBudgetTabs])
+
+  useEffect(() => {
+    const defaultDepartment = defaultDepartmentOption
+    if (!activeDept && defaultDepartment) {
+      setActiveDept(defaultDepartment)
+      return
+    }
+
+    if (activeDept && !departmentOptions.includes(activeDept)) {
+      setActiveDept(defaultDepartment)
+    }
+  }, [activeDept, defaultDepartmentOption, departmentOptions])
+
+  const departmentReport = useMemo(() => {
+    if (!activeDept) return null
+
+    if (activeDept === 'All') {
+      return overviewReport
+    }
+
+    const report = buildBudgetDepartmentReport(budgetState.plan, activeDept, budgetView)
+    return departmentActuals && departmentActuals.department === activeDept
+      ? applyBudgetDepartmentActuals(report, departmentActuals)
+      : report
+  }, [activeDept, budgetState.plan, budgetView, departmentActuals, overviewReport])
+
+  function toggleTeamSort(key: BudgetTeamSortKey) {
+    setTeamSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+    }))
+  }
+
+  function sortIndicator(key: BudgetTeamSortKey) {
+    if (teamSort.key !== key) return ''
+    return teamSort.direction === 'asc' ? ' ↑' : ' ↓'
+  }
+
+  function openBudgetBreakdown(row: BudgetReportRow, column: BudgetReportColumnKey) {
+    if (!canOpenBudgetPlanBreakdown(row, column)) return
+
+    const departments: BudgetDepartmentActualScope[] =
+      (((activeTab === 'departments') || (activeTab === 'overview' && selectedDepartmentScope !== null)) && selectedDepartmentScope)
+        ? [selectedDepartmentScope]
+        : [...planCoverageDepartments]
+
+    setPlanBreakdown(buildBudgetPlanBreakdown(budgetState.plan, departments, budgetView, row, column))
+  }
+
+  async function openActualDrill(row: BudgetReportRow, column: BudgetReportColumnKey, report: typeof overviewReport) {
+    if (!canOpenBudgetActualDrill(row, column, report)) return
+
+    const keys = row.actualKeys ?? [row.key]
+    const department = (((activeTab === 'departments') || (activeTab === 'overview' && selectedDepartmentScope !== null)) && selectedDepartmentScope)
+      ? selectedDepartmentScope
+      : null
+    const params = new URLSearchParams({
+      year: String(budgetView.year),
+      entity: budgetView.entity,
+      mode: budgetView.mode,
+      month: String(budgetView.month),
+      rangeStart: String(budgetView.rangeStart),
+      rangeEnd: String(budgetView.rangeEnd),
+      column,
+      keys: keys.join(','),
+    })
+    if (department) {
+      params.set('department', department)
+    }
+
+    setActualDrillTitle(getBudgetActualDrillTitle(row.label, budgetView, column, keys))
+    setActualDrillOpen(true)
+    setActualDrillLoading(true)
+    setActualDrillError(null)
+    setActualDrill(null)
+
+    try {
+      const drill = await apiFetch<BudgetActualDrillState>(`/api/budget/actuals/drill?${params.toString()}`)
+      setActualDrill(drill)
+    } catch (error) {
+      setActualDrillError(error instanceof Error ? error.message : 'Failed to load QuickBooks GL detail.')
+    } finally {
+      setActualDrillLoading(false)
+    }
+  }
+
+  async function fetchOverviewActuals(trigger: 'auto' | 'manual' = 'manual') {
+    const cacheKey = overviewActualsCacheKey
+    setActualsLoading(true)
+    if (trigger === 'manual') {
+      setQbNotice(null)
+    }
+
+    try {
+      const params = new URLSearchParams({
+        year: String(budgetView.year),
+        entity: budgetView.entity,
+        mode: budgetView.mode,
+        month: String(budgetView.month),
+        rangeStart: String(budgetView.rangeStart),
+        rangeEnd: String(budgetView.rangeEnd),
+      })
+      const actuals = await apiFetch<BudgetOverviewActualsState>(`/api/budget/actuals?${params.toString()}`)
+      setOverviewActualsCache((current) => ({ ...current, [cacheKey]: actuals }))
+      if (trigger === 'manual') {
+        setQbNotice({
+          tone: 'ok',
+          text: `QuickBooks actuals updated for ${budgetView.entity === 'All' ? 'all entities' : budgetView.entity}.`,
+        })
+      }
+    } catch (error) {
+      setQbNotice({
+        tone: 'warn',
+        text: error instanceof Error ? error.message : 'Failed to fetch QuickBooks actuals.',
+      })
+    } finally {
+      setActualsLoading(false)
+    }
+  }
+
+  async function fetchDepartmentActuals(trigger: 'auto' | 'manual' = 'manual') {
+    const requestedDepartment = activeDept && activeDept !== 'All'
+      ? activeDept
+      : overviewSelectedDepartment
+    if (!requestedDepartment) return
+    const cacheKey = getBudgetDepartmentCacheKey(budgetView, requestedDepartment)
+
+    setActualsLoading(true)
+    if (trigger === 'manual') {
+      setQbNotice(null)
+    }
+
+    try {
+      const params = new URLSearchParams({
+        year: String(budgetView.year),
+        entity: budgetView.entity,
+        mode: budgetView.mode,
+        month: String(budgetView.month),
+        rangeStart: String(budgetView.rangeStart),
+        rangeEnd: String(budgetView.rangeEnd),
+        department: requestedDepartment,
+      })
+      const actuals = await apiFetch<BudgetDepartmentActualsState>(`/api/budget/actuals/department?${params.toString()}`)
+      setDepartmentActualsCache((current) => ({ ...current, [cacheKey]: actuals }))
+
+      const unclassifiedTotal = Object.values(actuals.unclassifiedLines.annual).reduce((sum, value) => sum + (value ?? 0), 0)
+      const showUnclassifiedWarning = access?.role !== 'restricted' && unclassifiedTotal > 0
+      if (trigger === 'manual' || showUnclassifiedWarning) {
+        setQbNotice({
+          tone: showUnclassifiedWarning ? 'warn' : 'ok',
+          text: showUnclassifiedWarning
+            ? `QuickBooks actuals updated for ${requestedDepartment}. ${fmtUSD(unclassifiedTotal, 0)} remains unclassified and is excluded from this department view.`
+            : `QuickBooks actuals updated for ${requestedDepartment}.`,
+        })
+      }
+    } catch (error) {
+      setQbNotice({
+        tone: 'warn',
+        text: error instanceof Error ? error.message : 'Failed to fetch department QuickBooks actuals.',
+      })
+    } finally {
+      setActualsLoading(false)
+    }
+  }
+
+  async function fetchHeadcountActuals(trigger: 'auto' | 'manual' = 'manual') {
+    const cacheKey = overviewActualsCacheKey
+    setHeadcountActualsLoading(true)
+    setHeadcountActualsError(null)
+    if (trigger === 'manual') {
+      setQbNotice(null)
+    }
+
+    try {
+      const params = new URLSearchParams({
+        year: String(budgetView.year),
+        entity: budgetView.entity,
+        mode: budgetView.mode,
+        month: String(budgetView.month),
+        rangeStart: String(budgetView.rangeStart),
+        rangeEnd: String(budgetView.rangeEnd),
+      })
+      const actuals = await apiFetch<BudgetHeadcountActualsState>(`/api/budget/headcount/actuals?${params.toString()}`)
+      setHeadcountActualsCache((current) => ({ ...current, [cacheKey]: actuals }))
+      if (trigger === 'manual' || actuals.unclassifiedTotalUsd > 0) {
+        setQbNotice({
+          tone: actuals.unclassifiedTotalUsd > 0 ? 'warn' : 'ok',
+          text: actuals.unclassifiedTotalUsd > 0
+            ? `Headcount actuals updated for ${headcountScopeLabel}. ${fmtUSD(actuals.unclassifiedTotalUsd, 0)} of compensation actuals could not be classified to a department.`
+            : `Headcount actuals updated for ${headcountScopeLabel}.`,
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch headcount actuals.'
+      setHeadcountActualsError(message)
+      setQbNotice({ tone: 'warn', text: message })
+    } finally {
+      setHeadcountActualsLoading(false)
+    }
+  }
+
+  async function fetchCoverage() {
+    setCoverageLoading(true)
+    setCoverageError(null)
+    setQbNotice(null)
+
+    try {
+      const params = new URLSearchParams({
+        year: String(budgetView.year),
+        entity: budgetView.entity,
+        mode: budgetView.mode,
+        month: String(budgetView.month),
+        rangeStart: String(budgetView.rangeStart),
+        rangeEnd: String(budgetView.rangeEnd),
+      })
+      const coverage = await apiFetch<BudgetCoverageState>(`/api/budget/coverage?${params.toString()}`)
+      setCoverageState(coverage)
+      setQbNotice({
+        tone: 'ok',
+        text: `Coverage updated for ${budgetView.entity === 'All' ? 'all entities' : budgetView.entity}.`,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch QuickBooks coverage.'
+      setCoverageError(message)
+      setQbNotice({ tone: 'warn', text: message })
+    } finally {
+      setCoverageLoading(false)
+    }
+  }
+
+  async function saveBudgetMapping(rows: BudgetQbMappingRow[]) {
+    setMappingSaving(true)
+    setMappingError(null)
+
+    try {
+      const result = await apiPost<BudgetQbMappingMutationResult>('/api/budget/mapping', {
+        year: budgetYear,
+        rows,
+      })
+      setMappingState(result.mapping)
+      setCoverageState(null)
+      setCoverageError(null)
+      setLastActionMessage(`Saved QB mapping for ${budgetYear}.`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save QB mapping.'
+      setMappingError(message)
+      throw error
+    } finally {
+      setMappingSaving(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!canFetchOverview || !activeActualRequest || activeActualsLoaded || activeActualsLoading) return
+    if (attemptedAutoActualKeysRef.current.has(activeActualRequest.requestKey)) return
+
+    const timeoutId = setTimeout(() => {
+      if (attemptedAutoActualKeysRef.current.has(activeActualRequest.requestKey)) return
+      attemptedAutoActualKeysRef.current.add(activeActualRequest.requestKey)
+
+      if (activeActualRequest.kind === 'overview') {
+        void fetchOverviewActuals('auto')
+        return
+      }
+
+      if (activeActualRequest.kind === 'department') {
+        void fetchDepartmentActuals('auto')
+        return
+      }
+
+      void fetchHeadcountActuals('auto')
+    }, AUTO_ACTUALS_DEBOUNCE_MS)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [
+    activeActualRequest,
+    activeActualsLoaded,
+    activeActualsLoading,
+    canFetchOverview,
+  ])
+
+  function refreshVisibleActuals() {
+    if (activeTab === 'coverage') {
+      void fetchCoverage()
+      return
+    }
+
+    if (!activeActualRequest) return
+
+    if (activeActualRequest.kind === 'overview') {
+      void fetchOverviewActuals('manual')
+      return
+    }
+
+    if (activeActualRequest.kind === 'department') {
+      void fetchDepartmentActuals('manual')
+      return
+    }
+
+    void fetchHeadcountActuals('manual')
+  }
+
+  function openQbConnect(entity: QboConnectionStatus['entity']) {
+    setQbNotice(null)
+    const popup = window.open(`/api/qb/connect?entity=${encodeURIComponent(entity)}`, 'qb-auth', 'popup=yes,width=720,height=760')
+    if (!popup) {
+      setQbNotice({
+        tone: 'warn',
+        text: 'Popup blocked. Allow popups for this site to connect QuickBooks.',
+      })
+    }
+  }
+
+  function openImportModal() {
+    setIsImportModalOpen(true)
+  }
+
+  if (accessLoading) {
+    return (
+      <div className="budget-page">
+        <div className="status-bar">
+          <span className="status-dot loading" />
+          <span className="status-text">Loading budget access…</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (!canViewBudget) {
+    return (
+      <div className="budget-page">
+        <div className="empty budget-empty-inline">
+          <div className="empty-icon">∅</div>
+          <div>{accessError || 'Your account does not currently have budget access.'}</div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="budget-page">
+      <div className="page-header budget-page-header">
+        <div>
+          <div className="page-title">{budgetYear} Budget</div>
+          <div className="page-sub">{budgetPageSub}</div>
+        </div>
+        {canImportPlan ? (
+          <div className="budget-page-actions">
+            <button className="btn-secondary budget-import-trigger" onClick={() => setIsRecoveryModalOpen(true)}>
+              Recover Import
+            </button>
+            <button className="btn-primary budget-import-trigger" onClick={openImportModal}>
+              Import v1 Workbook
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      {lastActionMessage ? (
+        <div className="status-bar budget-plan-status">
+          <span className="status-dot ok" />
+          <span className="status-text">{lastActionMessage}</span>
+        </div>
+      ) : null}
+
+      <div className="tab-bar budget-tab-bar">
+        {visibleBudgetTabs.map(t => (
+          <button key={t.key} className={`tab-btn budget-tab-btn${activeTab === t.key ? ' active' : ''}`} onClick={() => setActiveTab(t.key)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {(activeTab === 'overview' || activeTab === 'departments' || activeTab === 'coverage' || activeTab === 'headcount') && (
+        <div className="budget-shell" style={{ marginTop: 16 }}>
+          <BudgetScopeControls
+            year={budgetYear}
+            value={budgetView}
+            department={activeDept}
+            departments={departmentOptions}
+            onChange={setBudgetView}
+            onYearChange={(year) => setBudgetYear(normalizeBudgetYear(year))}
+            onDepartmentChange={setActiveDept}
+            showDepartmentSelector={
+              activeTab === 'departments'
+                || (activeTab === 'overview' && departmentOptions.length > 1 && (isDepartmentScopedOverview || access?.role === 'budget_admin'))
+            }
+            onFetchActuals={
+              activeTab === 'coverage'
+                ? (canFetchOverview ? refreshVisibleActuals : undefined)
+                : (canFetchOverview && activeActualRequest ? refreshVisibleActuals : undefined)
+            }
+            isFetchingActuals={
+              activeTab === 'coverage'
+                ? coverageLoading
+                : activeActualsLoading
+            }
+            fetchButtonLabel={
+              activeTab === 'coverage'
+                ? 'Refresh P&L from QB'
+                : activeTab === 'headcount'
+                  ? 'Refresh Comp Actuals from QB'
+                  : 'Refresh Actuals from QB'
+            }
+            onOpenQbConnect={canOpenQbConnect ? () => setIsQbModalOpen(true) : undefined}
+            showQbConnect={canOpenQbConnect}
+            qbStatusText={qbStatusText}
+            showEntitySelector={!isDepartmentScopedOverview}
+            availableModes={allowedBudgetViewModes}
+            availableMonthIndices={allowedBudgetMonthIndices ?? undefined}
+            allowedEntities={allowedBudgetEntities}
+          />
+        </div>
+      )}
+
+      {qbNotice ? (
+        <div className="status-bar budget-plan-status">
+          <span className={`status-dot ${qbNotice.tone}`} />
+          <span className="status-text">{qbNotice.text}</span>
+        </div>
+      ) : null}
+
+      {budgetError ? (
+        <div className="status-bar budget-plan-status">
+          <span className="status-dot warn" />
+          <span className="status-text">{budgetError}</span>
+        </div>
+      ) : null}
+
+      {!qbStatusLoading && !canFetchOverview && (
+        activeTab === 'overview'
+        || activeTab === 'departments'
+        || activeTab === 'headcount'
+        || activeTab === 'coverage'
+      ) ? (
+        <div className="status-bar budget-plan-status">
+          <span className="status-dot warn" />
+          <span className="status-text">
+            Connect QuickBooks for {missingQboEntities.join(', ')} before fetching actuals.
+          </span>
+        </div>
+      ) : null}
+
+      {!loading && budgetState.plan.source !== 'sheet-import' ? (
+        <div className={`status-bar budget-plan-status${canImportPlan ? ' status-bar-action' : ''}`}>
+          <div className="status-bar-message">
+            <span className="status-dot warn" />
+            <span className="status-text">
+              No imported plan found for {budgetYear} yet. Import one v1 workbook with {BUDGET_DEPTS.length} department tabs to populate Overview and Department.
+            </span>
+          </div>
+          {canImportPlan ? (
+            <div className="status-bar-actions">
+              <button className="btn-secondary" onClick={openImportModal}>
+                Import v1 Workbook
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!loading && budgetState.plan.source === 'sheet-import' && missingImportedPlanDepartments.length > 0 ? (
+        <div className={`status-bar budget-plan-status${canImportPlan ? ' status-bar-action' : ''}`}>
+          <div className="status-bar-message">
+            <span className="status-dot warn" />
+            <span className="status-text">
+              Imported plan data is incomplete for {budgetYear}. Missing departments: {formatBudgetDepartmentList(missingImportedPlanDepartments)}.
+            </span>
+          </div>
+          {canImportPlan ? (
+            <div className="status-bar-actions">
+              <button className="btn-secondary" onClick={openImportModal}>
+                Import Missing Tabs
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {loading && <div className="status-bar"><span className="status-dot loading" /><span className="status-text">Loading budget data…</span></div>}
+
+      {/* Overview */}
+      {activeTab === 'overview' && (
+        <BudgetReportTable
+          report={overviewReport}
+          onBudgetCellClick={openBudgetBreakdown}
+          onActualCellClick={(row, column) => void openActualDrill(row, column, overviewReport)}
+        />
+      )}
+
+      {/* Departments detail */}
+      {activeTab === 'departments' && (
+        departmentReport ? (
+          <BudgetReportTable
+            report={departmentReport}
+            onBudgetCellClick={openBudgetBreakdown}
+            onActualCellClick={(row, column) => void openActualDrill(row, column, departmentReport)}
+          />
+        ) : (
+          <div className="empty budget-empty-inline">
+            <div className="empty-icon">∅</div>
+            <div>No budget lines available for {getBudgetDepartmentLabel(activeDept)} in {budgetYear}.</div>
+          </div>
+        )
+      )}
+
+      {/* Headcount */}
+      {activeTab === 'headcount' && (
+        <>
+          <div className="status-bar budget-plan-status">
+            <span className="status-dot ok" />
+            <span className="status-text">
+              Salary and bonus budgets are driven by the Team Tracker roster for {budgetYear}. {headcountActuals ? `QB actuals reflect ${headcountScopeLabel}.` : `Fetch QB compensation actuals for ${headcountScopeLabel} to compare against budget.`}
+            </span>
+          </div>
+          {headcountActualsError ? (
+            <div className="status-bar budget-plan-status">
+              <span className="status-dot warn" />
+              <span className="status-text">{headcountActualsError}</span>
+            </div>
+          ) : null}
+          {headcountActuals?.unclassifiedTotalUsd ? (
+            <div className="status-bar budget-plan-status">
+              <span className="status-dot warn" />
+              <span className="status-text">
+                {fmtUSD(headcountActuals.unclassifiedTotalUsd, 0)} of QB compensation actuals could not be classified to a budget department for {headcountScopeLabel}.
+              </span>
+            </div>
+          ) : null}
+          <div className="cards-grid">
+            <div className="card">
+              <div className="card-label">Active Headcount</div>
+              <div className="card-value blue">{headcountSummary.activeHeadcount}</div>
+              <div className="card-sub">{headcountTerminatedVisible} terminated kept in audit trail</div>
+            </div>
+            <div className="card">
+              <div className="card-label">Total Salary Budget</div>
+              <div className="card-value">{fmtUSD(headcountSummary.totalSalaryBudgetUsd, 0)}</div>
+              <div className="card-sub">From Team Tracker</div>
+              {headcountActuals ? (
+                <div className="card-bar">
+                  <div className="card-bar-fill" style={{ width: `${headcountSalaryProgressPct}%` }} />
+                </div>
+              ) : null}
+            </div>
+            <div className="card">
+              <div className="card-label">Salary Actuals</div>
+              <div className="card-value">{headcountActuals ? fmtUSD(headcountSummary.totalSalaryActualUsd, 0) : '—'}</div>
+              <div className="card-sub">
+                {headcountActuals && headcountSummary.totalSalaryBudgetUsd > 0
+                  ? `${((headcountSummary.totalSalaryActualUsd / headcountSummary.totalSalaryBudgetUsd) * 100).toFixed(1)}% of salary budget`
+                  : 'Awaiting QuickBooks actuals'}
+              </div>
+            </div>
+            <div className="card">
+              <div className="card-label">Avg Monthly Burn</div>
+              <div className="card-value green">{fmtUSD(headcountSummary.monthlyPayrollBudgetUsd, 0)}</div>
+              <div className="card-sub">Salary budget divided across 12 months</div>
+            </div>
+          </div>
+          <div className="section-header budget-section-header">
+            <span className="section-title">Headcount by Department</span>
+            <span className="budget-section-note">Active roster only. Click a department row to inspect current team members.</span>
+          </div>
+          <div className="section" style={{ marginTop: 18 }}>
+            <div className="section-header">
+              <span className="section-title">Compensation by Department</span>
+              <span className="budget-section-note">Budget is roster-driven. Actuals come from mapped QuickBooks salary and bonus accounts.</span>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Department</th>
+                    <th className="num">Headcount</th>
+                    <th className="num">Salary Budget</th>
+                    <th className="num">Salary Actual</th>
+                    <th className="num">Bonus Budget</th>
+                    <th className="num">Bonus Actual</th>
+                    <th className="num">Comp Var.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleHeadcountByDepartment.map(({ dept, count, salaryUsd, salaryActualUsd, bonusUsd, bonusActualUsd, compVarianceUsd }) => (
+                    <tr key={dept}>
+                      <td className="label">
+                        <button type="button" className="card-clickable" onClick={() => setSelectedHeadcountDepartment(dept)}>
+                          {getBudgetDepartmentLabel(dept)}
+                        </button>
+                      </td>
+                      <td className="num">{count}</td>
+                      <td className="num">{fmtUSD(salaryUsd, 0)}</td>
+                      <td className="num">{salaryActualUsd !== 0 ? fmtUSD(salaryActualUsd, 0) : '—'}</td>
+                      <td className="num">{fmtUSD(bonusUsd, 0)}</td>
+                      <td className="num">{bonusActualUsd !== 0 ? fmtUSD(bonusActualUsd, 0) : '—'}</td>
+                      <td className={`num ${getBudgetVarianceTone(compVarianceUsd)}`}>{formatBudgetVariance(compVarianceUsd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Team roster */}
+      {activeTab === 'team' && (
+        <>
+          <div className="section-header budget-section-header">
+            <span className="section-title">Team Tracker</span>
+            <div className="budget-team-header-meta">
+              <span className="budget-section-note">{teamSourceLabel}</span>
+              <span className="budget-section-note">{teamUpdatedLabel}</span>
+            </div>
+          </div>
+          <div className="tt-toolbar">
+            <input className="tt-search" placeholder="Search team…" value={teamSearch} onChange={e => setTeamSearch(e.target.value)} />
+            <select className="tt-fsel" value={teamEntityFilter} onChange={e => setTeamEntityFilter(e.target.value)}>
+              <option value="">All entities</option>
+              {ENTITIES.map(entity => <option key={entity} value={entity}>{entity}</option>)}
+            </select>
+            <select className="tt-fsel" value={teamDeptFilter} onChange={e => setTeamDeptFilter(e.target.value)}>
+              <option value="">All departments</option>
+              {allowedDepartments.map((d) => <option key={d} value={d}>{getBudgetDepartmentLabel(d)}</option>)}
+            </select>
+            <select className="tt-fsel" value={teamStatusFilter} onChange={e => setTeamStatusFilter(e.target.value)}>
+              <option value="active">Active only</option>
+              <option value="">All statuses</option>
+              <option value="Terminated">Terminated</option>
+            </select>
+            {canManageTeam && (
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  setEditingMember(null)
+                  setIsTeamModalOpen(true)
+                }}
+              >
+                Add Team Member
+              </button>
+            )}
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)', marginLeft: 'auto' }}>
+              {visibleTeam.length} members
+            </span>
+          </div>
+
+          <div className="cards-grid budget-team-summary-grid" style={{ marginBottom: 18 }}>
+            <div className="card">
+              <div className="card-label">{teamSummaryScopeLabel}</div>
+              <div className="card-value">{teamSummary.activeMembers}</div>
+              <div className="card-sub">{teamSummary.terminatedMembers} terminated · {teamSummary.totalMembers} total records</div>
+            </div>
+            <div className="card">
+              <div className="card-label">Salary Budget</div>
+              <div className="card-value">{fmtUSD(teamSummary.totalSalaryUsd, 0)}</div>
+            </div>
+            <div className="card">
+              <div className="card-label">Bonus Budget</div>
+              <div className="card-value">{fmtUSD(teamSummary.totalBonusUsd, 0)}</div>
+            </div>
+            <div className="card">
+              <div className="card-label">Total Comp</div>
+              <div className="card-value">{fmtUSD(teamSummary.totalCompUsd, 0)}</div>
+              <div className="card-sub">Current roster assumptions</div>
+            </div>
+            <div className="card">
+              <div className="card-label">Monthly Payroll Est.</div>
+              <div className="card-value">{fmtUSD(teamSummary.monthlyPayrollUsd, 0)}</div>
+              <div className="card-sub">Salary budget divided across 12 months</div>
+            </div>
+          </div>
+
+          <div className="table-wrap" style={{ maxHeight: '600px', overflow: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th className="sortable" onClick={() => toggleTeamSort('name')}>Name{sortIndicator('name')}</th>
+                  <th className="sortable" onClick={() => toggleTeamSort('role')}>Role{sortIndicator('role')}</th>
+                  <th className="sortable" onClick={() => toggleTeamSort('dept')}>Department{sortIndicator('dept')}</th>
+                  <th className="sortable" onClick={() => toggleTeamSort('entity')}>Entity{sortIndicator('entity')}</th>
+                  <th className="sortable" onClick={() => toggleTeamSort('location')}>Location{sortIndicator('location')}</th>
+                  <th className="sortable" onClick={() => toggleTeamSort('status')}>Status{sortIndicator('status')}</th>
+                  <th>Termination Month</th>
+                  <th className="num sortable" onClick={() => toggleTeamSort('salary')}>Salary{sortIndicator('salary')}</th>
+                  <th className="num sortable" onClick={() => toggleTeamSort('bonus')}>Bonus{sortIndicator('bonus')}</th>
+                  <th className="num sortable" onClick={() => toggleTeamSort('totalComp')}>Total Comp{sortIndicator('totalComp')}</th>
+                  {canManageTeam && <th className="num">Actions</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleTeam.length > 0 ? (
+                  visibleTeam.map((m: BudgetTeamMember) => (
+                    <tr key={m.id} style={m.status === 'Terminated' ? { opacity: 0.55 } : undefined}>
+                      <td className="label" style={{ fontWeight: 500 }}>{m.name}</td>
+                      <td className="label">{m.role}</td>
+                      <td><span className="dept-badge">{getBudgetDepartmentLabel(m.dept)}</span></td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)' }}>{m.entity}</td>
+                      <td style={{ color: 'var(--muted)' }}>{m.location || '—'}</td>
+                      <td><span className={`status-badge ${m.status}`}>{m.status}</span></td>
+                      <td style={{ color: 'var(--muted)' }}>{m.terminationMonth || '—'}</td>
+                      <td className="num">{fmtUSD(m.salary, 0)}</td>
+                      <td className="num">{m.bonus ? fmtUSD(m.bonus, 0) : '—'}</td>
+                      <td className="num">{fmtUSD((m.salary || 0) + (m.bonus || 0), 0)}</td>
+                      {canManageTeam && (
+                        <td className="num">
+                          <button
+                            className="btn-secondary budget-team-row-btn"
+                            onClick={() => {
+                              setEditingMember(m)
+                              setIsTeamModalOpen(true)
+                            }}
+                          >
+                            Edit
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  )).concat(
+                    <tr key="totals" className="budget-team-total-row">
+                      <td colSpan={7} className="budget-team-total-label">
+                        TOTAL ({visibleTeam.length} shown)
+                      </td>
+                      <td className="num">{fmtUSD(visibleTeamTotals.salaryUsd, 0)}</td>
+                      <td className="num">{fmtUSD(visibleTeamTotals.bonusUsd, 0)}</td>
+                      <td className="num">{fmtUSD(visibleTeamTotals.totalCompUsd, 0)}</td>
+                      {canManageTeam ? <td aria-hidden="true" /> : null}
+                    </tr>,
+                  )
+                ) : (
+                  <tr>
+                    <td colSpan={canManageTeam ? 11 : 10}>
+                      <div className="empty budget-empty-inline">
+                        <div className="empty-icon">∅</div>
+                        <div>No team members match the current filters.</div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {activeTab === 'mapping' && (
+        <BudgetQbMappingPanel
+          mapping={mappingState}
+          loading={mappingLoading}
+          saving={mappingSaving}
+          error={mappingError}
+          suggestedAccount={suggestedMappingAccount}
+          onSuggestedAccountHandled={() => setSuggestedMappingAccount(null)}
+          onSave={saveBudgetMapping}
+        />
+      )}
+
+      {activeTab === 'coverage' && (
+        <BudgetCoveragePanel
+          coverage={coverageState}
+          loading={coverageLoading}
+          error={coverageError}
+          onMapAccount={(accountNumber) => {
+            setSuggestedMappingAccount(accountNumber)
+            setActiveTab('mapping')
+            if (!mappingState && !mappingLoading) {
+              void loadBudgetMapping()
+            }
+          }}
+        />
+      )}
+
+      <BudgetImportModal
+        open={isImportModalOpen && canImportPlan}
+        year={budgetYear}
+        onClose={() => setIsImportModalOpen(false)}
+        onImported={async (result: BudgetImportSuccessResult) => {
+          await loadBudgetState(true)
+          setLastActionMessage(
+            `Imported ${result.departmentsProcessed.length} department${result.departmentsProcessed.length === 1 ? '' : 's'} for ${budgetYear}${result.unmappedLineItems.length ? ` with ${result.unmappedLineItems.length} unmapped line item${result.unmappedLineItems.length === 1 ? '' : 's'}` : ''}.`,
+          )
+          setIsImportModalOpen(false)
+        }}
+      />
+      <BudgetRecoveryModal
+        open={isRecoveryModalOpen && canImportPlan}
+        year={budgetYear}
+        onClose={() => setIsRecoveryModalOpen(false)}
+        onRecovered={async (message) => {
+          await loadBudgetState(true)
+          setLastActionMessage(message)
+        }}
+      />
+      <BudgetTeamMemberModal
+        open={isTeamModalOpen && canManageTeam}
+        year={budgetYear}
+        member={editingMember}
+        defaultDepartment={teamDeptFilter as BudgetDepartment | ''}
+        onClose={() => {
+          setIsTeamModalOpen(false)
+          setEditingMember(null)
+        }}
+        onSaved={async (result: BudgetTeamMutationResult) => {
+          await loadBudgetState(true)
+          const actionLabel =
+            result.action === 'create-member'
+              ? 'Added'
+              : result.action === 'update-member'
+                ? 'Updated'
+                : result.action === 'terminate-member'
+                  ? 'Terminated'
+                  : 'Restored'
+          setLastActionMessage(`${actionLabel} team member #${result.memberId} for ${budgetYear}.`)
+        }}
+      />
+      <BudgetQbConnectModal
+        open={isQbModalOpen}
+        statuses={qbStatuses}
+        loading={qbStatusLoading}
+        canConnect={canOpenQbConnect}
+        onClose={() => setIsQbModalOpen(false)}
+        onRefresh={() => {
+          void loadQbStatus()
+        }}
+        onConnect={openQbConnect}
+      />
+      <BudgetHeadcountModal
+        open={selectedHeadcountDepartment !== null}
+        year={budgetYear}
+        department={selectedHeadcountDepartment}
+        members={headcountModalMembers}
+        onClose={() => setSelectedHeadcountDepartment(null)}
+      />
+      <BudgetPlanBreakdownModal
+        breakdown={planBreakdown}
+        onClose={() => setPlanBreakdown(null)}
+      />
+      <BudgetActualDrillModal
+        open={actualDrillOpen}
+        title={actualDrillTitle}
+        loading={actualDrillLoading}
+        error={actualDrillError}
+        drill={actualDrill}
+        onClose={() => {
+          setActualDrillOpen(false)
+          setActualDrill(null)
+          setActualDrillError(null)
+        }}
+      />
+    </div>
+  )
+}

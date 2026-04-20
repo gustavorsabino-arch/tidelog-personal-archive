@@ -1,0 +1,293 @@
+/** Shared TypeScript types — mirrors v1 data structures */
+
+export interface Wallet {
+  address: string
+  label: string
+  chain: string
+  entity: string
+  accountCode: string | null
+  isExternal: boolean
+  overviewOnly?: boolean
+  includeInOverview?: boolean
+  balances?: Record<string, number>
+  totalUSD?: number
+}
+
+export interface Transaction {
+  txHash: string
+  walletAddr: string
+  wallet: string
+  entity: string
+  blockTime: number
+  date: string
+  asset: string
+  qty: number
+  dir: 'In' | 'Out'
+  price: number | null
+  usd: number | null
+  priceSource: string | null
+  counterparty: string | null
+  category: string | null
+}
+
+export interface TransactionSummary {
+  inflowsUSD: number
+  outflowsUSD: number
+  netUSD: number
+}
+
+export interface TransactionsResponse {
+  transactions: Transaction[]
+  total: number
+  limit: number
+  offset: number
+  summary: TransactionSummary
+}
+
+export interface Prices {
+  SOL?: number
+  ORCA?: number
+  USDC?: number
+  USDT?: number
+  [key: string]: number | undefined
+}
+
+export interface BalanceSnapshot {
+  date: string
+  fetchedAt: string
+  prices: Prices
+  balances: Record<string, Record<string, number>>
+}
+
+export interface TreasuryOverviewWallet extends Wallet {
+  balances: Record<string, number>
+  tokenUsd: Record<string, number>
+  totalUSD: number
+}
+
+export interface TreasuryOverviewEntityTotal {
+  tokens: Record<string, number>
+  tokenUsd: Record<string, number>
+  totalUSD: number
+  walletCount: number
+}
+
+export interface TreasuryOverviewTokenTotal {
+  amount: number
+  usd: number
+  walletCount: number
+}
+
+export interface TreasuryOverviewDrilldownRow {
+  walletAddr: string
+  walletLabel: string
+  entity: string
+  totalUSD: number
+  tokenAmounts: Record<string, number>
+  tokenUsd: Record<string, number>
+}
+
+export interface TreasuryOverviewDrilldown {
+  key: string
+  title: string
+  accentColor: string
+  walletCount: number
+  subtotalUSD: number
+  portfolioPct: number
+  rowTokens: string[]
+  showEntityColumn: boolean
+  rows: TreasuryOverviewDrilldownRow[]
+}
+
+export interface TreasuryOverviewTrendPoint {
+  date: string
+  totalUsd: number
+  tokenAmounts: Record<string, number>
+  tokenUsd: Record<string, number>
+}
+
+export interface TreasuryOverviewTrendResponse {
+  walletAddr: string
+  tokens: string[]
+  points: TreasuryOverviewTrendPoint[]
+  firstDate: string | null
+  lastDate: string | null
+}
+
+export interface TreasuryOverview {
+  prices: Prices
+  wallets: TreasuryOverviewWallet[]
+  entityTotals: Record<string, TreasuryOverviewEntityTotal>
+  tokenTotals: Record<string, TreasuryOverviewTokenTotal>
+  snapshotDate: string | null
+  fetchedAt: string | null
+  grandTotalUSD: number
+}
+
+export interface GainLossEntry {
+  wallet: string
+  walletAddr: string
+  entity: string
+  asset: string
+  qty: number
+  buyPrice: number
+  sellPrice: number
+  buyDate: string
+  soldDate: string
+  gain: number
+  term: 'ST' | 'LT'
+  txHash: string
+}
+
+export interface GainLossSummary {
+  totalGain: number
+  shortTermGain: number
+  longTermGain: number
+  dispositions: number
+}
+
+export interface GainLossResponse {
+  gainLoss: GainLossEntry[]
+  summary: GainLossSummary
+}
+
+export interface TreasuryManagementProtocolError {
+  protocol: string
+  message: string
+}
+
+export interface TreasuryManagementSnapshotPosition {
+  protocol: string
+  chain: string
+  walletAddress: string
+  asset: string
+  assetAddress: string
+  totalBalance: string
+  principal: string
+  yield: string
+  balanceUsd: string
+  principalUsd: string
+  yieldUsd: string
+  positionKey?: string
+  trackedPositionId?: string | null
+  principalSource?: 'deployed' | 'received' | 'mixed' | 'unknown' | null
+  platform?: string
+  vaultLabel?: string | null
+  fundedUsd?: string | null
+  fundedAt?: string | null
+  deployedPrincipalUsd?: string | null
+  deployedAt?: string | null
+  marketTvlUsd?: string | null
+  yieldPct?: string | null
+}
+
+export interface TreasuryManagementSnapshotWallet {
+  walletAddress: string
+  chain: string
+  label: string
+  positions: TreasuryManagementSnapshotPosition[]
+  errors?: TreasuryManagementProtocolError[]
+  fetchedAt: string
+}
+
+export interface TreasuryManagementSnapshot {
+  wallets: TreasuryManagementSnapshotWallet[]
+  totalUsd: string
+  snapshotAt: string
+}
+
+export interface TreasuryManagementPosition {
+  protocol: string
+  chain: string
+  entity: string
+  walletAddr: string
+  walletLabel: string
+  accountCode: string | null
+  asset: string
+  assetAddress: string
+  totalBalance: number
+  principal: number
+  yield: number
+  balanceUsd: number
+  principalUsd: number
+  yieldUsd: number
+  positionKey: string | null
+  trackedPositionId: string | null
+  principalSource: 'deployed' | 'received' | 'mixed' | 'unknown' | null
+  platform: string
+  vaultLabel: string | null
+  fundedUsd: number | null
+  fundedAt: string | null
+  deployedPrincipalUsd: number | null
+  deployedAt: string | null
+  marketTvlUsd: number | null
+  yieldPct: number | null
+}
+
+export interface TreasuryManagementWalletSummary {
+  walletAddr: string
+  walletLabel: string
+  sourceLabel: string
+  entity: string
+  chain: string
+  accountCode: string | null
+  totalUsd: number
+  positionCount: number
+  protocols: string[]
+  errors: TreasuryManagementProtocolError[]
+  fetchedAt: string | null
+}
+
+export interface TreasuryManagementEntitySummary {
+  entity: string
+  walletCount: number
+  positionCount: number
+  totalUsd: number
+  yieldUsd: number
+}
+
+export interface TreasuryManagementSummary {
+  totalUsd: number
+  principalUsd: number
+  yieldUsd: number
+  walletCount: number
+  positionCount: number
+  protocolCount: number
+  walletsWithErrors: number
+}
+
+export interface TreasuryManagementWalletRegistryEntry {
+  address: string
+  label: string
+  entity: string
+  accountCode: string | null
+  chain: string
+}
+
+export interface TreasuryManagementWalletRegistry {
+  generatedAt: string
+  wallets: TreasuryManagementWalletRegistryEntry[]
+}
+
+export interface TreasuryManagementResponse {
+  hasSnapshot: boolean
+  snapshotAt: string | null
+  sourceFile: string | null
+  entities: TreasuryManagementEntitySummary[]
+  summary: TreasuryManagementSummary
+  wallets: TreasuryManagementWalletSummary[]
+  positions: TreasuryManagementPosition[]
+}
+
+export interface UnrealizedEntry {
+  wallet: string
+  walletAddr: string
+  entity: string
+  asset: string
+  qty: number
+  costBasis: number
+  currentPrice: number
+  unrealGain: number
+}
+
+export type Entity = 'Opco' | 'Foundation' | 'Juku' | 'Zagreus'

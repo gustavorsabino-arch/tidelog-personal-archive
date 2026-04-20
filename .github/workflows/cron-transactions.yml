@@ -1,0 +1,130 @@
+name: Index Transactions
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Lookback window in days for manual runs'
+        required: false
+        default: '90'
+      batch_size:
+        description: 'Wallets per request'
+        required: false
+        default: '5'
+      max_pages:
+        description: 'Max signature pages per scanned address'
+        required: false
+        default: '30'
+      iterations:
+        description: 'How many sequential requests to run'
+        required: false
+        default: '60'
+      sleep_seconds:
+        description: 'Delay between sequential requests'
+        required: false
+        default: '5'
+      time_budget_ms:
+        description: 'Soft per-request time budget in milliseconds'
+        required: false
+        default: '180000'
+      reset_progress:
+        description: 'Reset the manual backfill cursor on the first iteration'
+        required: false
+        default: 'true'
+
+env:
+  APP_URL: ${{ vars.APP_URL || 'https://tidelog-v2.vercel.app' }}
+  CRON_SECRET: ${{ secrets.CRON_SECRET }}
+
+concurrency:
+  group: tidelog-transactions
+  cancel-in-progress: false
+
+jobs:
+  transactions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Index new transactions
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          APP_URL="${APP_URL%/}"
+          BODY_FILE=$(mktemp)
+          STATUS=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/fetch-transactions?days=7")
+          if jq empty "$BODY_FILE" >/dev/null 2>&1; then
+            jq . "$BODY_FILE"
+          else
+            cat "$BODY_FILE"
+          fi
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            rm -f "$BODY_FILE"
+            echo "Request failed with HTTP $STATUS"
+            exit 1
+          fi
+          rm -f "$BODY_FILE"
+
+      - name: Run manual transaction backfill
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DAYS: ${{ github.event.inputs.days || '90' }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size || '5' }}
+          MAX_PAGES: ${{ github.event.inputs.max_pages || '30' }}
+          ITERATIONS: ${{ github.event.inputs.iterations || '60' }}
+          SLEEP_SECONDS: ${{ github.event.inputs.sleep_seconds || '5' }}
+          TIME_BUDGET_MS: ${{ github.event.inputs.time_budget_ms || '180000' }}
+          RESET_PROGRESS: ${{ github.event.inputs.reset_progress || 'true' }}
+        run: |
+          set -euo pipefail
+
+          APP_URL="${APP_URL%/}"
+
+          for i in $(seq 1 "$ITERATIONS"); do
+            URL="$APP_URL/api/cron/fetch-transactions?days=$DAYS&batchSize=$BATCH_SIZE&maxPages=$MAX_PAGES&timeBudgetMs=$TIME_BUDGET_MS"
+            if [ "$i" = "1" ] && [ "$RESET_PROGRESS" = "true" ]; then
+              URL="$URL&resetProgress=true"
+            fi
+
+            echo "=== Transaction run $i/$ITERATIONS ==="
+            BODY_FILE=$(mktemp)
+            STATUS=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$URL")
+            if jq empty "$BODY_FILE" >/dev/null 2>&1; then
+              jq . "$BODY_FILE"
+              RESP=$(cat "$BODY_FILE")
+            else
+              RESP=$(cat "$BODY_FILE")
+              echo "$RESP"
+            fi
+
+            if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+              rm -f "$BODY_FILE"
+              echo "Request failed with HTTP $STATUS"
+              exit 1
+            fi
+            rm -f "$BODY_FILE"
+
+            PARTIAL=$(echo "$RESP" | jq -r '.partial // false')
+            COMPLETE=$(echo "$RESP" | jq -r '.sweepComplete // false')
+
+            if [ "$PARTIAL" = "true" ]; then
+              echo "Backfill stopped because one or more addresses hit maxPages=$MAX_PAGES."
+              exit 2
+            fi
+
+            if [ "$COMPLETE" = "true" ]; then
+              echo "Backfill sweep completed."
+              exit 0
+            fi
+
+            if [ "$i" -lt "$ITERATIONS" ]; then
+              sleep "$SLEEP_SECONDS"
+            fi
+          done
+
+          echo "Backfill stopped after $ITERATIONS iterations before sweepComplete=true."
+          exit 3
