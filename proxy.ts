@@ -15,9 +15,26 @@ const CF_JWT_HEADER = 'cf-access-jwt-assertion'
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  if (pathname.startsWith('/api/cron/')) return NextResponse.next()
-  if (pathname.startsWith('/api/auth/')) return NextResponse.next()
-  if (PUBLIC_PATHS.has(pathname)) return NextResponse.next()
+  // Defense-in-depth: strip any client-forged identity headers. The proxy is
+  // the sole authority that may set x-user-*; route handlers trust them only
+  // because this runs first. Stripping here makes a forged header harmless
+  // even if the matcher is ever relaxed or a future code path forwards
+  // without re-setting them.
+  const strippedHeaders = new Headers(request.headers)
+  strippedHeaders.delete('x-user-id')
+  strippedHeaders.delete('x-user-email')
+  strippedHeaders.delete('x-user-role')
+  strippedHeaders.delete('x-user-departments')
+
+  if (pathname.startsWith('/api/cron/')) {
+    return NextResponse.next({ request: { headers: strippedHeaders } })
+  }
+  if (pathname.startsWith('/api/auth/')) {
+    return NextResponse.next({ request: { headers: strippedHeaders } })
+  }
+  if (PUBLIC_PATHS.has(pathname)) {
+    return NextResponse.next({ request: { headers: strippedHeaders } })
+  }
 
   const skipMode = readSkipAuthMode()
   let user: RequestUser | null = null
@@ -133,13 +150,14 @@ export async function proxy(request: NextRequest) {
       : NextResponse.redirect(new URL('/pending-approval', request.url))
   }
 
-  const requestHeaders = new Headers(request.headers)
-  requestHeaders.set('x-user-id', user.id)
-  requestHeaders.set('x-user-email', user.email)
-  requestHeaders.set('x-user-role', user.role)
-  requestHeaders.set('x-user-departments', user.departments.join(','))
+  // Start from stripped headers (no client-forged x-user-*) then set the
+  // authoritative values from the verified identity.
+  strippedHeaders.set('x-user-id', user.id)
+  strippedHeaders.set('x-user-email', user.email)
+  strippedHeaders.set('x-user-role', user.role)
+  strippedHeaders.set('x-user-departments', user.departments.join(','))
 
-  return NextResponse.next({ request: { headers: requestHeaders } })
+  return NextResponse.next({ request: { headers: strippedHeaders } })
 }
 
 function denyResponse(request: NextRequest, status: number, code: string, message: string) {
@@ -164,6 +182,12 @@ function unauthenticatedResponse(request: NextRequest, pathname: string) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+    // Run on every request except Next's internal asset paths. The previous
+    // matcher exempted image-extension URLs, which let requests ending in
+    // .png/.svg/etc. reach route handlers without identity verification —
+    // any route that accepted an arbitrary path segment could have received
+    // client-forged x-user-* headers. Next serves files from /public
+    // without middleware when they physically exist, so no exclusion needed.
+    '/((?!_next/static|_next/image|favicon.ico).*)',
   ],
 }

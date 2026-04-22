@@ -136,9 +136,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(result)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
+    console.error('[budget/import/preview]', error)
     return NextResponse.json(
-      { error: 'Preview failed', detail: message, periodLabel: formatBudgetPeriodLabel(period) },
+      { error: 'Preview failed', code: 'internal', periodLabel: formatBudgetPeriodLabel(period) },
       { status: 500 },
     )
   }

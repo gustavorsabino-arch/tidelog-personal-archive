@@ -58,6 +58,19 @@ export const auth = betterAuth({
     'http://localhost:3000',
     ...(process.env.NEXT_PUBLIC_APP_URL ? [process.env.NEXT_PUBLIC_APP_URL] : []),
   ],
+
+  // Explicit cookie hardening — avoid relying on Better Auth defaults, which
+  // have varied across versions. HttpOnly blocks JS access (XSS token theft);
+  // SameSite=Lax mitigates CSRF on cross-site top-level POSTs; Secure forces
+  // HTTPS in production. Applied via `defaultCookieAttributes` so it covers
+  // every cookie Better Auth sets (session, csrf, oauth state, etc).
+  advanced: {
+    defaultCookieAttributes: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    },
+  },
 })
 
 export type AuthSession = typeof auth.$Infer.Session

@@ -51,11 +51,14 @@ export async function GET(req: NextRequest) {
     const drill = await fetchBudgetActualDrill(view, column, lineKeys, department)
     return NextResponse.json(drill)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch QuickBooks drill-down.'
-    const status =
-      message.includes('not connected') ? 409
-        : message.includes('not configured') ? 503
-          : 500
-    return NextResponse.json({ error: message }, { status })
+    const message = error instanceof Error ? error.message : ''
+    if (message.includes('not connected')) {
+      return NextResponse.json({ error: message }, { status: 409 })
+    }
+    if (message.includes('not configured')) {
+      return NextResponse.json({ error: message }, { status: 503 })
+    }
+    console.error('[budget/actuals/drill]', error)
+    return NextResponse.json({ error: 'Failed to fetch QuickBooks drill-down.' }, { status: 500 })
   }
 }

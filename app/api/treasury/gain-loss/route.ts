@@ -14,7 +14,10 @@ export async function GET(req: NextRequest) {
     const result = await getTreasuryGainLoss(entity)
     return NextResponse.json(result)
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Unknown error'
-    return NextResponse.json({ error: msg }, { status: 500 })
+    console.error('[treasury/gain-loss]', e)
+    return NextResponse.json(
+      { error: 'Failed to load gain/loss', code: 'internal' },
+      { status: 500 },
+    )
   }
 }

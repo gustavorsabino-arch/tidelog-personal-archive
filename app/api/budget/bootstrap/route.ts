@@ -23,11 +23,14 @@ export async function GET(req: NextRequest) {
   const [state, qbStatusResult] = await Promise.all([
     loadBudgetState(year, noCache, { planDepartments: allowedDepartments }),
     loadQboStatuses()
-      .then((qbStatuses) => ({ qbStatuses, qbStatusError: null }))
-      .catch((error) => ({
-        qbStatuses: [],
-        qbStatusError: error instanceof Error ? error.message : 'Failed to load QuickBooks status.',
-      })),
+      .then((qbStatuses) => ({ qbStatuses, qbStatusError: null as string | null }))
+      .catch((error) => {
+        console.error('[budget/bootstrap] loadQboStatuses failed', error)
+        return {
+          qbStatuses: [],
+          qbStatusError: 'Failed to load QuickBooks status.',
+        }
+      }),
   ])
 
   const response: BudgetBootstrapResponse = {

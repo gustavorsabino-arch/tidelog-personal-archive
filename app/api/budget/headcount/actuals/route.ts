@@ -15,11 +15,14 @@ export async function GET(req: NextRequest) {
     const actuals = await fetchBudgetHeadcountActuals(view)
     return NextResponse.json(actuals)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch headcount actuals.'
-    const status =
-      message.includes('not connected') ? 409
-        : message.includes('not configured') ? 503
-          : 500
-    return NextResponse.json({ error: message }, { status })
+    const message = error instanceof Error ? error.message : ''
+    if (message.includes('not connected')) {
+      return NextResponse.json({ error: message }, { status: 409 })
+    }
+    if (message.includes('not configured')) {
+      return NextResponse.json({ error: message }, { status: 503 })
+    }
+    console.error('[budget/headcount/actuals]', error)
+    return NextResponse.json({ error: 'Failed to fetch headcount actuals.' }, { status: 500 })
   }
 }

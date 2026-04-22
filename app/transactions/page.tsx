@@ -1,5 +1,8 @@
+import { redirect } from 'next/navigation'
 import { TransactionsPageClient } from '@/components/transactions-page-client'
 import { ENTITIES } from '@/lib/constants'
+import { getServerUser } from '@/lib/auth/get-user'
+import { hasPermission } from '@/lib/auth/permissions'
 import { getTreasuryTransactions } from '@/lib/treasury-transactions'
 
 export const dynamic = 'force-dynamic'
@@ -7,6 +10,11 @@ export const dynamic = 'force-dynamic'
 const PAGE_SIZE = 50
 
 export default async function TransactionsPage() {
+  const user = await getServerUser()
+  if (!user || !hasPermission(user.role, 'treasury:read')) {
+    redirect(user?.role === 'budget_viewer' ? '/budget' : '/no-access')
+  }
+
   let initialEntity: (typeof ENTITIES)[number] = ENTITIES[0]
   let initialData = await getTreasuryTransactions({
     entity: initialEntity,

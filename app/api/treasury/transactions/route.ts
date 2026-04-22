@@ -39,7 +39,10 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(result)
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Unknown error'
-    return NextResponse.json({ error: msg }, { status: 500 })
+    console.error('[treasury/transactions]', e)
+    return NextResponse.json(
+      { error: 'Failed to load transactions', code: 'internal' },
+      { status: 500 },
+    )
   }
 }

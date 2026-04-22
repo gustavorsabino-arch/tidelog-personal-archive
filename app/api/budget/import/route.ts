@@ -204,7 +204,10 @@ export async function POST(req: NextRequest) {
       importedAt: importMeta.lastImportedAt,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: 'Import failed', detail: message }, { status: 500 })
+    console.error('[budget/import]', error)
+    return NextResponse.json(
+      { error: 'Import failed', code: 'internal' },
+      { status: 500 },
+    )
   }
 }

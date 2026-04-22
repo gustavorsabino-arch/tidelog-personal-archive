@@ -15,11 +15,14 @@ export async function GET(req: NextRequest) {
     const actuals = await fetchBudgetOverviewActuals(view)
     return NextResponse.json(actuals)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch QuickBooks actuals.'
-    const status =
-      message.includes('not connected') ? 409
-      : message.includes('not configured') ? 503
-      : 500
-    return NextResponse.json({ error: message }, { status })
+    const message = error instanceof Error ? error.message : ''
+    if (message.includes('not connected')) {
+      return NextResponse.json({ error: message }, { status: 409 })
+    }
+    if (message.includes('not configured')) {
+      return NextResponse.json({ error: message }, { status: 503 })
+    }
+    console.error('[budget/actuals]', error)
+    return NextResponse.json({ error: 'Failed to fetch QuickBooks actuals.' }, { status: 500 })
   }
 }

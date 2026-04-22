@@ -83,6 +83,15 @@ export function assertSafeStartup(env: {
     for (const key of required) {
       if (!env[key]) throw new Error(`AUTH_MODE=cf-access requires ${key}. Refusing to boot.`)
     }
+    // CF_ACCESS_TEAM_DOMAIN is fed into the JWKS fetch URL; a wrong/attacker-
+    // controlled value would cause us to verify JWTs against an arbitrary key
+    // set → full identity impersonation. Pin the shape to Cloudflare's
+    // expected `<slug>.cloudflareaccess.com` format.
+    if (!/^[a-z0-9][a-z0-9-]*\.cloudflareaccess\.com$/.test(env.CF_ACCESS_TEAM_DOMAIN!)) {
+      throw new Error(
+        `CF_ACCESS_TEAM_DOMAIN must match "<slug>.cloudflareaccess.com" (got: ${JSON.stringify(env.CF_ACCESS_TEAM_DOMAIN)}). Refusing to boot.`,
+      )
+    }
   }
 }
 

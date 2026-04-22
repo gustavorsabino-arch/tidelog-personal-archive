@@ -1,10 +1,18 @@
+import { redirect } from 'next/navigation'
 import { GainLossPageClient } from '@/components/gain-loss-page-client'
 import { ENTITIES } from '@/lib/constants'
+import { getServerUser } from '@/lib/auth/get-user'
+import { hasPermission } from '@/lib/auth/permissions'
 import { getTreasuryGainLoss } from '@/lib/treasury-gain-loss'
 
 export const dynamic = 'force-dynamic'
 
 export default async function GainLossPage() {
+  const user = await getServerUser()
+  if (!user || !hasPermission(user.role, 'treasury:read')) {
+    redirect(user?.role === 'budget_viewer' ? '/budget' : '/no-access')
+  }
+
   let initialEntity: (typeof ENTITIES)[number] = ENTITIES[0]
   let initialData = await getTreasuryGainLoss(initialEntity)
 
