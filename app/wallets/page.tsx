@@ -26,9 +26,10 @@ export default function WalletsPage() {
     return () => { cancelled = true }
   }, [])
 
-  const filtered = useMemo(() => {
+  // Pre-filter applies everything EXCEPT the entity tab. Entity counts are
+  // derived from this so switching tabs doesn't zero them out.
+  const preEntityFiltered = useMemo(() => {
     return walletRegistry.filter((w) => {
-      if (entityFilter && w.entity !== entityFilter) return false
       if (!showExternal && w.isExternal) return false
       if (search) {
         const s = search.toLowerCase()
@@ -38,20 +39,28 @@ export default function WalletsPage() {
       }
       return true
     })
-  }, [walletRegistry, entityFilter, search, showExternal])
+  }, [walletRegistry, search, showExternal])
+
+  const filtered = useMemo(() => {
+    if (!entityFilter) return preEntityFiltered
+    return preEntityFiltered.filter((w) => w.entity === entityFilter)
+  }, [preEntityFiltered, entityFilter])
 
   const byEntity = useMemo(() => {
     const map: Record<string, number> = {}
-    filtered.forEach((w) => { map[w.entity] = (map[w.entity] || 0) + 1 })
+    preEntityFiltered.forEach((w) => { map[w.entity] = (map[w.entity] || 0) + 1 })
     return map
-  }, [filtered])
+  }, [preEntityFiltered])
 
   return (
     <div>
       <div className="page-header">
         <div className="page-title">Wallets</div>
         <div className="page-sub">
-          {loading ? 'Loading…' : error ? `Error: ${error}` : `${walletRegistry.length} wallets across ${ENTITIES.length} entities`}
+          {loading ? 'Loading…' : error ? `Error: ${error}` : (() => {
+            const entityCount = new Set(filtered.map((w) => w.entity)).size
+            return `${filtered.length} wallet${filtered.length === 1 ? '' : 's'} across ${entityCount} entit${entityCount === 1 ? 'y' : 'ies'}`
+          })()}
         </div>
       </div>
 
@@ -59,7 +68,7 @@ export default function WalletsPage() {
       <div className="controls-bar">
         <div className="entity-tabs">
           <button className={`entity-tab${entityFilter === '' ? ' active' : ''}`} onClick={() => setEntityFilter('')}>
-            All ({filtered.length})
+            All ({preEntityFiltered.length})
           </button>
           {ENTITIES.map(e => (
             <button key={e} className={`entity-tab${entityFilter === e ? ' active' : ''}`} onClick={() => setEntityFilter(e)}>
