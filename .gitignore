@@ -2,8 +2,18 @@ node_modules/
 .env
 .env.local
 .env*.local
+.env.production
 *.db
 .DS_Store
 .next/
 out/
 *.tsbuildinfo
+
+# Supabase CLI local stack
+supabase/.temp/
+supabase/.branches/
+
+.claude/settings.local.json
+.worktrees/
+docs/*
+docs/superpowers/*
