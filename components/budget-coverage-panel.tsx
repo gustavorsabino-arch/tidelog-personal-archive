@@ -20,7 +20,7 @@ export function BudgetCoveragePanel({
     return (
       <div className="status-bar">
         <span className="status-dot loading" />
-        <span className="status-text">Fetching QuickBooks coverage…</span>
+        <span className="status-text">Loading coverage…</span>
       </div>
     )
   }

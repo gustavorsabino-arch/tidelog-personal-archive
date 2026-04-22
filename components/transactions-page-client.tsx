@@ -1,9 +1,10 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtAddr } from '@/lib/format'
+import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import type { Transaction, TransactionSummary, TransactionsResponse } from '@/lib/types'
 
@@ -52,7 +53,6 @@ export function TransactionsPageClient({
   const [summary, setSummary] = useState<TransactionSummary>(initialSummary)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const didHydrate = useRef(false)
 
   // Server-side filters
   const [tokenFilter, setTokenFilter] = useState('')
@@ -93,18 +93,18 @@ export function TransactionsPageClient({
   }, [entity, pageSize, offset, tokenFilter, dirFilter, walletFilter, monthFilter])
 
   // Reset offset when any server-side filter changes (including entity).
+  // Skip on the first render when everything still matches SSR initial values.
   useEffect(() => {
-    if (!didHydrate.current) return
+    if (entity === initialEntity && !tokenFilter && !dirFilter && !walletFilter && !monthFilter) return
     setOffset(0)
-  }, [entity, tokenFilter, dirFilter, walletFilter, monthFilter])
+  }, [entity, initialEntity, tokenFilter, dirFilter, walletFilter, monthFilter])
 
   useEffect(() => {
-    if (!didHydrate.current) {
-      didHydrate.current = true
-      return
-    }
+    // Skip refetch when state still matches the SSR-provided initial values.
+    // Survives React 19 StrictMode's double-mount, which breaks a ref-based guard.
+    if (entity === initialEntity && !tokenFilter && !dirFilter && !monthFilter && !walletFilter && offset === 0) return
     if (entity) fetchTransactions()
-  }, [fetchTransactions, entity])
+  }, [entity, initialEntity, tokenFilter, dirFilter, monthFilter, walletFilter, offset, fetchTransactions])
 
   // Wallet dropdown — build from current page; adequate since wallet is a
   // server-side filter and the page always contains the currently-filtered set.
@@ -227,15 +227,21 @@ export function TransactionsPageClient({
         </div>
       </div>
 
-      {loading ? (
-        <div className="status-bar">
-          <span className="status-dot loading" />
-          <span className="status-text">Loading transactions…</span>
-        </div>
-      ) : error ? (
+      {error ? (
         <div className="error-msg">{error}</div>
       ) : (
         <>
+          {loading ? (
+            <div className="cards-grid">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="card">
+                  <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+                  <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+                  <Skeleton width={120} height={10} />
+                </div>
+              ))}
+            </div>
+          ) : (
           <div className="cards-grid">
             <div className="card">
               <div className="card-label">Inflows</div>
@@ -260,6 +266,7 @@ export function TransactionsPageClient({
               <div className="card-sub">matching filters</div>
             </div>
           </div>
+          )}
 
           <div className="section">
             <div className="section-header">

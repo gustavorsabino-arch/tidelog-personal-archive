@@ -30,7 +30,7 @@ export function BudgetScopeControls({
   onDepartmentChange,
   showDepartmentSelector = false,
   showEntitySelector = true,
-  availableModes = ['ytd', 'month', 'range'],
+  availableModes = ['month'],
   availableMonthIndices,
   allowedEntities = null,
 }: BudgetScopeControlsProps) {
@@ -47,7 +47,7 @@ export function BudgetScopeControls({
   const selectableYears = getBudgetSelectableYears()
   const entityLabel = (entity: BudgetEntityScope) => entity === 'All' ? 'All Entities' : entity
   const showModeSelector = availableModes.length > 1
-  const effectiveMode = availableModes.includes(value.mode) ? value.mode : (availableModes[0] ?? 'ytd')
+  const effectiveMode = availableModes.includes(value.mode) ? value.mode : (availableModes[0] ?? 'month')
 
   return (
     <div className="budget-scope-toolbar">

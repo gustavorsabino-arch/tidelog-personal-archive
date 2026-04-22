@@ -1,39 +1,40 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
+import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum } from '@/lib/format'
+import { Skeleton } from '@/components/skeleton'
 import { computeFIFO } from '@/lib/fifo'
-import type { Transaction, UnrealizedEntry, Prices } from '@/lib/types'
+import type { Transaction, Prices } from '@/lib/types'
+
+type TxResponse = { transactions: Transaction[] }
+type PriceResponse = { prices: Prices }
+
+async function fetchUnrealizedData(entity: string) {
+  const [txRes, priceRes] = await Promise.all([
+    apiFetch<TxResponse>(`/api/treasury/transactions?entity=${entity}&limit=all`),
+    apiFetch<PriceResponse>('/api/prices'),
+  ])
+  return computeFIFO(txRes.transactions, priceRes.prices as Record<string, number>)
+}
 
 export default function UnrealizedPage() {
   const [entity, setEntity] = useState('Opco')
-  const [unrealized, setUnrealized] = useState<UnrealizedEntry[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   // Filters
   const [tokenFilter, setTokenFilter] = useState('')
   const [signFilter, setSignFilter] = useState('')
 
-  async function fetchData() {
-    setLoading(true)
-    try {
-      const [txRes, priceRes] = await Promise.all([
-        apiFetch<{ transactions: Transaction[] }>(`/api/treasury/transactions?entity=${entity}&limit=all`),
-        apiFetch<{ prices: Prices }>('/api/prices'),
-      ])
-      const { unrealized: ur } = computeFIFO(txRes.transactions, priceRes.prices as Record<string, number>)
-      setUnrealized(ur)
-      setError(null)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { data: fifoResult, isLoading, error: swrError, mutate } = useSWR(
+    `unrealized:${entity}`,
+    () => fetchUnrealizedData(entity),
+    { revalidateOnFocus: false, dedupingInterval: 30_000 },
+  )
 
-  useEffect(() => { fetchData() }, [entity])
+  const unrealized = fifoResult?.unrealized ?? []
+  const loading = isLoading
+  const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
   const filtered = useMemo(() => {
     return unrealized.filter(u => {
@@ -64,7 +65,36 @@ export default function UnrealizedPage() {
       </div>
 
       {loading ? (
-        <div className="status-bar"><span className="status-dot loading" /><span className="status-text">Computing unrealized gains…</span></div>
+        <>
+          <div className="cards-grid">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="card">
+                <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+                <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+                <Skeleton width={180} height={10} />
+              </div>
+            ))}
+          </div>
+          <div className="section">
+            <div className="table-wrap" style={{ maxHeight: '600px', overflow: 'auto' }}>
+              <table>
+                <tbody>
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <tr key={i}>
+                      <td style={{ padding: '6px 10px' }}><Skeleton width={160} height={12} /></td>
+                      <td style={{ padding: '6px 10px' }}><Skeleton width={50} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={70} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={70} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       ) : error ? (
         <div className="error-msg">{error}</div>
       ) : (

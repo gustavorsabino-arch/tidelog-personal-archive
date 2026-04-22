@@ -1,8 +1,10 @@
 'use client'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, ENTITY_COLORS } from '@/lib/constants'
 import { fmtUSD } from '@/lib/format'
+import { Skeleton } from '@/components/skeleton'
 import type { PnlAccount, PnlSection, PnlTree } from '@/lib/qb/pnl'
 
 type PnlResponse = PnlTree & {
@@ -82,28 +84,17 @@ export default function PnLPage() {
   const [mode, setMode] = useState<Mode>('ytd')
   const [year, setYear] = useState(current.year)
   const [month, setMonth] = useState(current.month)
-  const [data, setData] = useState<PnlResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
 
   const period = useMemo(() => toRange(mode, year, month), [mode, year, month])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const qs = new URLSearchParams({ entity, periodStart: period.start, periodEnd: period.end })
-      const res = await apiFetch<PnlResponse>(`/api/qb/pnl?${qs}`)
-      setData(res)
-    } catch (err) {
-      setData(null)
-      setError(err instanceof Error ? err.message : 'Failed to load P&L')
-    } finally {
-      setLoading(false)
-    }
-  }, [entity, period.start, period.end])
-
-  useEffect(() => { load() }, [load])
+  const swrKey = `/api/qb/pnl?entity=${entity}&periodStart=${period.start}&periodEnd=${period.end}`
+  const { data, isLoading, error: swrError, mutate } = useSWR<PnlResponse>(
+    swrKey,
+    apiFetch<PnlResponse>,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 },
+  )
+  const loading = isLoading
+  const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
   const totals = data?.totals
   const netClass = (totals?.netIncome ?? 0) >= 0 ? 'green' : 'red'
@@ -145,6 +136,16 @@ export default function PnLPage() {
         {loading ? <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Loading…</span> : null}
       </div>
 
+      {loading && !data ? (
+        <div className="cards-grid">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="card">
+              <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+              <Skeleton width={140} height={22} />
+            </div>
+          ))}
+        </div>
+      ) : (
       <div className="cards-grid">
         <div className="card">
           <div className="card-label">Total Revenue</div>
@@ -165,8 +166,22 @@ export default function PnLPage() {
           <div className="card-value" style={{ fontSize: '0.9rem' }}>{period.label}</div>
         </div>
       </div>
+      )}
 
-      {error ? (
+      {loading && !data ? (
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+            <tbody>
+              {[0, 1, 2, 3, 4].map((i) => (
+                <tr key={i}>
+                  <td style={{ padding: '6px 10px' }}><Skeleton width={160} height={12} /></td>
+                  <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={90} height={12} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : error ? (
         <div className="empty">
           <div className="empty-icon">⚠️</div>
           <div>{error}</div>

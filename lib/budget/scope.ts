@@ -26,7 +26,27 @@ type BudgetViewRestrictions = {
 }
 
 const ALL_BUDGET_MONTH_INDICES = BUDGET_MONTH_LABELS.map((_, index) => index)
-const ALL_BUDGET_VIEW_MODES: BudgetViewMode[] = ['ytd', 'month', 'range']
+const ALL_BUDGET_VIEW_MODES: BudgetViewMode[] = ['month']
+
+/**
+ * Budget months close on the 16th of the *following* month (e.g. March closes
+ * on April 16). Returns the subset of month indices (0-11) that are considered
+ * closed for the given `year` as of `today`. Only closed months should be
+ * user-selectable — mid-month data is incomplete.
+ */
+export function getClosedBudgetMonthIndices(year: number, today: Date = new Date()): number[] {
+  const todayYear = today.getFullYear()
+  if (year < todayYear) return [...ALL_BUDGET_MONTH_INDICES]
+  if (year > todayYear) return []
+
+  const todayMonth = today.getMonth()
+  const todayDay = today.getDate()
+  // Previous month is closed only if today is strictly after the 16th of the
+  // current month. Otherwise only months before the previous one are closed.
+  const lastClosed = todayDay > 16 ? todayMonth - 1 : todayMonth - 2
+  if (lastClosed < 0) return []
+  return Array.from({ length: lastClosed + 1 }, (_, index) => index)
+}
 
 export function normalizeBudgetYear(year: number): number {
   if (!Number.isFinite(year)) return MIN_BUDGET_YEAR
@@ -90,7 +110,7 @@ export function clampBudgetViewState(
   const allowedModes = normalizeModes(restrictions.allowedModes)
   const allowedEntities = normalizeEntities(restrictions.allowedEntities)
   const defaultMonth = clampMonthIndexToAllowed(new Date().getMonth(), allowedMonthIndices)
-  const mode = allowedModes.includes(view.mode) ? view.mode : allowedModes[0] ?? 'ytd'
+  const mode = allowedModes.includes(view.mode) ? view.mode : allowedModes[0] ?? 'month'
   const month = clampMonthIndexToAllowed(view.month, allowedMonthIndices)
   const rangeStart = clampMonthIndexToAllowed(view.rangeStart, allowedMonthIndices)
   const rangeEnd = clampMonthIndexToAllowed(view.rangeEnd, allowedMonthIndices)
@@ -114,7 +134,7 @@ export function getDefaultBudgetViewState(
   return clampBudgetViewState({
     year: normalizedYear,
     entity: 'All',
-    mode: 'ytd',
+    mode: 'month',
     month: currentMonth,
     rangeStart: 0,
     rangeEnd: currentMonth,

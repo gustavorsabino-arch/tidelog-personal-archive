@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { DataTable } from '@/components/data-table'
 import { apiFetch } from '@/lib/api'
 import { fmtAddr, fmtDate, fmtDateTime, fmtNum, fmtUSD } from '@/lib/format'
+import { Skeleton } from '@/components/skeleton'
 import type {
   TreasuryManagementPosition,
   TreasuryManagementResponse,
@@ -22,7 +23,6 @@ export function TreasuryManagementPageClient({
   const [data, setData] = useState<TreasuryManagementResponse>(initialData)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const didHydrate = useRef(false)
 
   const [protocolFilter, setProtocolFilter] = useState('')
   const [assetFilter, setAssetFilter] = useState('')
@@ -50,12 +50,12 @@ export function TreasuryManagementPageClient({
   }
 
   useEffect(() => {
-    if (!didHydrate.current) {
-      didHydrate.current = true
-      return
-    }
+    // Skip refetch when state still matches the SSR-provided initial values.
+    // Survives React 19 StrictMode's double-mount, which breaks a ref-based guard.
+    if (entity === initialEntity) return
     fetchData(entity)
-  }, [entity])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entity, initialEntity])
 
   const protocolOptions = useMemo(() => {
     return [...new Set(data.positions.map(position => position.protocol))].sort()
@@ -268,9 +268,14 @@ export function TreasuryManagementPageClient({
       </div>
 
       {loading ? (
-        <div className="status-bar">
-          <span className="status-dot loading" />
-          <span className="status-text">Loading on-chain treasury positions…</span>
+        <div className="cards-grid">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="card">
+              <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+              <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+              <Skeleton width={160} height={10} />
+            </div>
+          ))}
         </div>
       ) : error ? (
         <div className="error-msg">{error}</div>
