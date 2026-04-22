@@ -1,0 +1,48 @@
+{
+  "name": "tidelog",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:triggers": "bun run scripts/apply-triggers.ts",
+    "db:seed": "bun run scripts/seed.ts",
+    "db:seed:qb-mapping": "bun run scripts/seed-qb-mapping.ts",
+    "db:studio": "drizzle-kit studio",
+    "cron": "bun run scripts/cron/run.ts",
+    "cron:fetch-prices": "bun run scripts/cron/run.ts fetch-prices",
+    "cron:fetch-balances": "bun run scripts/cron/run.ts fetch-balances",
+    "cron:fetch-transactions": "bun run scripts/cron/run.ts fetch-transactions",
+    "cron:fetch-qb-reports": "bun run scripts/cron/run.ts fetch-qb-reports",
+    "cron:refresh-qb-tokens": "bun run scripts/cron/run.ts refresh-qb-tokens",
+    "cron:prune-cache": "bun run scripts/cron/run.ts prune-cache"
+  },
+  "dependencies": {
+    "@aws-sdk/rds-signer": "3.1034.0",
+    "better-auth": "^1.0.0",
+    "drizzle-orm": "^0.36.0",
+    "jose": "^5.9.0",
+    "next": "^16.2.0",
+    "postgres": "^3.4.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "xlsx": "^0.18.5",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "drizzle-kit": "^0.28.0",
+    "typescript": "^5.7.0"
+  }
+}

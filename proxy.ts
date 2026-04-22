@@ -1,0 +1,169 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { verifyCfJwt, fetchCfJwks } from '@/lib/auth/cf-access'
+import { readSkipAuthMode, readAuthMode, assertSafeStartup } from '@/lib/auth/startup-check'
+import { buildDevUser } from '@/lib/auth/dev-bypass'
+import { loadUserByEmail, type RequestUser } from '@/lib/auth/request-user'
+import { isEmailDomainAllowed, parseAllowedDomains } from '@/lib/auth/email-domain'
+import { logAudit } from '@/lib/audit'
+import { auth } from '@/lib/auth'
+
+assertSafeStartup(process.env)
+
+const PUBLIC_PATHS = new Set(['/no-access', '/pending-approval', '/login'])
+const CF_JWT_HEADER = 'cf-access-jwt-assertion'
+
+export async function proxy(request: NextRequest) {
+  const { pathname } = request.nextUrl
+
+  if (pathname.startsWith('/api/cron/')) return NextResponse.next()
+  if (pathname.startsWith('/api/auth/')) return NextResponse.next()
+  if (PUBLIC_PATHS.has(pathname)) return NextResponse.next()
+
+  const skipMode = readSkipAuthMode()
+  let user: RequestUser | null = null
+  let identityEmail: string | null = null
+
+  if (skipMode.kind !== 'none') {
+    const dev = buildDevUser(skipMode)
+    if (dev) {
+      user = {
+        id: 'dev-user',
+        email: dev.email,
+        role: dev.role,
+        departments: dev.departments,
+        banned: false,
+      }
+    }
+  } else {
+    const authMode = readAuthMode()
+
+    if (authMode === 'cf-access') {
+      const token = request.headers.get(CF_JWT_HEADER)
+      if (!token) {
+        return denyResponse(request, 401, 'auth.no_cf_jwt', 'Missing Cloudflare Access JWT.')
+      }
+      let claims
+      try {
+        claims = await verifyCfJwt(token, {
+          aud: process.env.CF_ACCESS_AUD!,
+          issuer: `https://${process.env.CF_ACCESS_TEAM_DOMAIN!}`,
+          jwks: () => fetchCfJwks(process.env.CF_ACCESS_TEAM_DOMAIN!),
+        })
+      } catch (err) {
+        await logAudit({
+          action: 'access.denied.invalid_jwt',
+          metadata: { reason: (err as Error).message, path: pathname },
+        })
+        return denyResponse(request, 401, 'auth.invalid_jwt', 'Invalid Cloudflare Access JWT.')
+      }
+      identityEmail = (claims.email ?? '').toLowerCase()
+    } else {
+      // better-auth mode
+      let session
+      try {
+        session = await auth.api.getSession({ headers: request.headers })
+      } catch (err) {
+        await logAudit({
+          action: 'access.denied.session_error',
+          metadata: { reason: (err as Error).message, path: pathname },
+        })
+        return unauthenticatedResponse(request, pathname)
+      }
+      if (!session?.user?.email) {
+        return unauthenticatedResponse(request, pathname)
+      }
+      const email = session.user.email.trim().toLowerCase()
+      if (!email) {
+        return unauthenticatedResponse(request, pathname)
+      }
+      identityEmail = email
+    }
+
+    if (!identityEmail) {
+      return denyResponse(request, 401, 'auth.no_email', 'No email in identity.')
+    }
+
+    const allowedDomains = parseAllowedDomains(process.env.ALLOWED_EMAIL_DOMAINS)
+    if (!isEmailDomainAllowed(identityEmail, allowedDomains)) {
+      await logAudit({
+        action: 'access.denied.disallowed_domain',
+        metadata: { email: identityEmail, path: pathname },
+      })
+      return pathname.startsWith('/api/')
+        ? NextResponse.json({ error: 'Email domain not allowed', code: 'auth.disallowed_domain' }, { status: 403 })
+        : NextResponse.redirect(new URL('/no-access', request.url))
+    }
+
+    user = await loadUserByEmail(identityEmail)
+
+    if (!user) {
+      await logAudit({
+        action: 'access.denied.unknown_email',
+        metadata: { email: identityEmail, path: pathname },
+      })
+      return pathname.startsWith('/api/')
+        ? NextResponse.json({ error: 'Unknown email', code: 'auth.unknown_email' }, { status: 403 })
+        : NextResponse.redirect(new URL('/no-access', request.url))
+    }
+  }
+
+  if (!user) {
+    return denyResponse(request, 401, 'auth.no_user', 'No authenticated user.')
+  }
+
+  if (user.banned) {
+    await logAudit({
+      userId: user.id === 'dev-user' ? null : user.id,
+      action: 'access.denied.banned',
+      metadata: { email: user.email, path: pathname },
+    })
+    return pathname.startsWith('/api/')
+      ? NextResponse.json({ error: 'Account banned', code: 'auth.banned' }, { status: 403 })
+      : NextResponse.redirect(new URL('/no-access', request.url))
+  }
+
+  if (!user.role) {
+    await logAudit({
+      userId: user.id === 'dev-user' ? null : user.id,
+      action: 'access.denied.no_role',
+      metadata: { email: user.email, path: pathname },
+    })
+    return pathname.startsWith('/api/')
+      ? NextResponse.json({ error: 'No role assigned', code: 'auth.no_role' }, { status: 403 })
+      : NextResponse.redirect(new URL('/pending-approval', request.url))
+  }
+
+  const requestHeaders = new Headers(request.headers)
+  requestHeaders.set('x-user-id', user.id)
+  requestHeaders.set('x-user-email', user.email)
+  requestHeaders.set('x-user-role', user.role)
+  requestHeaders.set('x-user-departments', user.departments.join(','))
+
+  return NextResponse.next({ request: { headers: requestHeaders } })
+}
+
+function denyResponse(request: NextRequest, status: number, code: string, message: string) {
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    return NextResponse.json({ error: message, code }, { status })
+  }
+  return NextResponse.redirect(new URL('/no-access', request.url))
+}
+
+function unauthenticatedResponse(request: NextRequest, pathname: string) {
+  if (pathname.startsWith('/api/')) {
+    return NextResponse.json({ error: 'Not authenticated', code: 'auth.no_session' }, { status: 401 })
+  }
+  const loginUrl = new URL('/login', request.url)
+  const next = pathname + request.nextUrl.search
+  // Only accept internal redirects — reject external hosts / protocol-relative URLs.
+  if (next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\')) {
+    loginUrl.searchParams.set('next', next)
+  }
+  return NextResponse.redirect(loginUrl)
+}
+
+export const config = {
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+  ],
+}
