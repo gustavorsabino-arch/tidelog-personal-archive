@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 
 import type { QboConnectionStatus } from '@/lib/qb/types'
+import { ForceRefreshPanel } from './force-refresh-panel'
 
 type BudgetQbConnectModalProps = {
   open: boolean
@@ -46,8 +47,8 @@ export function BudgetQbConnectModal({
       <div className="modal budget-qb-modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <div>
-            <div className="modal-title">Connect QuickBooks</div>
-            <div className="modal-sub">Manage the entity connections used for Budget actuals.</div>
+            <div className="modal-title">QuickBooks</div>
+            <div className="modal-sub">Manage entity connections and refresh cached data.</div>
           </div>
           <button className="modal-close" onClick={onClose} aria-label="Close QuickBooks modal">×</button>
         </div>
@@ -101,6 +102,13 @@ export function BudgetQbConnectModal({
               Done
             </button>
           </div>
+
+          {canConnect ? (
+            <>
+              <hr style={{ margin: '24px 0', border: 0, borderTop: '1px solid var(--border)' }} />
+              <ForceRefreshPanel refreshKey={open} />
+            </>
+          ) : null}
         </div>
       </div>
     </div>

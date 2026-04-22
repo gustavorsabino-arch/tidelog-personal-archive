@@ -855,7 +855,7 @@ export default function BudgetPage() {
           <div className="budget-page-actions">
             {canOpenQbConnect ? (
               <button className="btn-secondary budget-import-trigger" onClick={() => setIsQbModalOpen(true)}>
-                Connect QB
+                QuickBooks
               </button>
             ) : null}
             {canImportPlan ? (

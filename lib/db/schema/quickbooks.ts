@@ -1,4 +1,5 @@
-import { pgSchema, text, uuid, jsonb, timestamp, date, index, unique, primaryKey } from 'drizzle-orm/pg-core'
+import { pgSchema, text, uuid, jsonb, timestamp, date, index, unique, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
 import { entity } from './reference'
 
 const app = pgSchema('app')
@@ -94,5 +95,38 @@ export const qbTransactionCache = app.table(
   },
   (t) => [
     primaryKey({ columns: [t.entityId, t.txnId] }),
+  ],
+)
+
+/**
+ * Tracks admin-initiated QuickBooks force-refresh runs. One row per dispatch.
+ *
+ * The partial unique index on status='running' is the concurrency lock:
+ * only one force refresh can be in flight at any time. A second INSERT
+ * conflicts with 23505, which the route handler translates to HTTP 409.
+ *
+ * Rows are not updated by the dispatching request (which returns 202 and
+ * exits); they're transitioned to 'succeeded' or 'failed' by the background
+ * job that runs via after(). If the background function is killed before
+ * completing the transition, the route handler has a stale-lock rule that
+ * reclaims the row after a timeout.
+ */
+export const qbForceRefreshRun = app.table(
+  'qb_force_refresh_run',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    fromPeriod: text('from_period').notNull(),
+    status: text('status', { enum: ['running', 'succeeded', 'failed', 'canceled'] }).notNull(),
+    requestedByEmail: text('requested_by_email').notNull(),
+    error: text('error'),
+    result: jsonb('result'),
+  },
+  (t) => [
+    uniqueIndex('qb_force_refresh_run_one_running_idx')
+      .on(t.status)
+      .where(sql`${t.status} = 'running'`),
+    index('qb_force_refresh_run_started_idx').on(t.startedAt.desc()),
   ],
 )

@@ -36,6 +36,13 @@
       "when": 1776864557002,
       "tag": "0004_move_to_app_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1776898602253,
+      "tag": "0005_majestic_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

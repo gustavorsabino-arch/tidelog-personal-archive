@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, gte, inArray } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import {
   qbAccountCatalog,
@@ -272,19 +272,24 @@ async function backfillTransactionPayloads(
   report: unknown,
   now: Date,
   label: string,
+  force = false,
 ): Promise<{ fetched: number; skipped: number; failed: number }> {
   const refs = extractTxnRefsFromGl(report as GlReportLike)
   if (refs.length === 0) return { fetched: 0, skipped: 0, failed: 0 }
 
-  const alreadyCached = new Set(
-    (await db.select({ txnId: qbTransactionCache.txnId })
-      .from(qbTransactionCache)
-      .where(and(
-        eq(qbTransactionCache.entityId, entityId),
-        inArray(qbTransactionCache.txnId, refs.map((r) => r.txnId)),
-      )))
-      .map((row) => row.txnId),
-  )
+  // When forced we bypass the cache check — we want fresh payloads even if
+  // rows already exist, because a txn's contents may have been edited in QB.
+  const alreadyCached = force
+    ? new Set<string>()
+    : new Set(
+        (await db.select({ txnId: qbTransactionCache.txnId })
+          .from(qbTransactionCache)
+          .where(and(
+            eq(qbTransactionCache.entityId, entityId),
+            inArray(qbTransactionCache.txnId, refs.map((r) => r.txnId)),
+          )))
+          .map((row) => row.txnId),
+      )
 
   const toFetch = refs.filter((r) => !alreadyCached.has(r.txnId))
   if (toFetch.length === 0) {
@@ -316,7 +321,10 @@ async function backfillTransactionPayloads(
           resourceType: resource,
           payload: payload as any,
           fetchedAt: now,
-        }).onConflictDoNothing()
+        }).onConflictDoUpdate({
+          target: [qbTransactionCache.entityId, qbTransactionCache.txnId],
+          set: { resourceType: resource, payload: payload as any, fetchedAt: now },
+        })
         fetched++
       } catch (err) {
         failed++
@@ -337,17 +345,158 @@ async function backfillTransactionPayloads(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Force-mode helpers
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Canonical string key for a cache row: order-independent filterParams. */
+function cacheKey(
+  reportType: string,
+  periodStart: string,
+  periodEnd: string,
+  filterParams: unknown,
+): string {
+  return `${reportType}|${periodStart}|${periodEnd}|${canonicalJson(filterParams)}`
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']'
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return '{' + entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',') + '}'
+}
+
+/**
+ * After a successful force-refetch for an entity, delete cache rows in the
+ * force range that were NOT written this run (i.e., QB no longer returns
+ * them: account removed from mapping, moving window changed, etc.). Scoped
+ * to a single entity so partial failures in other entities don't corrupt.
+ */
+async function reconcileReportCache(
+  entityId: string,
+  forceFromDate: string,
+  writtenKeys: Set<string>,
+): Promise<number> {
+  const rows = await db
+    .select({
+      id: qbReportCache.id,
+      reportType: qbReportCache.reportType,
+      periodStart: qbReportCache.periodStart,
+      periodEnd: qbReportCache.periodEnd,
+      filterParams: qbReportCache.filterParams,
+    })
+    .from(qbReportCache)
+    .where(and(
+      eq(qbReportCache.entityId, entityId),
+      gte(qbReportCache.periodStart, forceFromDate),
+    ))
+
+  const orphanIds = rows
+    .filter((r) => !writtenKeys.has(cacheKey(r.reportType, r.periodStart, r.periodEnd, r.filterParams)))
+    .map((r) => r.id)
+
+  if (orphanIds.length === 0) return 0
+
+  const CHUNK = 500
+  let deleted = 0
+  for (let i = 0; i < orphanIds.length; i += CHUNK) {
+    const chunk = orphanIds.slice(i, i + CHUNK)
+    const result = await db
+      .delete(qbReportCache)
+      .where(inArray(qbReportCache.id, chunk))
+      .returning({ id: qbReportCache.id })
+    deleted += result.length
+  }
+  return deleted
+}
+
+/**
+ * After a successful force-refetch, delete txn_cache rows not referenced by
+ * any currently cached GL for this entity. We scope against the full current
+ * GL set (not just this run's writes) because a txn might be referenced by a
+ * GL outside the force range — deleting it would break unrelated drill-downs.
+ */
+async function reconcileTxnCache(entityId: string): Promise<number> {
+  const glRows = await db
+    .select({ data: qbReportCache.data })
+    .from(qbReportCache)
+    .where(and(
+      eq(qbReportCache.entityId, entityId),
+      eq(qbReportCache.reportType, 'general_ledger'),
+    ))
+
+  const referenced = new Set<string>()
+  for (const row of glRows) {
+    for (const ref of extractTxnRefsFromGl(row.data as GlReportLike)) {
+      referenced.add(ref.txnId)
+    }
+  }
+
+  const cachedTxns = await db
+    .select({ txnId: qbTransactionCache.txnId })
+    .from(qbTransactionCache)
+    .where(eq(qbTransactionCache.entityId, entityId))
+
+  const orphans = cachedTxns.map((r) => r.txnId).filter((id) => !referenced.has(id))
+  if (orphans.length === 0) return 0
+
+  const CHUNK = 500
+  let deleted = 0
+  for (let i = 0; i < orphans.length; i += CHUNK) {
+    const chunk = orphans.slice(i, i + CHUNK)
+    const result = await db
+      .delete(qbTransactionCache)
+      .where(and(
+        eq(qbTransactionCache.entityId, entityId),
+        inArray(qbTransactionCache.txnId, chunk),
+      ))
+      .returning({ txnId: qbTransactionCache.txnId })
+    deleted += result.length
+  }
+  return deleted
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Main job
 // ─────────────────────────────────────────────────────────────────────────
 
-export async function fetchQbReportsJob() {
+export class ForceRefreshCanceledError extends Error {
+  constructor() {
+    super('force refresh canceled')
+    this.name = 'ForceRefreshCanceledError'
+  }
+}
+
+export async function fetchQbReportsJob(
+  opts?: {
+    force?: boolean
+    forceFrom?: string
+    /**
+     * Called at natural break points (start of each entity, between specs).
+     * When it resolves true the job aborts with ForceRefreshCanceledError.
+     */
+    shouldAbort?: () => Promise<boolean>
+  },
+): Promise<{ ok: boolean; [k: string]: unknown }> {
   const now = new Date()
+  const shouldAbort = opts?.shouldAbort
+  async function abortCheck() {
+    if (shouldAbort && (await shouldAbort())) throw new ForceRefreshCanceledError()
+  }
+  const forceFromDate = opts?.force
+    ? `${opts.forceFrom ?? `${HISTORY_START_YEAR}-01`}-01`
+    : null
+
+  if (forceFromDate) {
+    console.log(`[qb-reports] FORCE: upsert + reconcile for period_start >= ${forceFromDate}`)
+  }
+
   const connections = await db.select().from(qbConnection)
   const results: Record<string, unknown> = {}
 
   console.log(`[qb-reports] starting: ${connections.length} connected entit${connections.length === 1 ? 'y' : 'ies'}`)
 
   for (const conn of connections) {
+    await abortCheck()
     const qboEntity = entityIdToQboEntity(conn.entityId)
     if (!qboEntity) {
       results[conn.entityId] = { ok: false, error: `Cannot map entity id ${conn.entityId} to a QboEntity` }
@@ -363,6 +512,7 @@ export async function fetchQbReportsJob() {
     let payloadsSkipped = 0
     let payloadsFailed = 0
     const failures: string[] = []
+    const writtenKeys = new Set<string>()
 
     try {
       await refreshAccountCatalog(qboEntity, entityId, now)
@@ -377,6 +527,9 @@ export async function fetchQbReportsJob() {
     console.log(`[qb-reports] ${entityId}: ${specs.length} specs to process`)
 
     for (const spec of specs) {
+      await abortCheck()
+      const inForceRange = forceFromDate !== null && spec.periodStart >= forceFromDate
+
       // Load every row for this (entity, type, period) — many may exist with
       // different filter_params (one per mapped account for GL). We then
       // pick the match with equal filter_params below.
@@ -390,24 +543,23 @@ export async function fetchQbReportsJob() {
       const existingMatch = existing.find((row) => JSON.stringify(row.filterParams) === JSON.stringify(spec.filterParams))
 
       let data: unknown | null = null
-      let wroteThisRun = false
+      let shouldFetch = false
 
-      if (existingMatch) {
-        if (spec.isClosed) {
-          skipped++
-          // Still consider backfilling transaction payloads from cached GL
-          // rows on the first run where the cache row existed before we
-          // shipped qb_transaction_cache.
-          data = existingMatch.data
-        } else if (now.getTime() - existingMatch.fetchedAt.getTime() < CACHE_STALE_MS) {
-          skipped++
-          data = existingMatch.data
-        } else {
-          // Re-fetch.
-        }
+      if (inForceRange) {
+        shouldFetch = true
+      } else if (!existingMatch) {
+        shouldFetch = true
+      } else if (spec.isClosed) {
+        data = existingMatch.data
+        skipped++
+      } else if (now.getTime() - existingMatch.fetchedAt.getTime() < CACHE_STALE_MS) {
+        data = existingMatch.data
+        skipped++
+      } else {
+        shouldFetch = true
       }
 
-      if (data === null || (existingMatch && now.getTime() - existingMatch.fetchedAt.getTime() >= CACHE_STALE_MS && !spec.isClosed)) {
+      if (shouldFetch) {
         try {
           const params: Record<string, string> = {
             start_date: spec.periodStart,
@@ -435,7 +587,6 @@ export async function fetchQbReportsJob() {
           }
           data = freshData
           fetched++
-          wroteThisRun = true
           console.log(`[qb-reports] ${entityId}: ${spec.reportType} ${spec.periodStart}..${spec.periodEnd} fetched`)
         } catch (err) {
           failures.push(`${spec.reportType} ${spec.periodStart}..${spec.periodEnd}: ${(err as Error).message}`)
@@ -444,18 +595,36 @@ export async function fetchQbReportsJob() {
         }
       }
 
+      // Record the spec as "authoritative" — anything in the force range that
+      // we didn't record here is an orphan the reconciler will remove.
+      if (inForceRange) {
+        writtenKeys.add(cacheKey(spec.reportType, spec.periodStart, spec.periodEnd, spec.filterParams))
+      }
+
       if (spec.reportType === 'general_ledger' && data) {
         try {
           const label = `GL ${spec.periodStart}..${spec.periodEnd}`
-          const batch = await backfillTransactionPayloads(qboEntity, entityId, data, now, label)
+          const batch = await backfillTransactionPayloads(qboEntity, entityId, data, now, label, inForceRange)
           payloadsFetched += batch.fetched
           payloadsSkipped += batch.skipped
           payloadsFailed += batch.failed
-          void wroteThisRun
         } catch (err) {
           failures.push(`transaction_payloads ${spec.periodStart}..${spec.periodEnd}: ${(err as Error).message}`)
           console.warn(`[qb-reports] ${entityId}: GL payloads ${spec.periodStart}..${spec.periodEnd} FAILED: ${(err as Error).message}`)
         }
+      }
+    }
+
+    // Reconcile orphans only if (a) we were in force mode, and (b) no failures
+    // for this entity. Failed runs leave old cache intact; next clean run
+    // finishes the cleanup.
+    let reportsPruned = 0
+    let txnsPruned = 0
+    if (forceFromDate !== null && failures.length === 0) {
+      reportsPruned = await reconcileReportCache(entityId, forceFromDate, writtenKeys)
+      txnsPruned = await reconcileTxnCache(entityId)
+      if (reportsPruned > 0 || txnsPruned > 0) {
+        console.log(`[qb-reports] ${entityId}: reconciled — pruned ${reportsPruned} orphan report rows, ${txnsPruned} orphan txn payloads`)
       }
     }
 
@@ -471,6 +640,7 @@ export async function fetchQbReportsJob() {
       fetched,
       skipped,
       payloads: { fetched: payloadsFetched, skipped: payloadsSkipped, failed: payloadsFailed },
+      pruned: { reports: reportsPruned, txns: txnsPruned },
       failures,
     }
   }
