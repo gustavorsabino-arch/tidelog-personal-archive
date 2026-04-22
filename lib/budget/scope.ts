@@ -54,7 +54,9 @@ export function normalizeBudgetYear(year: number): number {
 }
 
 export function getBudgetSelectableYears(currentYear = new Date().getFullYear()): number[] {
-  const endYear = Math.max(MIN_BUDGET_YEAR + 1, normalizeBudgetYear(currentYear) + 1)
+  // Only years up to and including the current one — there's no closed data
+  // for any future year. On 2026 this returns [2026]; on 2027 → [2026, 2027].
+  const endYear = Math.max(MIN_BUDGET_YEAR, normalizeBudgetYear(currentYear))
   return Array.from({ length: endYear - MIN_BUDGET_YEAR + 1 }, (_, index) => MIN_BUDGET_YEAR + index)
 }
 
