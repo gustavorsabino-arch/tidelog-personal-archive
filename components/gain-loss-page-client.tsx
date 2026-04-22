@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum } from '@/lib/format'
+import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import type { GainLossEntry, GainLossResponse, GainLossSummary } from '@/lib/types'
 
@@ -23,7 +24,6 @@ export function GainLossPageClient({
   const [summary, setSummary] = useState<GainLossSummary>(initialSummary)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const didHydrate = useRef(false)
 
   // Filters
   const [tokenFilter, setTokenFilter] = useState('')
@@ -45,12 +45,12 @@ export function GainLossPageClient({
   }
 
   useEffect(() => {
-    if (!didHydrate.current) {
-      didHydrate.current = true
-      return
-    }
+    // Skip refetch when state still matches the SSR-provided initial values.
+    // Survives React 19 StrictMode's double-mount, which breaks a ref-based guard.
+    if (entity === initialEntity) return
     fetchData()
-  }, [entity])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entity, initialEntity])
 
   const wallets = useMemo(() => {
     const set = new Set<string>()
@@ -146,12 +146,21 @@ export function GainLossPageClient({
         </div>
       </div>
 
-      {loading ? (
-        <div className="status-bar"><span className="status-dot loading" /><span className="status-text">Computing FIFO…</span></div>
-      ) : error ? (
+      {error ? (
         <div className="error-msg">{error}</div>
       ) : (
         <>
+          {loading ? (
+            <div className="cards-grid">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="card">
+                  <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+                  <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+                  <Skeleton width={120} height={10} />
+                </div>
+              ))}
+            </div>
+          ) : (
           <div className="cards-grid">
             <div className="card">
               <div className="card-label">Total Realized</div>
@@ -188,6 +197,7 @@ export function GainLossPageClient({
               </div>
             </div>
           </div>
+          )}
 
           <div className="section">
             <div className="section-header">

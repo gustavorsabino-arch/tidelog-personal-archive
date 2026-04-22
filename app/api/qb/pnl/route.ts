@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requirePermission } from '@/lib/auth/require-permission'
-import { readCachedReportsInRange } from '@/lib/qb/cache-reads'
 import { isQboEntity } from '@/lib/qb/config'
-import { mergePnlTrees, parsePnlReport, type QboProfitAndLossReport } from '@/lib/qb/pnl'
+import { getPnlData, PnlNotCachedError } from '@/lib/qb/pnl-data'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,30 +33,16 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Invalid entity', code: 'pnl.invalid_entity' }, { status: 400 })
   }
 
-  const reports = await readCachedReportsInRange<QboProfitAndLossReport>(
-    entity, 'profit_and_loss', periodStart, periodEnd,
-  )
-
-  if (reports.length === 0) {
-    return NextResponse.json(
-      {
-        error: 'No cached P&L for this range. Wait for the next fetch-qb-reports cron run.',
-        code: 'pnl.not_cached',
-        entity,
-        periodStart,
-        periodEnd,
-      },
-      { status: 404 },
-    )
+  try {
+    const data = await getPnlData(entity, periodStart, periodEnd)
+    return NextResponse.json(data)
+  } catch (err) {
+    if (err instanceof PnlNotCachedError) {
+      return NextResponse.json(
+        { error: err.message, code: err.code, entity, periodStart, periodEnd },
+        { status: 404 },
+      )
+    }
+    throw err
   }
-
-  const tree = mergePnlTrees(reports.map(parsePnlReport))
-  return NextResponse.json({
-    entity,
-    periodStart,
-    periodEnd,
-    fetchedAt: new Date().toISOString(),
-    cachedMonths: reports.length,
-    ...tree,
-  })
 }

@@ -17,6 +17,25 @@ import { getCurrentPrices, getHistoricalPrice } from '@/lib/defillama'
 const ONE_HOUR = 60 * 60 * 1000
 
 /**
+ * Return the latest cached `latest` price for every tracked token.
+ * Returns a map of symbol → price (null entries are omitted).
+ */
+export async function getLatestPrices(): Promise<Record<string, number>> {
+  const tokens = await db.select({ symbol: tokenTable.symbol }).from(tokenTable)
+  const result: Record<string, number> = {}
+  for (const t of tokens) {
+    const [row] = await db
+      .select({ price: price.price })
+      .from(price)
+      .where(and(eq(price.token, t.symbol), eq(price.source, 'latest')))
+      .orderBy(desc(price.timestamp))
+      .limit(1)
+    if (row) result[t.symbol] = Number(row.price)
+  }
+  return result
+}
+
+/**
  * Return the latest cached `latest` price for a token, or null if nothing cached.
  */
 export async function getLatestPrice(symbol: string): Promise<number | null> {

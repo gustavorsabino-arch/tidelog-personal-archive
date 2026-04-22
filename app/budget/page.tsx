@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { fmtUSD } from '@/lib/format'
 import { BUDGET_DEPTS, ENTITIES } from '@/lib/constants'
 import { apiFetch, apiPost } from '@/lib/api'
+import { Skeleton } from '@/components/skeleton'
 import { BudgetImportModal } from '@/components/budget-import-modal'
 import { BudgetRecoveryModal } from '@/components/budget-recovery-modal'
 import { BudgetTeamMemberModal } from '@/components/budget-team-member-modal'
@@ -45,6 +46,7 @@ import {
   getVisibleBudgetTabs,
   hasBudgetPageAccess,
 } from '@/lib/access-model'
+import { getClosedBudgetMonthIndices } from '@/lib/budget/scope'
 import {
   filterBudgetTeam,
   getBudgetHeadcountSummary,
@@ -211,6 +213,14 @@ export default function BudgetPage() {
     () => BUDGET_TABS.filter((tab) => visibleBudgetTabKeys.includes(tab.key)),
     [visibleBudgetTabKeys],
   )
+  // Only surface months that have been closed (the 16th of the month AFTER
+  // them). Restrictive when the user is on the current year; past years show
+  // all months, future years show none.
+  const selectableMonthIndices = useMemo(() => {
+    const closed = getClosedBudgetMonthIndices(budgetYear)
+    if (!allowedBudgetMonthIndices || allowedBudgetMonthIndices.length === 0) return closed
+    return closed.filter((m) => allowedBudgetMonthIndices.includes(m))
+  }, [allowedBudgetMonthIndices, budgetYear])
 
   async function loadBudgetBootstrap(noCache = false) {
     setLoading(true)
@@ -297,11 +307,11 @@ export default function BudgetPage() {
       ...current,
       year: budgetYear,
     }, {
-      allowedMonthIndices: allowedBudgetMonthIndices,
+      allowedMonthIndices: selectableMonthIndices,
       allowedModes: allowedBudgetViewModes,
       allowedEntities: allowedBudgetEntities,
     }))
-  }, [allowedBudgetEntities, allowedBudgetMonthIndices, allowedBudgetViewModes, budgetYear])
+  }, [allowedBudgetEntities, selectableMonthIndices, allowedBudgetViewModes, budgetYear])
 
   useEffect(() => {
     if (accessLoading) return
@@ -889,7 +899,7 @@ export default function BudgetPage() {
             }
             showEntitySelector={access?.role === 'admin'}
             availableModes={allowedBudgetViewModes ?? undefined}
-            availableMonthIndices={allowedBudgetMonthIndices ?? undefined}
+            availableMonthIndices={selectableMonthIndices}
             allowedEntities={allowedBudgetEntities}
           />
         </div>
@@ -992,6 +1002,17 @@ export default function BudgetPage() {
               </span>
             </div>
           ) : null}
+          {loading ? (
+            <div className="cards-grid">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="card">
+                  <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+                  <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+                  <Skeleton width={180} height={10} />
+                </div>
+              ))}
+            </div>
+          ) : (
           <div className="cards-grid">
             <div className="card">
               <div className="card-label">Active Headcount</div>
@@ -1023,6 +1044,7 @@ export default function BudgetPage() {
               <div className="card-sub">Salary budget divided across 12 months</div>
             </div>
           </div>
+          )}
           <div className="section-header budget-section-header">
             <span className="section-title">Headcount by Department</span>
             <span className="budget-section-note">Active roster only. Click a department row to inspect current team members.</span>
@@ -1109,6 +1131,17 @@ export default function BudgetPage() {
             </span>
           </div>
 
+          {loading ? (
+            <div className="cards-grid budget-team-summary-grid" style={{ marginBottom: 18 }}>
+              {[0, 1, 2, 3, 4].map((i) => (
+                <div key={i} className="card">
+                  <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+                  <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+                  <Skeleton width={180} height={10} />
+                </div>
+              ))}
+            </div>
+          ) : (
           <div className="cards-grid budget-team-summary-grid" style={{ marginBottom: 18 }}>
             <div className="card">
               <div className="card-label">{teamSummaryScopeLabel}</div>
@@ -1134,6 +1167,7 @@ export default function BudgetPage() {
               <div className="card-sub">Salary budget divided across 12 months</div>
             </div>
           </div>
+          )}
 
           <div className="table-wrap" style={{ maxHeight: '600px', overflow: 'auto' }}>
             <table>

@@ -73,7 +73,7 @@ export function BudgetActualDrillModal({
             <div style={{ padding: 20 }}>
               <div className="status-bar budget-plan-status">
                 <span className="status-dot loading" />
-                <span className="status-text">Fetching QuickBooks GL detail…</span>
+                <span className="status-text">Loading transaction detail…</span>
               </div>
             </div>
           ) : null}

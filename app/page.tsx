@@ -1,11 +1,14 @@
 'use client'
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
-import { useTreasury } from '@/lib/hooks/use-treasury'
+import useSWR from 'swr'
+import { apiFetch } from '@/lib/api'
 import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS, STABLE_TOKENS } from '@/lib/constants'
 import { fmtUSD, fmtNum, pctOf } from '@/lib/format'
 import { OverviewTrendModal } from '@/components/overview-trend-modal'
+import { Skeleton } from '@/components/skeleton'
 import { buildOverviewDrilldown, getSortedActiveTokens } from '@/lib/overview'
+import type { TreasuryOverview } from '@/lib/types'
 
 export default function OverviewPage() {
   const [entity, setEntity] = useState<string>('')
@@ -16,7 +19,15 @@ export default function OverviewPage() {
     scopeTitle: string
     tokens: string[]
   } | null>(null)
-  const { data, loading, error, refresh } = useTreasury(entity || undefined)
+  const swrKey = `/api/treasury/overview${entity ? `?entity=${entity}` : ''}`
+  const { data, isLoading, error: swrError, mutate } = useSWR<TreasuryOverview>(
+    swrKey,
+    apiFetch<TreasuryOverview>,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 },
+  )
+  const loading = isLoading
+  const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
+  const refresh = () => { void mutate() }
 
   const prices = data?.prices || {}
   const wallets = data?.wallets || []
@@ -81,6 +92,18 @@ export default function OverviewPage() {
       </div>
 
       {/* Summary cards */}
+      {loading && !data ? (
+        <div className="cards-grid">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="card" style={{ borderTop: '3px solid var(--border)' }}>
+              <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+              <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+              <Skeleton width={180} height={10} style={{ marginBottom: 10 }} />
+              <Skeleton height={4} radius={2} />
+            </div>
+          ))}
+        </div>
+      ) : (
       <div className="cards-grid">
         {/* Total Portfolio */}
         <div className="card" style={{ borderTop: '3px solid var(--accent)' }}>
@@ -135,6 +158,7 @@ export default function OverviewPage() {
           )
         })}
       </div>
+      )}
 
       {/* Entity cards */}
       <div style={{
@@ -147,7 +171,18 @@ export default function OverviewPage() {
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
         gap: 12, marginBottom: 24,
       }}>
-        {ENTITIES.map(ent => {
+        {loading && !data ? (
+          ENTITIES.map(ent => (
+            <div key={ent} className="card" style={{ borderTop: '3px solid var(--border)' }}>
+              <Skeleton width={80} height={14} style={{ marginBottom: 8 }} />
+              <Skeleton width={140} height={22} style={{ marginBottom: 12 }} />
+              <Skeleton height={4} radius={2} style={{ marginBottom: 12 }} />
+              <Skeleton width="100%" height={12} style={{ marginBottom: 6 }} />
+              <Skeleton width="100%" height={12} style={{ marginBottom: 6 }} />
+              <Skeleton width="100%" height={12} />
+            </div>
+          ))
+        ) : ENTITIES.map(ent => {
           const et = entityTotals[ent]
           if (!et) return null
           const c = ENTITY_COLORS[ent] || '#888'

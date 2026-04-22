@@ -1,37 +1,31 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
+import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtAddr } from '@/lib/format'
+import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import type { Transaction } from '@/lib/types'
 
 export default function OrcaLedgerPage() {
   const [entity, setEntity] = useState('Opco')
-  const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   // Filters
   const [dirFilter, setDirFilter] = useState('')
   const [walletFilter, setWalletFilter] = useState('')
   const [monthFilter, setMonthFilter] = useState('')
 
-  async function fetchData() {
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({ entity, asset: 'ORCA', limit: 'all' })
-      const res = await apiFetch<{ transactions: Transaction[]; total: number }>(`/api/treasury/transactions?${params}`)
-      setTransactions(res.transactions)
-      setError(null)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const swrKey = `/api/treasury/transactions?entity=${entity}&asset=ORCA&limit=all`
+  const { data: txRes, isLoading, error: swrError, mutate } = useSWR<{ transactions: Transaction[]; total: number }>(
+    swrKey,
+    apiFetch<{ transactions: Transaction[]; total: number }>,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 },
+  )
 
-  useEffect(() => { fetchData() }, [entity])
+  const transactions = txRes?.transactions ?? []
+  const loading = isLoading
+  const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
   const months = useMemo(() => {
     const set = new Set<string>()
@@ -152,7 +146,37 @@ export default function OrcaLedgerPage() {
       </div>
 
       {loading ? (
-        <div className="status-bar"><span className="status-dot loading" /><span className="status-text">Loading ORCA ledger…</span></div>
+        <>
+          <div className="cards-grid">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="card" style={{ borderTop: '3px solid var(--border)' }}>
+                <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+                <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+                <Skeleton width={100} height={10} />
+              </div>
+            ))}
+          </div>
+          <div className="section">
+            <div className="table-wrap" style={{ maxHeight: '600px', overflow: 'auto' }}>
+              <table>
+                <tbody>
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <tr key={i}>
+                      <td style={{ padding: '6px 10px' }}><Skeleton width={90} height={12} /></td>
+                      <td style={{ padding: '6px 10px' }}><Skeleton width={160} height={12} /></td>
+                      <td style={{ padding: '6px 10px' }}><Skeleton width={30} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={70} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
+                      <td style={{ padding: '6px 10px' }}><Skeleton width={80} height={12} /></td>
+                      <td style={{ padding: '6px 10px' }}><Skeleton width={70} height={12} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       ) : error ? (
         <div className="error-msg">{error}</div>
       ) : (

@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requirePermission } from '@/lib/auth/require-permission'
-import { readCachedBalanceSheet, readLatestCachedBalanceSheetOnOrBefore } from '@/lib/qb/cache-reads'
 import { isQboEntity } from '@/lib/qb/config'
-import { parseBsReport, type QboBalanceSheetReport } from '@/lib/qb/balance-sheet'
-import { getEntityOnchainSummary } from '@/lib/accounting/onchain-summary'
+import { getBalanceSheetData } from '@/lib/accounting/balance-sheet-data'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,35 +33,6 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Invalid entity', code: 'bs.invalid_entity' }, { status: 400 })
   }
 
-  const entityId = entity.toLowerCase()
-
-  const [qbResult, onchain] = await Promise.allSettled([
-    (async () => {
-      const exact = await readCachedBalanceSheet<QboBalanceSheetReport>(entity, asOf)
-      if (exact) return { bs: parseBsReport(exact), bsAsOf: asOf }
-      const fallback = await readLatestCachedBalanceSheetOnOrBefore<QboBalanceSheetReport>(entity, asOf)
-      if (!fallback) throw new Error(`No cached balance sheet on or before ${asOf}`)
-      return { bs: parseBsReport(fallback.data), bsAsOf: fallback.asOfDate }
-    })(),
-    getEntityOnchainSummary(entityId),
-  ])
-
-  const bs = qbResult.status === 'fulfilled' ? qbResult.value.bs : null
-  const bsAsOf = qbResult.status === 'fulfilled' ? qbResult.value.bsAsOf : null
-  const bsError = qbResult.status === 'rejected'
-    ? (qbResult.reason instanceof Error ? qbResult.reason.message : 'Cached balance sheet unavailable')
-    : null
-
-  return NextResponse.json({
-    entity,
-    asOf,
-    bsAsOf,
-    fetchedAt: new Date().toISOString(),
-    bs,
-    bsError,
-    onchain: onchain.status === 'fulfilled' ? onchain.value : null,
-    onchainError: onchain.status === 'rejected'
-      ? (onchain.reason instanceof Error ? onchain.reason.message : 'On-chain summary failed')
-      : null,
-  })
+  const data = await getBalanceSheetData(entity, asOf)
+  return NextResponse.json(data)
 }

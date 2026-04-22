@@ -1,8 +1,10 @@
 'use client'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS } from '@/lib/constants'
 import { fmtNum, fmtUSD } from '@/lib/format'
+import { Skeleton } from '@/components/skeleton'
 import type { BsAccount, BsSection, BsTree } from '@/lib/qb/balance-sheet'
 import type { OnchainSummary } from '@/lib/accounting/onchain-summary'
 
@@ -60,26 +62,15 @@ function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) 
 export default function AccountingPage() {
   const [entity, setEntity] = useState<(typeof ENTITIES)[number]>('Opco')
   const [asOf, setAsOf] = useState(todayUtc())
-  const [data, setData] = useState<BsResponse | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const qs = new URLSearchParams({ entity, asOf })
-      const res = await apiFetch<BsResponse>(`/api/accounting/balance-sheet?${qs}`)
-      setData(res)
-    } catch (err) {
-      setData(null)
-      setError(err instanceof Error ? err.message : 'Failed to load balance sheet')
-    } finally {
-      setLoading(false)
-    }
-  }, [entity, asOf])
-
-  useEffect(() => { load() }, [load])
+  const swrKey = `/api/accounting/balance-sheet?entity=${entity}&asOf=${asOf}`
+  const { data, isLoading, error: swrError, mutate } = useSWR<BsResponse>(
+    swrKey,
+    apiFetch<BsResponse>,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 },
+  )
+  const loading = isLoading
+  const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
   const glTotal = data?.bs?.totals.assets ?? 0
   const onchainTotal = data?.onchain?.totalUsd ?? 0
@@ -128,6 +119,17 @@ export default function AccountingPage() {
         {loading ? <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Loading…</span> : null}
       </div>
 
+      {loading && !data ? (
+        <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="card">
+              <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+              <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+              <Skeleton width={180} height={10} />
+            </div>
+          ))}
+        </div>
+      ) : (
       <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
         <div className="card">
           <div className="card-label">GL Total (Assets)</div>
@@ -171,6 +173,7 @@ export default function AccountingPage() {
           </div>
         </div>
       </div>
+      )}
 
       {error ? (
         <div className="empty">
@@ -185,7 +188,20 @@ export default function AccountingPage() {
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: '0.85rem', fontWeight: 600 }}>
             On-Chain Balances
           </div>
-          {data?.onchain && data.onchain.byToken.length > 0 ? (
+          {loading && !data ? (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <tbody>
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <tr key={i}>
+                    <td style={{ padding: '6px 10px' }}><Skeleton width={60} height={12} /></td>
+                    <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
+                    <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={70} height={12} /></td>
+                    <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : data?.onchain && data.onchain.byToken.length > 0 ? (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
               <thead>
                 <tr style={{ background: 'var(--surface2)' }}>
@@ -224,7 +240,18 @@ export default function AccountingPage() {
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: '0.85rem', fontWeight: 600 }}>
             QuickBooks General Ledger
           </div>
-          {data?.bs && rows.length > 0 ? (
+          {loading && !data ? (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <tbody>
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <tr key={i}>
+                    <td style={{ padding: '6px 10px' }}><Skeleton width={160} height={12} /></td>
+                    <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={90} height={12} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : data?.bs && rows.length > 0 ? (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
               <tbody>
                 {rows.map((section, i) => (
