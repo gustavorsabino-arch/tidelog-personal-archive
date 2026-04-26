@@ -258,11 +258,16 @@ export async function loadBudgetState(
   noCache = false,
   options: {
     planDepartments?: readonly BudgetDepartment[] | null
+    includeTeam?: boolean
   } = {},
 ): Promise<BudgetState> {
+  // includeTeam defaults to true for back-compat. Pass false for non-admin
+  // request paths so we skip the team query entirely (and never put confidential
+  // comp data on the wire).
+  const includeTeam = options.includeTeam ?? true
   const [plan, team] = await Promise.all([
     loadBudgetPlanState(year, noCache, options.planDepartments ?? null),
-    loadBudgetTeamState(year, noCache),
+    includeTeam ? loadBudgetTeamState(year, noCache) : Promise.resolve(getBudgetTeamPlaceholderState(year)),
   ])
 
   return { plan, team }

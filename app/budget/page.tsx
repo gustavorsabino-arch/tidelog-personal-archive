@@ -1,16 +1,34 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
+import dynamic from 'next/dynamic'
 import { fmtUSD } from '@/lib/format'
 import { BUDGET_DEPTS, ENTITIES } from '@/lib/constants'
 import { apiFetch, apiPost } from '@/lib/api'
 import { Skeleton } from '@/components/skeleton'
-import { BudgetImportModal } from '@/components/budget-import-modal'
-import { BudgetRecoveryModal } from '@/components/budget-recovery-modal'
-import { BudgetTeamMemberModal } from '@/components/budget-team-member-modal'
-import { BudgetQbConnectModal } from '@/components/budget-qb-connect-modal'
-import { BudgetHeadcountModal } from '@/components/budget-headcount-modal'
-import { BudgetPlanBreakdownModal } from '@/components/budget-plan-breakdown-modal'
-import { BudgetActualDrillModal } from '@/components/budget-actual-drill-modal'
+
+// Modals are opened rarely — defer their JS until the user actually triggers
+// them so the initial /budget bundle isn't bloated by their dependencies.
+const BudgetImportModal = dynamic(
+  () => import('@/components/budget-import-modal').then((m) => m.BudgetImportModal),
+)
+const BudgetRecoveryModal = dynamic(
+  () => import('@/components/budget-recovery-modal').then((m) => m.BudgetRecoveryModal),
+)
+const BudgetTeamMemberModal = dynamic(
+  () => import('@/components/budget-team-member-modal').then((m) => m.BudgetTeamMemberModal),
+)
+const BudgetQbConnectModal = dynamic(
+  () => import('@/components/budget-qb-connect-modal').then((m) => m.BudgetQbConnectModal),
+)
+const BudgetHeadcountModal = dynamic(
+  () => import('@/components/budget-headcount-modal').then((m) => m.BudgetHeadcountModal),
+)
+const BudgetPlanBreakdownModal = dynamic(
+  () => import('@/components/budget-plan-breakdown-modal').then((m) => m.BudgetPlanBreakdownModal),
+)
+const BudgetActualDrillModal = dynamic(
+  () => import('@/components/budget-actual-drill-modal').then((m) => m.BudgetActualDrillModal),
+)
 import { BudgetScopeControls } from '@/components/budget-scope-controls'
 import { BudgetReportTable } from '@/components/budget-report-table'
 import { BudgetQbMappingPanel } from '@/components/budget-qb-mapping-panel'
@@ -35,6 +53,7 @@ import type {
   BudgetState,
   BudgetTeamMember,
   BudgetTeamMutationResult,
+  BudgetTeamState,
   BudgetViewState,
 } from '@/lib/budget/types'
 import type { QboStatusResponse, QboConnectionStatus } from '@/lib/qb/types'
@@ -196,6 +215,8 @@ export default function BudgetPage() {
   const [actualsLoading, setActualsLoading] = useState(false)
   const [qbStatuses, setQbStatuses] = useState<QboConnectionStatus[]>([])
   const [qbStatusLoading, setQbStatusLoading] = useState(false)
+  const [teamLoading, setTeamLoading] = useState(false)
+  const [teamLoaded, setTeamLoaded] = useState(false)
   const [budgetError, setBudgetError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [allowedBudgetMonthIndices, setAllowedBudgetMonthIndices] = useState<number[] | null>(null)
@@ -230,7 +251,9 @@ export default function BudgetPage() {
     try {
       const bootstrap = await apiFetch<BudgetBootstrapResponse>(`/api/budget/bootstrap?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
       setBudgetState(bootstrap.state)
-      setQbStatuses(bootstrap.qbStatuses)
+      // Viewers receive `qbStatuses: null` — they don't see QB connection
+      // details. Treat that the same as an empty array on the client.
+      setQbStatuses(bootstrap.qbStatuses ?? [])
       setAllowedBudgetMonthIndices(bootstrap.allowedBudgetMonthIndices)
 
       if (bootstrap.qbStatusError) {
@@ -255,12 +278,27 @@ export default function BudgetPage() {
     setBudgetError(null)
     try {
       const state = await apiFetch<BudgetState>(`/api/budget/state?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
-      setBudgetState(state)
+      // /api/budget/state returns plan only (team is lazy via /api/budget/team).
+      // Preserve any team we've already loaded into client state.
+      setBudgetState((prev) => ({ ...state, team: prev.team }))
     } catch (error) {
       setBudgetError(error instanceof Error ? error.message : 'Failed to load budget data.')
       setBudgetState(createEmptyBudgetState(budgetYear))
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function loadBudgetTeam(noCache = false) {
+    setTeamLoading(true)
+    try {
+      const team = await apiFetch<BudgetTeamState>(`/api/budget/team?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
+      setBudgetState((prev) => ({ ...prev, team }))
+      setTeamLoaded(true)
+    } catch (error) {
+      console.error('[budget] loadBudgetTeam failed', error)
+    } finally {
+      setTeamLoading(false)
     }
   }
 
@@ -286,6 +324,8 @@ export default function BudgetPage() {
     setMappingState(null)
     setMappingError(null)
     setSuggestedMappingAccount(null)
+    // Year change invalidates lazy team data; force a refetch on next tab activation.
+    setTeamLoaded(false)
   }, [budgetYear])
 
   useEffect(() => {
@@ -347,6 +387,16 @@ export default function BudgetPage() {
     if (mappingState || mappingLoading) return
     void loadBudgetMapping()
   }, [activeTab, canViewBudget, mappingLoading, mappingState])
+
+  // Lazy-load team data when the user activates a tab that needs it. Bootstrap
+  // skips team for everyone — only Headcount and Team tabs read team rows, and
+  // both tabs are admin-only via getVisibleBudgetTabs.
+  useEffect(() => {
+    if (!canViewBudget) return
+    if (activeTab !== 'headcount' && activeTab !== 'team') return
+    if (teamLoaded || teamLoading) return
+    void loadBudgetTeam()
+  }, [activeTab, canViewBudget, teamLoaded, teamLoading])
 
   useEffect(() => {
     function handleQbAuthSuccess(event: MessageEvent) {
@@ -919,7 +969,9 @@ export default function BudgetPage() {
         </div>
       ) : null}
 
-      {!qbStatusLoading && !canFetchOverview && (
+      {/* QB connect warning is admin-only — viewers have no UI to act on it
+          and don't receive qbStatuses. */}
+      {access?.role === 'admin' && !qbStatusLoading && !canFetchOverview && (
         activeTab === 'overview'
         || activeTab === 'headcount'
         || activeTab === 'coverage'
@@ -972,11 +1024,38 @@ export default function BudgetPage() {
 
       {/* Overview */}
       {activeTab === 'overview' && (
-        <BudgetReportTable
-          report={overviewReport}
-          onBudgetCellClick={openBudgetBreakdown}
-          onActualCellClick={(row, column) => void openActualDrill(row, column, overviewReport)}
-        />
+        loading ? (
+          <div className="table-wrap" style={{ marginTop: 12 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th><Skeleton width={120} height={10} /></th>
+                  <th className="num"><Skeleton width={80} height={10} /></th>
+                  <th className="num"><Skeleton width={80} height={10} /></th>
+                  <th className="num"><Skeleton width={80} height={10} /></th>
+                  <th className="num"><Skeleton width={80} height={10} /></th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <tr key={`overview-skel-${i}`}>
+                    <td><Skeleton width={140} height={10} /></td>
+                    <td className="num"><Skeleton width={70} height={10} /></td>
+                    <td className="num"><Skeleton width={70} height={10} /></td>
+                    <td className="num"><Skeleton width={70} height={10} /></td>
+                    <td className="num"><Skeleton width={70} height={10} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <BudgetReportTable
+            report={overviewReport}
+            onBudgetCellClick={openBudgetBreakdown}
+            onActualCellClick={(row, column) => void openActualDrill(row, column, overviewReport)}
+          />
+        )
       )}
 
       {/* Headcount */}
@@ -1002,7 +1081,7 @@ export default function BudgetPage() {
               </span>
             </div>
           ) : null}
-          {loading ? (
+          {(loading || teamLoading) ? (
             <div className="cards-grid">
               {[0, 1, 2, 3].map((i) => (
                 <div key={i} className="card">
@@ -1131,7 +1210,7 @@ export default function BudgetPage() {
             </span>
           </div>
 
-          {loading ? (
+          {(loading || teamLoading) ? (
             <div className="cards-grid budget-team-summary-grid" style={{ marginBottom: 18 }}>
               {[0, 1, 2, 3, 4].map((i) => (
                 <div key={i} className="card">
@@ -1301,7 +1380,10 @@ export default function BudgetPage() {
           setEditingMember(null)
         }}
         onSaved={async (result: BudgetTeamMutationResult) => {
-          await loadBudgetState(true)
+          // The mutation API returns the fresh team in result.team — apply it
+          // directly so we don't trigger a separate refetch.
+          setBudgetState((prev) => ({ ...prev, team: result.team }))
+          setTeamLoaded(true)
           const actionLabel =
             result.action === 'create-member'
               ? 'Added'

@@ -22,9 +22,19 @@ async function fetchMe(): Promise<AccessMeResponse | null> {
   return res.json()
 }
 
-export function AccessProvider({ children }: { children: ReactNode }) {
-  const [access, setAccess] = useState<AccessMeResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+export function AccessProvider({
+  children,
+  initialAccess,
+}: {
+  children: ReactNode
+  // When the root server layout has already resolved the user from x-user-*
+  // headers, pass it here. The provider seeds state from it and skips the
+  // mount-time /api/me fetch — the client paints with access in hand.
+  initialAccess?: AccessMeResponse | null
+}) {
+  const seeded = initialAccess !== undefined
+  const [access, setAccess] = useState<AccessMeResponse | null>(seeded ? initialAccess : null)
+  const [loading, setLoading] = useState(!seeded)
   const [error, setError] = useState<string | null>(null)
 
   async function refresh() {
@@ -41,8 +51,9 @@ export function AccessProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    if (seeded) return
     refresh()
-  }, [])
+  }, [seeded])
 
   return (
     <AccessContext.Provider value={{ access, loading, error, refresh }}>

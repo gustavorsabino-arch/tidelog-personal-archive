@@ -4,6 +4,7 @@ import { ENTITIES, ENTITY_COLORS } from '@/lib/constants'
 import { fmtAddr } from '@/lib/format'
 import { getWalletTypeLabel } from '@/lib/overview'
 import { apiFetch } from '@/lib/api'
+import { Skeleton } from '@/components/skeleton'
 import type { Wallet } from '@/lib/types'
 
 export default function WalletsPage() {
@@ -97,33 +98,44 @@ export default function WalletsPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((w) => {
-              const c = ENTITY_COLORS[w.entity] || '#888'
-              return (
-                <tr key={w.address}>
-                  <td>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', fontWeight: 600, color: c }}>
-                      {w.entity}
-                    </span>
-                  </td>
-                  <td className="label">{w.label}</td>
-                  <td>
-                    <a href={`https://solscan.io/account/${w.address}`} target="_blank" rel="noreferrer"
-                      style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', color: 'var(--accent)', textDecoration: 'none' }}
-                      title={w.address}>
-                      {fmtAddr(w.address, 6)}
-                    </a>
-                  </td>
-                  <td><span className="chain-tag">{w.chain}</span></td>
-                  <td style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)' }}>
-                    {w.accountCode || '—'}
-                  </td>
-                  <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
-                    {getWalletTypeLabel(w)}
-                  </td>
-                </tr>
-              )
-            })}
+            {loading
+              ? Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={`skeleton-${i}`}>
+                    <td><Skeleton width={48} height={10} /></td>
+                    <td><Skeleton width={120} height={10} /></td>
+                    <td><Skeleton width={140} height={10} /></td>
+                    <td><Skeleton width={56} height={14} /></td>
+                    <td><Skeleton width={64} height={10} /></td>
+                    <td><Skeleton width={72} height={10} /></td>
+                  </tr>
+                ))
+              : filtered.map((w) => {
+                  const c = ENTITY_COLORS[w.entity] || '#888'
+                  return (
+                    <tr key={w.address}>
+                      <td>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', fontWeight: 600, color: c }}>
+                          {w.entity}
+                        </span>
+                      </td>
+                      <td className="label">{w.label}</td>
+                      <td>
+                        <a href={`https://solscan.io/account/${w.address}`} target="_blank" rel="noreferrer"
+                          style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', color: 'var(--accent)', textDecoration: 'none' }}
+                          title={w.address}>
+                          {fmtAddr(w.address, 6)}
+                        </a>
+                      </td>
+                      <td><span className="chain-tag">{w.chain}</span></td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)' }}>
+                        {w.accountCode || '—'}
+                      </td>
+                      <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
+                        {getWalletTypeLabel(w)}
+                      </td>
+                    </tr>
+                  )
+                })}
           </tbody>
         </table>
       </div>

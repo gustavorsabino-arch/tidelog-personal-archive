@@ -10,8 +10,8 @@ export {
   canViewBudgetDepartment,
   filterBudgetPlanStateForAccess,
   filterBudgetStateForAccess,
-  filterBudgetTeamMembersForAccess,
-  filterBudgetTeamStateForAccess,
+  filterBudgetTeamMembersForAdminScope,
+  filterBudgetTeamStateForAdminScope,
   getAllowedBudgetDepartmentsForUser,
 } from './access-scope'
 

@@ -32,15 +32,31 @@ if (config.mode === 'local') {
     credentials,
   })
 
+  // Cache the IAM auth token at module scope so reconnects within a token's
+  // lifetime don't re-sign. RDS IAM tokens are valid for 15 min; we refresh
+  // 1 min early to give in-flight connection attempts a safe margin.
+  const TOKEN_TTL_MS = 14 * 60 * 1000
+  let cachedToken: { value: string; expiresAt: number } | null = null
+  const getAuthToken = async () => {
+    if (cachedToken && cachedToken.expiresAt > Date.now()) return cachedToken.value
+    const value = await signer.getAuthToken()
+    cachedToken = { value, expiresAt: Date.now() + TOKEN_TTL_MS }
+    return value
+  }
+
   client = postgres({
     host: config.host,
     port: config.port,
     database: config.database,
     username: config.username,
-    password: () => signer.getAuthToken(),
+    password: getAuthToken,
     ssl: 'require',
     max: 10,
-    idle_timeout: 20,
+    // Keep idle connections alive for ~one IAM-token lifetime. With the prior
+    // 20s value, a 30s pause between user clicks would close every connection
+    // and the next query would pay TLS handshake + IAM auth (~50–150ms) before
+    // running. 14 min keeps the pool warm for a typical browsing session.
+    idle_timeout: 14 * 60,
   })
 }
 

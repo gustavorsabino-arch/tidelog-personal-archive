@@ -29,7 +29,6 @@ export default function UnrealizedPage() {
   const { data: fifoResult, isLoading, error: swrError, mutate } = useSWR(
     `unrealized:${entity}`,
     () => fetchUnrealizedData(entity),
-    { revalidateOnFocus: false, dedupingInterval: 30_000 },
   )
 
   const unrealized = fifoResult?.unrealized ?? []

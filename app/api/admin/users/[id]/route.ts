@@ -6,6 +6,7 @@ import { user, account } from '@/lib/db/schema/auth'
 import { userDepartment } from '@/lib/db/schema/authz'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { isEmailDomainAllowed, parseAllowedDomains } from '@/lib/auth/email-domain'
+import { invalidateUserCacheByUserId } from '@/lib/auth/request-user'
 import { logAudit } from '@/lib/audit'
 
 const UpdateUserSchema = z.object({
@@ -157,6 +158,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     changes.unlinkedEmail = email
   }
 
+  // Drop every cached entry for this user so the next request picks up the
+  // new role / departments / banned / linked-email state instead of waiting
+  // for the 60s TTL to expire.
+  invalidateUserCacheByUserId(id)
+
   return NextResponse.json({ ok: true, changes })
 }
 
@@ -183,6 +189,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
 
   // Cascade via FK (onDelete: 'cascade') removes account, session, user_department rows.
   await db.delete(user).where(eq(user.id, id))
+  invalidateUserCacheByUserId(id)
 
   await logAudit({
     userId: me.id === 'dev-user' ? null : me.id,

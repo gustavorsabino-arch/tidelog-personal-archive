@@ -16,6 +16,19 @@ export const auth = betterAuth({
   }),
   secret: process.env.BETTER_AUTH_SECRET!,
 
+  // Cookie cache validates session locally from a signed cookie instead of
+  // hitting the DB on every request. 5-min TTL is the better-auth default;
+  // tradeoff is that revoked sessions / banned users remain valid until the
+  // cookie expires. Banning is enforced separately by checking `user.banned`
+  // in proxy.ts on each request via loadUserByEmail (which has its own short
+  // TTL cache), so the staleness window for bans is bounded by that.
+  session: {
+    cookieCache: {
+      enabled: true,
+      maxAge: 5 * 60,
+    },
+  },
+
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID ?? '',

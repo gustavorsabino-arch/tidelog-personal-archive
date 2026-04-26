@@ -23,7 +23,6 @@ export default function OverviewPage() {
   const { data, isLoading, error: swrError, mutate } = useSWR<TreasuryOverview>(
     swrKey,
     apiFetch<TreasuryOverview>,
-    { revalidateOnFocus: false, dedupingInterval: 30_000 },
   )
   const loading = isLoading
   const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null

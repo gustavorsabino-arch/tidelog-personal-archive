@@ -17,9 +17,14 @@ export async function GET(req: NextRequest) {
 
   const year = normalizeBudgetYear(Number.parseInt(req.nextUrl.searchParams.get('year') ?? '2026', 10))
   const noCache = req.nextUrl.searchParams.get('fresh') === '1'
+  const isAdmin = canViewAllBudgetDepartments(accessResult.user)
   const allowedDepartments = getAllowedBudgetDepartmentsForUser(accessResult.user)
+  // Team is fetched separately via /api/budget/team — keeping it out of this
+  // payload means import/recovery refetches stay light and confidential team
+  // data isn't dragged along on plan-only updates.
   const state = await loadBudgetState(year, noCache, {
-    planDepartments: canViewAllBudgetDepartments(accessResult.user) ? null : allowedDepartments,
+    planDepartments: isAdmin ? null : allowedDepartments,
+    includeTeam: false,
   })
   return NextResponse.json(filterBudgetStateForAccess(state, accessResult.user))
 }

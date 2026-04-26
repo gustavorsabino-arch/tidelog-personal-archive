@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BUDGET_DEPTS } from '@/lib/constants'
 import { useSharedAccess } from '@/lib/access-context'
+import { Skeleton } from '@/components/skeleton'
 
 type AdminUser = {
   id: string
@@ -208,7 +209,38 @@ export default function AdminPage() {
   if (loading) {
     return (
       <main className="admin-access-page">
-        <div className="empty">Loading…</div>
+        <header className="admin-access-header">
+          <div>
+            <div className="page-title">User Management</div>
+            <div className="page-sub">
+              Pre-approve emails and assign roles. This list controls who can access the app.
+            </div>
+          </div>
+        </header>
+        <div className="table-wrap" style={{ marginTop: 18 }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Departments</th>
+                <th>Status</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <tr key={`skeleton-${i}`}>
+                  <td><Skeleton width={180} height={10} /></td>
+                  <td><Skeleton width={70} height={10} /></td>
+                  <td><Skeleton width={140} height={10} /></td>
+                  <td><Skeleton width={56} height={10} /></td>
+                  <td><Skeleton width={90} height={10} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </main>
     )
   }

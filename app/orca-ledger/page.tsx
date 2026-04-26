@@ -20,7 +20,6 @@ export default function OrcaLedgerPage() {
   const { data: txRes, isLoading, error: swrError, mutate } = useSWR<{ transactions: Transaction[]; total: number }>(
     swrKey,
     apiFetch<{ transactions: Transaction[]; total: number }>,
-    { revalidateOnFocus: false, dedupingInterval: 30_000 },
   )
 
   const transactions = txRes?.transactions ?? []

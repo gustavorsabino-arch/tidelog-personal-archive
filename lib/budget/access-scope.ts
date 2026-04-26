@@ -1,5 +1,6 @@
 import type { ServerUser } from '@/lib/auth/get-user'
 import { BUDGET_DEPTS } from '../constants.ts'
+import { getBudgetTeamPlaceholderState } from './team.ts'
 import type {
   BudgetDepartment,
   BudgetDepartmentPlan,
@@ -41,7 +42,13 @@ export function getAllowedBudgetDepartmentsForUser(user: ServerUser): BudgetDepa
   )
 }
 
-export function filterBudgetTeamMembersForAccess(
+/**
+ * Admin-only helper that filters team rows to those in the user's departments.
+ * Do NOT use this for non-admin response shapes — confidential employee data
+ * (salaries, bonuses) must not appear in any payload sent to a non-admin
+ * client. Non-admins should receive `getBudgetTeamPlaceholderState()` instead.
+ */
+export function filterBudgetTeamMembersForAdminScope(
   members: BudgetTeamMember[],
   user: ServerUser,
 ): BudgetTeamMember[] {
@@ -50,13 +57,13 @@ export function filterBudgetTeamMembersForAccess(
   return members.filter((member) => allowed.has(member.dept))
 }
 
-export function filterBudgetTeamStateForAccess(
+export function filterBudgetTeamStateForAdminScope(
   team: BudgetTeamState,
   user: ServerUser,
 ): BudgetTeamState {
   return {
     ...team,
-    members: filterBudgetTeamMembersForAccess(team.members, user),
+    members: filterBudgetTeamMembersForAdminScope(team.members, user),
   }
 }
 
@@ -83,12 +90,24 @@ export function filterBudgetPlanStateForAccess(
   }
 }
 
+/**
+ * Reduce the budget state to what the requester is allowed to display.
+ *
+ * Admin: full plan + full team.
+ * Non-admin: plan filtered to their departments, **team stripped entirely**.
+ *
+ * Stripping team for non-admins is a hard data-minimization rule: the team
+ * roster contains salaries and other comp data that the UI cannot render for
+ * non-admins, so it must not cross the network.
+ */
 export function filterBudgetStateForAccess(
   state: BudgetState,
   user: ServerUser,
 ): BudgetState {
   return {
     plan: filterBudgetPlanStateForAccess(state.plan, user),
-    team: filterBudgetTeamStateForAccess(state.team, user),
+    team: canViewAllBudgetDepartments(user)
+      ? state.team
+      : getBudgetTeamPlaceholderState(state.team.year),
   }
 }

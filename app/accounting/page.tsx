@@ -67,7 +67,6 @@ export default function AccountingPage() {
   const { data, isLoading, error: swrError, mutate } = useSWR<BsResponse>(
     swrKey,
     apiFetch<BsResponse>,
-    { revalidateOnFocus: false, dedupingInterval: 30_000 },
   )
   const loading = isLoading
   const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null

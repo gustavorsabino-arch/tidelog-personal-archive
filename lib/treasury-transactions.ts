@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { transaction, wallet } from '@/lib/db/schema'
 import { STABLE_TOKENS } from '@/lib/constants'
@@ -17,7 +17,6 @@ type GetTreasuryTransactionsParams = {
 }
 
 type TransactionRow = typeof transaction.$inferSelect
-type WalletRow = typeof wallet.$inferSelect
 
 function toUnix(date: Date): number {
   return Math.floor(date.getTime() / 1000)
@@ -91,8 +90,9 @@ export async function getTreasuryTransactions({
   //      covers stables and anything the cron has already priced — unpriced
   //      rows contribute 0 here, same as before hydration)
   const pageQueryBase = db
-    .select()
+    .select({ txn: transaction, walletLabel: wallet.label })
     .from(transaction)
+    .leftJoin(wallet, eq(wallet.address, transaction.walletAddress))
     .where(where)
     .orderBy(desc(transaction.blockTime))
   const pageQuery = unbounded
@@ -114,13 +114,7 @@ export async function getTreasuryTransactions({
       .where(where),
   ])
 
-  const walletAddresses = Array.from(new Set(pageRows.map((row) => row.walletAddress)))
-  const walletRows: WalletRow[] = walletAddresses.length
-    ? await db.select().from(wallet).where(inArray(wallet.address, walletAddresses))
-    : []
-  const walletLabels = new Map(walletRows.map((row) => [row.address, row.label]))
-
-  const transactions = pageRows.map((row) => rowToTransaction(row, walletLabels.get(row.walletAddress) ?? ''))
+  const transactions = pageRows.map((row) => rowToTransaction(row.txn, row.walletLabel ?? ''))
 
   const inflowsUSD = Number(summaryRows[0]?.inflows ?? 0)
   const outflowsUSD = Number(summaryRows[0]?.outflows ?? 0)
@@ -142,14 +136,10 @@ export async function getTreasuryTransactionsAsc(
   entity: string,
 ): Promise<Transaction[]> {
   const rows = await db
-    .select()
+    .select({ txn: transaction, walletLabel: wallet.label })
     .from(transaction)
+    .leftJoin(wallet, eq(wallet.address, transaction.walletAddress))
     .where(eq(transaction.entityId, toDbEntity(entity)))
     .orderBy(asc(transaction.blockTime))
-  const walletAddresses = Array.from(new Set(rows.map((row) => row.walletAddress)))
-  const walletRows = walletAddresses.length
-    ? await db.select().from(wallet).where(inArray(wallet.address, walletAddresses))
-    : []
-  const walletLabels = new Map(walletRows.map((row) => [row.address, row.label]))
-  return rows.map((row) => rowToTransaction(row, walletLabels.get(row.walletAddress) ?? ''))
+  return rows.map((row) => rowToTransaction(row.txn, row.walletLabel ?? ''))
 }

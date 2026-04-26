@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 
 import { AccessProvider, useSharedAccess } from '@/lib/access-context'
-import { isBudgetOnlyUser } from '@/lib/access-model'
+import { isBudgetOnlyUser, type AccessMeResponse } from '@/lib/access-model'
 
 import { Sidebar } from './sidebar'
 
@@ -49,9 +49,15 @@ function LayoutShellContent({ children }: { children: React.ReactNode }) {
   )
 }
 
-export function LayoutShell({ children }: { children: React.ReactNode }) {
+export function LayoutShell({
+  children,
+  initialAccess,
+}: {
+  children: React.ReactNode
+  initialAccess?: AccessMeResponse | null
+}) {
   return (
-    <AccessProvider>
+    <AccessProvider initialAccess={initialAccess}>
       <LayoutShellContent>{children}</LayoutShellContent>
     </AccessProvider>
   )

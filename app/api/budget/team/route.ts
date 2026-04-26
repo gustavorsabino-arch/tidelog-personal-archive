@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { logAudit } from '@/lib/audit'
 import {
-  filterBudgetTeamStateForAccess,
+  filterBudgetTeamStateForAdminScope,
   requireBudgetAccess,
   requireBudgetTabAccess,
 } from '@/lib/budget/access-control'
@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
   }
 
   const team = await loadBudgetTeamState(year, req.nextUrl.searchParams.get('fresh') === '1')
-  return NextResponse.json(filterBudgetTeamStateForAccess(team, accessResult.user))
+  return NextResponse.json(filterBudgetTeamStateForAdminScope(team, accessResult.user))
 }
 
 export async function POST(req: NextRequest) {
