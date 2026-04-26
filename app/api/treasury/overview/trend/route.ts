@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { and, asc, eq, gte, inArray } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { balanceSnapshot, price } from '@/lib/db/schema'
+import { balanceSnapshot } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { buildTrendPoint } from '@/lib/overview-trend'
 import { STABLE_TOKENS } from '@/lib/constants'
+import { getDailyPrices } from '@/lib/defillama'
 import type { BalanceSnapshot, Prices, TreasuryOverviewTrendResponse } from '@/lib/types'
 
 // GET /api/treasury/overview/trend?wallet=<addr>&tokens=USDC,USDT&days=90
@@ -44,13 +45,20 @@ export async function GET(req: NextRequest) {
     .orderBy(asc(balanceSnapshot.date))
 
   const priceTokens = tokens.filter((token) => !STABLE_TOKENS.has(token))
-  const priceRows = priceTokens.length
-    ? await db
-        .select({ token: price.token, timestamp: price.timestamp, price: price.price })
-        .from(price)
-        .where(inArray(price.token, priceTokens))
-        .orderBy(asc(price.timestamp))
-    : []
+  const cutoffTs = Math.floor(cutoff.getTime() / 1000)
+  const daysSpan = days + 1
+
+  // Map<token, Map<YYYY-MM-DD, price>>
+  const pricesByToken = new Map<string, Map<string, number>>()
+  await Promise.all(priceTokens.map(async (token) => {
+    const points = await getDailyPrices(token, cutoffTs, daysSpan)
+    const byDate = new Map<string, number>()
+    for (const p of points) {
+      const date = new Date(p.timestamp * 1000).toISOString().slice(0, 10)
+      byDate.set(date, p.price)
+    }
+    pricesByToken.set(token, byDate)
+  }))
 
   const byDate = new Map<string, { balances: Record<string, number>; fetchedAt: Date | null }>()
   for (const row of balanceRows) {
@@ -66,13 +74,10 @@ export async function GET(req: NextRequest) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, entry]) => {
       const snapshotPrices: Prices = {}
-      const dayEnd = new Date(`${date}T23:59:59Z`)
       for (const token of priceTokens) {
-        const lastBeforeDay = [...priceRows]
-          .filter((row) => row.token === token && row.timestamp <= dayEnd)
-          .pop()
-        if (lastBeforeDay) {
-          snapshotPrices[token] = Number(lastBeforeDay.price)
+        const p = pricesByToken.get(token)?.get(date)
+        if (typeof p === 'number') {
+          snapshotPrices[token] = p
         }
       }
       const snapshot: BalanceSnapshot = {

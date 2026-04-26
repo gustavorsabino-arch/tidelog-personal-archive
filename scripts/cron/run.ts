@@ -6,8 +6,8 @@
  *   bun run cron <job-name> [flags]
  *
  * Jobs:
- *   fetch-prices, fetch-balances, fetch-transactions, fetch-qb-reports,
- *   refresh-qb-tokens, prune-cache
+ *   fetch-balances, fetch-transactions, fetch-qb-reports,
+ *   refresh-qb-tokens
  *
  * Flags:
  *   --full                     (fetch-transactions only) drain full wallet history
@@ -17,26 +17,21 @@
  *                              against a non-localhost database.
  */
 
-import { createInterface } from 'node:readline/promises'
 import { logAudit } from '@/lib/audit'
 import { fetchBalancesJob } from '@/lib/cron/fetch-balances'
-import { fetchPricesJob } from '@/lib/cron/fetch-prices'
 import { fetchQbReportsJob } from '@/lib/cron/fetch-qb-reports'
 import { fetchTransactionsJob } from '@/lib/cron/fetch-transactions'
-import { pruneCacheJob } from '@/lib/cron/prune-cache'
 import { refreshQbTokensJob } from '@/lib/cron/refresh-qb-tokens'
-import { CRON_HISTORY_START, looksLikeProd, parseCronArgs } from './args'
+import { CRON_HISTORY_START, confirmDestructive, looksLikeProd, parseCronArgs } from './args'
 
 type JobResult = { ok: boolean; [k: string]: unknown }
 type JobOptions = { full?: boolean; force?: boolean; forceFrom?: string }
 
 const JOBS: Record<string, (opts?: JobOptions) => Promise<JobResult>> = {
-  'fetch-prices': fetchPricesJob,
   'fetch-balances': fetchBalancesJob,
   'fetch-transactions': fetchTransactionsJob,
   'fetch-qb-reports': fetchQbReportsJob,
   'refresh-qb-tokens': refreshQbTokensJob,
-  'prune-cache': pruneCacheJob,
 }
 
 function usage(): never {
@@ -49,19 +44,6 @@ function usage(): never {
     + `  --from=YYYY-MM    (with --force) earliest month to re-fetch; default ${CRON_HISTORY_START}`,
   )
   process.exit(2)
-}
-
-async function confirmProd(databaseUrl: string, forceFrom: string): Promise<boolean> {
-  const host = new URL(databaseUrl).hostname
-  console.error(`[cron] TARGET: ${host}`)
-  console.error(`[cron] Will DELETE cached rows with period_start >= ${forceFrom}-01 and re-fetch from QuickBooks.`)
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  try {
-    const answer = await rl.question(`Type 'force' to proceed: `)
-    return answer.trim() === 'force'
-  } finally {
-    rl.close()
-  }
 }
 
 async function main() {
@@ -85,7 +67,12 @@ async function main() {
   const forceFrom = parsed.force ? (parsed.forceFrom ?? CRON_HISTORY_START) : undefined
 
   if (parsed.force && looksLikeProd(process.env.DATABASE_URL)) {
-    const confirmed = await confirmProd(process.env.DATABASE_URL!, forceFrom!)
+    const confirmed = await confirmDestructive({
+      databaseUrl: process.env.DATABASE_URL!,
+      prefix: '[cron]',
+      describeAction: `Will DELETE cached rows with period_start >= ${forceFrom}-01 and re-fetch from QuickBooks.`,
+      confirmWord: 'force',
+    })
     if (!confirmed) {
       console.error('[cron] aborted')
       process.exit(0)

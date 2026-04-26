@@ -18,12 +18,10 @@
     "db:seed:qb-mapping": "bun run scripts/seed-qb-mapping.ts",
     "db:studio": "drizzle-kit studio",
     "cron": "bun run scripts/cron/run.ts",
-    "cron:fetch-prices": "bun run scripts/cron/run.ts fetch-prices",
     "cron:fetch-balances": "bun run scripts/cron/run.ts fetch-balances",
     "cron:fetch-transactions": "bun run scripts/cron/run.ts fetch-transactions",
     "cron:fetch-qb-reports": "bun run scripts/cron/run.ts fetch-qb-reports",
-    "cron:refresh-qb-tokens": "bun run scripts/cron/run.ts refresh-qb-tokens",
-    "cron:prune-cache": "bun run scripts/cron/run.ts prune-cache"
+    "cron:refresh-qb-tokens": "bun run scripts/cron/run.ts refresh-qb-tokens"
   },
   "dependencies": {
     "@aws-sdk/credential-providers": "3.1034.0",

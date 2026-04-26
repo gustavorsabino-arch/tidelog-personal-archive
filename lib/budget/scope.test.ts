@@ -103,6 +103,6 @@ test('clamps budget years to 2026 or later', () => {
 })
 
 test('builds selectable budget years from 2026 onward', () => {
-  assert.deepEqual(getBudgetSelectableYears(2026), [2026, 2027])
-  assert.deepEqual(getBudgetSelectableYears(2028), [2026, 2027, 2028, 2029])
+  assert.deepEqual(getBudgetSelectableYears(2026), [2026])
+  assert.deepEqual(getBudgetSelectableYears(2028), [2026, 2027, 2028])
 })

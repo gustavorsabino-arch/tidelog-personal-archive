@@ -42,18 +42,3 @@ export const balanceSnapshot = app.table(
     index('balance_date_idx').on(t.date),
   ],
 )
-
-export const price = app.table(
-  'price',
-  {
-    token: text('token').notNull().references(() => token.symbol),
-    timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
-    price: numeric('price', { precision: 38, scale: 18 }).notNull(),
-    source: text('source', { enum: ['latest', 'historical'] }).notNull(),
-    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    primaryKey({ columns: [t.token, t.timestamp] }),
-    index('price_token_ts_idx').on(t.token, t.timestamp),
-  ],
-)

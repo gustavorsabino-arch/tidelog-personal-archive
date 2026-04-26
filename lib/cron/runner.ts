@@ -20,7 +20,7 @@ function constantTimeEquals(a: string, b: string): boolean {
  * - Returns JSON with elapsed duration
  *
  * Handlers are thin:
- *   export const POST = (req: Request) => runCron('fetch-prices', req, fetchPricesJob)
+ *   export const GET = (req: Request) => runCron('fetch-balances', req, fetchBalancesJob)
  */
 export async function runCron(
   name: string,

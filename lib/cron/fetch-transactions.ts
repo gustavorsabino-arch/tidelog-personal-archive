@@ -3,6 +3,8 @@ import { db } from '@/lib/db'
 import { wallet, transaction } from '@/lib/db/schema'
 import { heliusRpc } from '@/lib/helius'
 import { FOCUS_SET, STABLE_TOKENS, getSym } from '@/lib/constants'
+import { hydrateTransactionPrices, primeLatestPrices } from '@/lib/transaction-pricing'
+import type { Transaction } from '@/lib/types'
 
 type Direction = 'in' | 'out'
 
@@ -17,6 +19,27 @@ type ParsedMove = {
   price: number | null
   usd: number | null
   priceSource: string | null
+}
+
+/** Convert a ParsedMove (cron-internal) to the Transaction shape that
+ * hydrateTransactionPrices expects. */
+function moveToTx(m: ParsedMove): Transaction {
+  return {
+    txHash: m.txHash,
+    walletAddr: m.walletAddress,
+    wallet: '',
+    entity: m.entityId,
+    blockTime: Math.floor(m.blockTime.getTime() / 1000),
+    date: m.blockTime.toISOString(),
+    asset: m.asset,
+    qty: m.direction === 'in' ? m.qty : -m.qty,
+    dir: m.direction === 'in' ? 'In' : 'Out',
+    price: m.price,
+    usd: m.usd,
+    priceSource: m.priceSource,
+    counterparty: null,
+    category: null,
+  }
 }
 
 /**
@@ -117,7 +140,7 @@ function shortAddr(addr: string): string {
 
 async function processWallet(
   walletRow: typeof wallet.$inferSelect,
-  opts: { full?: boolean; logPrefix?: string } = {},
+  opts: { full?: boolean; logPrefix?: string; priceCache?: Record<string, unknown> } = {},
 ): Promise<WalletResult> {
   const prefix = opts.logPrefix ?? `[fetch-tx ${walletRow.entityId} ${shortAddr(walletRow.address)}]`
   const startedAt = Date.now()
@@ -159,10 +182,7 @@ async function processWallet(
       toFetch.push(s.signature)
     }
 
-    let pageInserted = 0
-
-    // Free tier blocks batch requests (-32403), so call getTransaction
-    // per-signature with small concurrency. Rate limiter paces globally.
+    const pageMoves: ParsedMove[] = []
     for (let i = 0; i < toFetch.length; i += TX_CONCURRENCY) {
       const chunk = toFetch.slice(i, i + TX_CONCURRENCY)
       const txs = await Promise.all(chunk.map((sig) =>
@@ -170,30 +190,41 @@ async function processWallet(
           .then((r: any) => r?.result)
           .catch(() => null),
       ))
-
       for (const tx of txs) {
         if (!tx) continue
         const parsed = parseTransaction(tx, walletRow.address, walletRow.entityId)
-        moves += parsed.length
-        for (const m of parsed) {
-          const res = await db.insert(transaction).values({
-            txHash: m.txHash,
-            walletAddress: m.walletAddress,
-            entityId: m.entityId,
-            blockTime: m.blockTime,
-            asset: m.asset,
-            qty: String(m.qty),
-            direction: m.direction,
-            price: m.price != null ? String(m.price) : null,
-            usd: m.usd != null ? String(m.usd) : null,
-            priceSource: m.priceSource,
-          }).onConflictDoNothing().returning()
-          if (res.length > 0) {
-            inserted++
-            pageInserted++
-          }
-        }
+        pageMoves.push(...parsed)
       }
+    }
+    moves += pageMoves.length
+
+    // Hydrate prices for the whole page in one batch (uses shared priceCache)
+    const txsForHydrate = pageMoves.map(moveToTx)
+    const { transactions: hydrated } = await hydrateTransactionPrices(txsForHydrate, {
+      priceCache: opts.priceCache ?? {},
+      fetchMissingHistory: true,
+    })
+
+    let pageInserted = 0
+    if (pageMoves.length > 0) {
+      const rowsToInsert = pageMoves.map((m, idx) => {
+        const h = hydrated[idx]
+        return {
+          txHash: m.txHash,
+          walletAddress: m.walletAddress,
+          entityId: m.entityId,
+          blockTime: m.blockTime,
+          asset: m.asset,
+          qty: String(m.qty),
+          direction: m.direction,
+          price: h.price != null ? String(h.price) : null,
+          usd: h.usd != null ? String(h.usd) : null,
+          priceSource: h.priceSource,
+        }
+      })
+      const res = await db.insert(transaction).values(rowsToInsert).onConflictDoNothing().returning()
+      pageInserted = res.length
+      inserted += res.length
     }
 
     const oldestTime = sigs[sigs.length - 1]?.blockTime
@@ -223,6 +254,16 @@ export async function fetchTransactionsJob(opts: { full?: boolean } = {}) {
   let totalInserted = 0
   let failed = 0
 
+  // Per-run price cache, shared across all wallets and pages.
+  // Pre-populate the `<token>::latest` keys so hydrateTransactionPrices' 3-day
+  // fallback can resolve very recent transactions without an extra API call.
+  const priceCache: Record<string, unknown> = {}
+  try {
+    await primeLatestPrices(priceCache)
+  } catch (err) {
+    console.warn(`[fetch-tx] warning: failed to prime latest prices: ${(err as Error).message}`)
+  }
+
   console.log(`[fetch-tx] job start: ${wallets.length} wallets, mode=${opts.full ? 'full' : 'incremental'}`)
   const jobStartedAt = Date.now()
 
@@ -230,7 +271,7 @@ export async function fetchTransactionsJob(opts: { full?: boolean } = {}) {
     const w = wallets[idx]
     const logPrefix = `[fetch-tx ${idx + 1}/${wallets.length} ${w.entityId} ${shortAddr(w.address)}]`
     try {
-      const r = await processWallet(w, { ...opts, logPrefix })
+      const r = await processWallet(w, { ...opts, logPrefix, priceCache })
       results[w.address] = r
       totalInserted += r.inserted
     } catch (err) {

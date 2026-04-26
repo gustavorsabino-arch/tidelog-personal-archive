@@ -1,8 +1,9 @@
 import 'server-only'
-import { and, desc, eq, inArray, like, sql } from 'drizzle-orm'
+import { and, eq, inArray, like, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { balanceSnapshot, price } from '@/lib/db/schema/financial'
+import { balanceSnapshot } from '@/lib/db/schema/financial'
 import { wallet } from '@/lib/db/schema/reference'
+import { getCurrentPrices } from '@/lib/defillama'
 import { PRICE_MINTS, STABLE_TOKENS } from '@/lib/constants'
 import type {
   TreasuryManagementEntitySummary,
@@ -100,15 +101,8 @@ export async function getTreasuryManagementData(
   if (latestSnapshots.length === 0) return EMPTY_RESPONSE
 
   const tokenSymbols = Array.from(new Set(latestSnapshots.map((s) => s.token)))
-  const priceRows = await db
-    .select({ token: price.token, price: price.price })
-    .from(price)
-    .where(inArray(price.token, tokenSymbols))
-    .orderBy(desc(price.timestamp))
-  const priceByToken = new Map<string, number>()
-  for (const row of priceRows) {
-    if (!priceByToken.has(row.token)) priceByToken.set(row.token, Number(row.price))
-  }
+  const currentPrices = tokenSymbols.length > 0 ? await getCurrentPrices() : {}
+  const priceByToken = new Map<string, number>(Object.entries(currentPrices))
 
   const positions: TreasuryManagementPosition[] = []
   const walletsByAddr = new Map<string, TreasuryManagementWalletSummary>()

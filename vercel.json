@@ -1,0 +1,7 @@
+{
+  "crons": [
+    { "path": "/api/cron/fetch-balances",     "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/fetch-transactions", "schedule": "*/30 * * * *" },
+    { "path": "/api/cron/fetch-qb-reports",   "schedule": "0 * * * *"   }
+  ]
+}

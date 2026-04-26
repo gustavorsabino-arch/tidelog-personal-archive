@@ -1,18 +1,16 @@
 import { desc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { balanceSnapshot, price, wallet } from '@/lib/db/schema'
+import { balanceSnapshot, wallet } from '@/lib/db/schema'
 import { buildTreasuryOverview } from '@/lib/overview'
 import { toDisplayEntity } from '@/lib/entity'
+import { getCurrentPrices } from '@/lib/defillama'
 import type { BalanceSnapshot, Prices, TreasuryOverview, Wallet } from '@/lib/types'
 
 export async function getTreasuryOverview(entityFilter?: string | null): Promise<TreasuryOverview> {
-  const [walletRows, latestDateRows, latestPriceRows] = await Promise.all([
+  const [walletRows, latestDateRows, currentPrices] = await Promise.all([
     db.select().from(wallet).orderBy(wallet.label),
     db.select({ date: balanceSnapshot.date }).from(balanceSnapshot).orderBy(desc(balanceSnapshot.date)).limit(1),
-    db.select({ token: price.token, price: price.price, timestamp: price.timestamp })
-      .from(price)
-      .where(eq(price.source, 'latest'))
-      .orderBy(desc(price.timestamp)),
+    getCurrentPrices(),
   ])
 
   const latestDate = latestDateRows[0]?.date ?? null
@@ -27,11 +25,7 @@ export async function getTreasuryOverview(entityFilter?: string | null): Promise
     balances[row.walletAddress] = walletBalances
   }
 
-  const prices: Prices = {}
-  for (const row of latestPriceRows) {
-    if (prices[row.token] !== undefined) continue
-    prices[row.token] = Number(row.price)
-  }
+  const prices: Prices = currentPrices
 
   const mostRecentFetched = balanceRows.reduce<Date | null>((acc, row) => {
     const t = row.fetchedAt

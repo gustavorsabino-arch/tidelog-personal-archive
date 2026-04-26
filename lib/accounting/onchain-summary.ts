@@ -1,8 +1,9 @@
 import 'server-only'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { balanceSnapshot, price } from '@/lib/db/schema/financial'
+import { balanceSnapshot } from '@/lib/db/schema/financial'
 import { wallet } from '@/lib/db/schema/reference'
+import { getCurrentPrices } from '@/lib/defillama'
 import { STABLE_TOKENS } from '@/lib/constants'
 
 export type OnchainTokenRow = {
@@ -55,23 +56,8 @@ export async function getEntityOnchainSummary(entityId: string): Promise<Onchain
   }
 
   const tokenSymbols = Array.from(new Set(latest.map((r) => r.token)))
-  const priceRows = tokenSymbols.length > 0
-    ? await db
-        .select({
-          token: price.token,
-          price: price.price,
-          timestamp: price.timestamp,
-        })
-        .from(price)
-        .where(inArray(price.token, tokenSymbols))
-        .orderBy(desc(price.timestamp))
-    : []
-  const priceByToken = new Map<string, number>()
-  for (const row of priceRows) {
-    if (!priceByToken.has(row.token)) {
-      priceByToken.set(row.token, Number(row.price))
-    }
-  }
+  const currentPrices = tokenSymbols.length > 0 ? await getCurrentPrices() : {}
+  const priceByToken = new Map<string, number>(Object.entries(currentPrices))
 
   // Aggregate by token
   const agg = new Map<string, { amount: number; wallets: Set<string>; latestDate: string }>()

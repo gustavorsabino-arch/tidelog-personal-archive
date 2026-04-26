@@ -1,4 +1,4 @@
-import { getDailyPrices, getHistoricalPrice } from '@/lib/defillama'
+import { getCurrentPrices, getDailyPrices, getHistoricalPrice } from '@/lib/defillama'
 import { STABLE_TOKENS } from '@/lib/constants'
 import type { Transaction } from '@/lib/types'
 
@@ -24,7 +24,14 @@ function isPositiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
-export function getCachedTransactionPrice(priceCache: PriceCache, token: string, blockTime: number): number | null {
+export async function primeLatestPrices(priceCache: PriceCache): Promise<void> {
+  const current = await getCurrentPrices()
+  for (const [token, p] of Object.entries(current)) {
+    priceCache[`${token}::latest`] = p
+  }
+}
+
+function getCachedTransactionPrice(priceCache: PriceCache, token: string, blockTime: number): number | null {
   if (STABLE_TOKENS.has(token)) return 1
 
   const hourTs = getHourTs(blockTime)

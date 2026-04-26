@@ -59,3 +59,22 @@ export function looksLikeProd(databaseUrl: string | undefined): boolean {
     return false
   }
 }
+
+export async function confirmDestructive(opts: {
+  databaseUrl: string
+  prefix: string
+  describeAction: string
+  confirmWord: string
+}): Promise<boolean> {
+  const { createInterface } = await import('node:readline/promises')
+  const host = new URL(opts.databaseUrl).hostname
+  console.error(`${opts.prefix} TARGET: ${host}`)
+  console.error(`${opts.prefix} ${opts.describeAction}`)
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = await rl.question(`Type '${opts.confirmWord}' to proceed: `)
+    return answer.trim() === opts.confirmWord
+  } finally {
+    rl.close()
+  }
+}

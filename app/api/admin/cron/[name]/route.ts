@@ -1,20 +1,16 @@
 import { NextResponse } from 'next/server'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { logAudit } from '@/lib/audit'
-import { fetchPricesJob } from '@/lib/cron/fetch-prices'
 import { fetchBalancesJob } from '@/lib/cron/fetch-balances'
 import { fetchTransactionsJob } from '@/lib/cron/fetch-transactions'
 import { fetchQbReportsJob } from '@/lib/cron/fetch-qb-reports'
 import { refreshQbTokensJob } from '@/lib/cron/refresh-qb-tokens'
-import { pruneCacheJob } from '@/lib/cron/prune-cache'
 
 const JOBS: Record<string, () => Promise<unknown>> = {
-  'fetch-prices': fetchPricesJob,
   'fetch-balances': fetchBalancesJob,
   'fetch-transactions': fetchTransactionsJob,
   'fetch-qb-reports': fetchQbReportsJob,
   'refresh-qb-tokens': refreshQbTokensJob,
-  'prune-cache': pruneCacheJob,
 }
 
 /**
