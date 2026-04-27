@@ -1,9 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
-import { fmtUSD, fmtNum, fmtAddr } from '@/lib/format'
+import { fmtUSD, fmtNum, fmtAddr, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
+import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
+import { useTransactionMonths } from '@/lib/hooks/use-transaction-months'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import type { Transaction, TransactionSummary, TransactionsResponse } from '@/lib/types'
@@ -14,30 +16,6 @@ type TransactionsPageClientProps = {
   initialTotal: number
   initialSummary: TransactionSummary
   pageSize: number
-}
-
-function monthToRange(monthKey: string): { from: string; to: string } | null {
-  if (!monthKey) return null
-  const [yearStr, monthStr] = monthKey.split('-')
-  const year = Number(yearStr)
-  const month = Number(monthStr)
-  if (!Number.isFinite(year) || !Number.isFinite(month)) return null
-  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0))
-  const end = new Date(Date.UTC(year, month, 1, 0, 0, 0))
-  return {
-    from: String(Math.floor(start.getTime() / 1000)),
-    to: String(Math.floor(end.getTime() / 1000) - 1),
-  }
-}
-
-function buildMonthOptions(): string[] {
-  const out: string[] = []
-  const now = new Date()
-  for (let i = 0; i < 24; i++) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))
-    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`)
-  }
-  return out
 }
 
 export function TransactionsPageClient({
@@ -57,6 +35,8 @@ export function TransactionsPageClient({
   // Server-side filters
   const [tokenFilter, setTokenFilter] = useState('')
   const [dirFilter, setDirFilter] = useState('')
+  // Year-then-month cascade: month is only meaningful when a year is selected.
+  const [yearFilter, setYearFilter] = useState('')
   const [monthFilter, setMonthFilter] = useState('')
   const [walletFilter, setWalletFilter] = useState('')
   // Client-side search over the current page only
@@ -65,17 +45,22 @@ export function TransactionsPageClient({
   // Pagination — offset into the server-side sorted result set
   const [offset, setOffset] = useState(0)
 
-  const monthOptions = useMemo(buildMonthOptions, [])
+  const { options: walletOptions } = useEntityWallets(entity)
+  const { years: yearOptions, byYear: monthsByYear } = useTransactionMonths(entity)
 
-  const fetchTransactions = useCallback(async () => {
+  // Offset is passed in explicitly — never read from closure — so pagination
+  // and filter changes can each fire exactly one fetch with the right offset,
+  // with no race between an "offset reset" effect and a "fetch on offset
+  // change" effect.
+  const fetchTransactions = useCallback(async (off: number) => {
     if (!entity) return
     setLoading(true)
     try {
-      const params = new URLSearchParams({ entity, limit: String(pageSize), offset: String(offset) })
+      const params = new URLSearchParams({ entity, limit: String(pageSize), offset: String(off) })
       if (tokenFilter) params.set('asset', tokenFilter)
       if (dirFilter) params.set('direction', dirFilter)
       if (walletFilter) params.set('wallet', walletFilter)
-      const range = monthToRange(monthFilter)
+      const range = monthFilter ? monthToRange(monthFilter) : yearToRange(yearFilter)
       if (range) {
         params.set('from', range.from)
         params.set('to', range.to)
@@ -90,31 +75,57 @@ export function TransactionsPageClient({
     } finally {
       setLoading(false)
     }
-  }, [entity, pageSize, offset, tokenFilter, dirFilter, walletFilter, monthFilter])
+  }, [entity, pageSize, tokenFilter, dirFilter, walletFilter, yearFilter, monthFilter])
 
-  // Reset offset when any server-side filter changes (including entity).
-  // Skip on the first render when everything still matches SSR initial values.
+  // One-way flag: flips true the first time state moves away from SSR initial
+  // values, and stays true. Skips the redundant initial fetch (state already
+  // came from SSR) without suppressing later refetches when the user happens
+  // to reset filters back to their initial values.
+  const hasInteracted = useRef(false)
+
+  // Filter/entity change → always page 1 and fetch.
   useEffect(() => {
-    if (entity === initialEntity && !tokenFilter && !dirFilter && !walletFilter && !monthFilter) return
+    const atInitialState =
+      entity === initialEntity &&
+      !tokenFilter && !dirFilter && !yearFilter && !monthFilter && !walletFilter
+    if (!atInitialState) hasInteracted.current = true
+    if (!hasInteracted.current && atInitialState) return
     setOffset(0)
-  }, [entity, initialEntity, tokenFilter, dirFilter, walletFilter, monthFilter])
+    if (entity) fetchTransactions(0)
+  }, [entity, initialEntity, tokenFilter, dirFilter, yearFilter, monthFilter, walletFilter, fetchTransactions])
+
+  // Pagination is an explicit user action, not derived state. Calling fetch
+  // directly avoids the effect-driven double-fetch race entirely.
+  const goToOffset = (off: number) => {
+    setOffset(off)
+    fetchTransactions(off)
+  }
+
+  // Drop the selected wallet/year/month if they fall out of the available
+  // options (entity switch, wallet deletion, etc.). Avoids a stuck filter that
+  // would silently produce zero rows.
+  useEffect(() => {
+    if (walletFilter && walletOptions.length > 0 && !walletOptions.some((o) => o.value === walletFilter)) {
+      setWalletFilter('')
+    }
+  }, [walletFilter, walletOptions])
 
   useEffect(() => {
-    // Skip refetch when state still matches the SSR-provided initial values.
-    // Survives React 19 StrictMode's double-mount, which breaks a ref-based guard.
-    if (entity === initialEntity && !tokenFilter && !dirFilter && !monthFilter && !walletFilter && offset === 0) return
-    if (entity) fetchTransactions()
-  }, [entity, initialEntity, tokenFilter, dirFilter, monthFilter, walletFilter, offset, fetchTransactions])
+    if (!yearFilter) return
+    if (yearOptions.length > 0 && !yearOptions.includes(yearFilter)) {
+      setYearFilter('')
+      setMonthFilter('')
+    }
+  }, [yearFilter, yearOptions])
 
-  // Wallet dropdown — build from current page; adequate since wallet is a
-  // server-side filter and the page always contains the currently-filtered set.
-  const wallets = useMemo(() => {
-    const map = new Map<string, string>()
-    transactions.forEach((t) => {
-      if (t.wallet && !map.has(t.wallet)) map.set(t.wallet, t.wallet)
-    })
-    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]))
-  }, [transactions])
+  useEffect(() => {
+    if (!monthFilter) return
+    const [y, m] = monthFilter.split('-')
+    const monthsForYear = monthsByYear[y]
+    if (monthsForYear && !monthsForYear.includes(m)) {
+      setMonthFilter('')
+    }
+  }, [monthFilter, monthsByYear])
 
   // Client-side search narrows the current page only. All other filters go
   // through the server and operate across the whole dataset.
@@ -142,10 +153,22 @@ export function TransactionsPageClient({
 
   const columns = [
     {
-      key: 'date', label: 'Date', width: '140px',
+      key: 'date', label: 'Date', width: yearFilter ? '140px' : '160px',
       render: (t: Transaction) => {
         const d = new Date(t.date)
-        return <span style={{ fontSize: '0.72rem' }}>{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} <span style={{ color: 'var(--muted)', fontSize: '0.65rem' }}>{d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span></span>
+        return (
+          <span style={{ fontSize: '0.72rem' }}>
+            {d.toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              ...(yearFilter ? {} : { year: 'numeric' }),
+            })}
+            {' '}
+            <span style={{ color: 'var(--muted)', fontSize: '0.65rem' }}>
+              {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          </span>
+        )
       },
     },
     {
@@ -288,13 +311,29 @@ export function TransactionsPageClient({
                   <option value="In">In</option>
                   <option value="Out">Out</option>
                 </select>
-                <select className="fsel" value={monthFilter} onChange={e => setMonthFilter(e.target.value)}>
-                  <option value="">All months</option>
-                  {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
+                <select
+                  className="fsel"
+                  value={yearFilter}
+                  onChange={e => { setYearFilter(e.target.value); setMonthFilter('') }}
+                >
+                  <option value="">All years</option>
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <select
+                  className="fsel"
+                  value={monthFilter}
+                  onChange={e => setMonthFilter(e.target.value)}
+                  disabled={!yearFilter}
+                  title={yearFilter ? '' : 'Select a year first'}
+                >
+                  <option value="">{yearFilter ? 'All months' : 'Select year first'}</option>
+                  {yearFilter && (monthsByYear[yearFilter] ?? []).map(m => (
+                    <option key={m} value={`${yearFilter}-${m}`}>{MONTH_SHORT_NAMES[Number(m) - 1]}</option>
+                  ))}
                 </select>
                 <select className="fsel" value={walletFilter} onChange={e => setWalletFilter(e.target.value)}>
                   <option value="">All wallets</option>
-                  {wallets.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  {walletOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <input className="fsearch" placeholder="Hash / wallet (current page)…" value={search} onChange={e => setSearch(e.target.value)} />
               </div>
@@ -318,7 +357,7 @@ export function TransactionsPageClient({
                 <button
                   className="fsel"
                   disabled={!hasPrev || loading}
-                  onClick={() => setOffset(Math.max(0, offset - pageSize))}
+                  onClick={() => goToOffset(Math.max(0, offset - pageSize))}
                   style={{ cursor: hasPrev && !loading ? 'pointer' : 'not-allowed', opacity: hasPrev && !loading ? 1 : 0.5 }}
                 >
                   ‹ Prev
@@ -326,7 +365,7 @@ export function TransactionsPageClient({
                 <button
                   className="fsel"
                   disabled={!hasNext || loading}
-                  onClick={() => setOffset(offset + pageSize)}
+                  onClick={() => goToOffset(offset + pageSize)}
                   style={{ cursor: hasNext && !loading ? 'pointer' : 'not-allowed', opacity: hasNext && !loading ? 1 : 0.5 }}
                 >
                   Next ›

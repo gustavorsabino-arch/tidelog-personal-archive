@@ -39,3 +39,59 @@ export function fmtAddr(addr: string, chars = 4): string {
   if (!addr || addr.length < chars * 2 + 2) return addr || '—'
   return `${addr.slice(0, chars)}…${addr.slice(-chars)}`
 }
+
+export const MONTH_SHORT_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const
+
+export type DateRange = { from: string; to: string }
+
+export function monthToRange(monthKey: string): DateRange | null {
+  if (!monthKey) return null
+  const [yearStr, monthStr] = monthKey.split('-')
+  const year = Number(yearStr)
+  const month = Number(monthStr)
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return null
+  const start = Date.UTC(year, month - 1, 1, 0, 0, 0)
+  const end = Date.UTC(year, month, 1, 0, 0, 0)
+  return {
+    from: String(Math.floor(start / 1000)),
+    to: String(Math.floor(end / 1000) - 1),
+  }
+}
+
+export function yearToRange(yearKey: string): DateRange | null {
+  if (!yearKey) return null
+  const year = Number(yearKey)
+  if (!Number.isFinite(year)) return null
+  const start = Date.UTC(year, 0, 1, 0, 0, 0)
+  const end = Date.UTC(year + 1, 0, 1, 0, 0, 0)
+  return {
+    from: String(Math.floor(start / 1000)),
+    to: String(Math.floor(end / 1000) - 1),
+  }
+}
+
+/**
+ * Group ["YYYY-MM", ...] (any order) into { years: desc-sorted unique years,
+ * byYear: map of year → desc-sorted "MM" months present that year }.
+ */
+export function groupMonthsByYear(months: string[]): {
+  years: string[]
+  byYear: Record<string, string[]>
+} {
+  const byYear: Record<string, Set<string>> = {}
+  for (const ym of months) {
+    const [y, m] = ym.split('-')
+    if (!y || !m) continue
+    if (!byYear[y]) byYear[y] = new Set()
+    byYear[y].add(m)
+  }
+  const years = Object.keys(byYear).sort((a, b) => b.localeCompare(a))
+  const sorted: Record<string, string[]> = {}
+  for (const y of years) {
+    sorted[y] = [...byYear[y]].sort((a, b) => b.localeCompare(a))
+  }
+  return { years, byYear: sorted }
+}

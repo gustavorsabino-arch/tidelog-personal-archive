@@ -132,6 +132,26 @@ export async function getTreasuryTransactions({
   }
 }
 
+export async function getTransactionMonths({
+  entity,
+  asset,
+}: {
+  entity: string
+  asset?: string | null
+}): Promise<string[]> {
+  const conditions = [eq(transaction.entityId, toDbEntity(entity))]
+  if (asset) conditions.push(eq(transaction.asset, asset))
+
+  const monthExpr = sql<string>`to_char(${transaction.blockTime} at time zone 'UTC', 'YYYY-MM')`
+  const rows = await db
+    .selectDistinct({ month: monthExpr })
+    .from(transaction)
+    .where(and(...conditions))
+    .orderBy(desc(monthExpr))
+
+  return rows.map((row) => row.month)
+}
+
 export async function getTreasuryTransactionsAsc(
   entity: string,
 ): Promise<Transaction[]> {

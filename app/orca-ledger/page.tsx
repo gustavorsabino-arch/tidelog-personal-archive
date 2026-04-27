@@ -1,9 +1,11 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
-import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
-import { fmtUSD, fmtNum, fmtAddr } from '@/lib/format'
+import { ENTITIES } from '@/lib/constants'
+import { fmtUSD, fmtNum, fmtAddr, MONTH_SHORT_NAMES } from '@/lib/format'
+import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
+import { useTransactionMonths } from '@/lib/hooks/use-transaction-months'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import type { Transaction } from '@/lib/types'
@@ -14,10 +16,11 @@ export default function OrcaLedgerPage() {
   // Filters
   const [dirFilter, setDirFilter] = useState('')
   const [walletFilter, setWalletFilter] = useState('')
+  const [yearFilter, setYearFilter] = useState('')
   const [monthFilter, setMonthFilter] = useState('')
 
   const swrKey = `/api/treasury/transactions?entity=${entity}&asset=ORCA&limit=all`
-  const { data: txRes, isLoading, error: swrError, mutate } = useSWR<{ transactions: Transaction[]; total: number }>(
+  const { data: txRes, isLoading, error: swrError } = useSWR<{ transactions: Transaction[]; total: number }>(
     swrKey,
     apiFetch<{ transactions: Transaction[]; total: number }>,
   )
@@ -26,35 +29,43 @@ export default function OrcaLedgerPage() {
   const loading = isLoading
   const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
-  const months = useMemo(() => {
-    const set = new Set<string>()
-    transactions.forEach(t => {
-      if (t.date) {
-        const d = new Date(t.date)
-        set.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
-      }
-    })
-    return [...set].sort().reverse()
-  }, [transactions])
+  const { options: walletOptions } = useEntityWallets(entity)
+  const { years: yearOptions, byYear: monthsByYear } = useTransactionMonths(entity, 'ORCA')
 
-  const wallets = useMemo(() => {
-    const map = new Map<string, string>()
-    transactions.forEach(t => { if (t.wallet && !map.has(t.wallet)) map.set(t.wallet, t.wallet) })
-    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]))
-  }, [transactions])
+  // Stale-selection resets — drop a filter when its value falls out of the
+  // available options (entity switch, wallet/data deletion, etc.).
+  useEffect(() => {
+    if (walletFilter && walletOptions.length > 0 && !walletOptions.some(o => o.value === walletFilter)) {
+      setWalletFilter('')
+    }
+  }, [walletFilter, walletOptions])
+
+  useEffect(() => {
+    if (!yearFilter) return
+    if (yearOptions.length > 0 && !yearOptions.includes(yearFilter)) {
+      setYearFilter('')
+      setMonthFilter('')
+    }
+  }, [yearFilter, yearOptions])
+
+  useEffect(() => {
+    if (!monthFilter) return
+    const [y, m] = monthFilter.split('-')
+    const monthsForYear = monthsByYear[y]
+    if (monthsForYear && !monthsForYear.includes(m)) setMonthFilter('')
+  }, [monthFilter, monthsByYear])
 
   const filtered = useMemo(() => {
     return transactions.filter(t => {
       if (dirFilter && t.dir !== dirFilter) return false
-      if (walletFilter && t.wallet !== walletFilter) return false
-      if (monthFilter) {
-        const d = new Date(t.date)
-        const mk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-        if (mk !== monthFilter) return false
-      }
+      if (walletFilter && t.walletAddr !== walletFilter) return false
+      // t.date is an ISO UTC string; the months dropdown also buckets by UTC,
+      // so compare on the UTC prefix to avoid a midnight-boundary mismatch.
+      if (monthFilter && t.date.slice(0, 7) !== monthFilter) return false
+      if (!monthFilter && yearFilter && t.date.slice(0, 4) !== yearFilter) return false
       return true
     })
-  }, [transactions, dirFilter, walletFilter, monthFilter])
+  }, [transactions, dirFilter, walletFilter, yearFilter, monthFilter])
 
   const totalIn = filtered.filter(t => t.dir === 'In').reduce((s, t) => s + (t.qty || 0), 0)
   const totalOut = filtered.filter(t => t.dir === 'Out').reduce((s, t) => s + (t.qty || 0), 0)
@@ -63,10 +74,22 @@ export default function OrcaLedgerPage() {
 
   const columns = [
     {
-      key: 'date', label: 'Date', width: '140px',
+      key: 'date', label: 'Date', width: yearFilter ? '140px' : '160px',
       render: (t: Transaction) => {
         const d = new Date(t.date)
-        return <span style={{ fontSize: '0.72rem' }}>{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} <span style={{ color: 'var(--muted)', fontSize: '0.65rem' }}>{d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span></span>
+        return (
+          <span style={{ fontSize: '0.72rem' }}>
+            {d.toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              ...(yearFilter ? {} : { year: 'numeric' }),
+            })}
+            {' '}
+            <span style={{ color: 'var(--muted)', fontSize: '0.65rem' }}>
+              {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          </span>
+        )
       },
     },
     {
@@ -213,13 +236,29 @@ export default function OrcaLedgerPage() {
                   <option value="In">In</option>
                   <option value="Out">Out</option>
                 </select>
-                <select className="fsel" value={monthFilter} onChange={e => setMonthFilter(e.target.value)}>
-                  <option value="">All months</option>
-                  {months.map(m => <option key={m} value={m}>{m}</option>)}
+                <select
+                  className="fsel"
+                  value={yearFilter}
+                  onChange={e => { setYearFilter(e.target.value); setMonthFilter('') }}
+                >
+                  <option value="">All years</option>
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <select
+                  className="fsel"
+                  value={monthFilter}
+                  onChange={e => setMonthFilter(e.target.value)}
+                  disabled={!yearFilter}
+                  title={yearFilter ? '' : 'Select a year first'}
+                >
+                  <option value="">{yearFilter ? 'All months' : 'Select year first'}</option>
+                  {yearFilter && (monthsByYear[yearFilter] ?? []).map(m => (
+                    <option key={m} value={`${yearFilter}-${m}`}>{MONTH_SHORT_NAMES[Number(m) - 1]}</option>
+                  ))}
                 </select>
                 <select className="fsel" value={walletFilter} onChange={e => setWalletFilter(e.target.value)}>
                   <option value="">All wallets</option>
-                  {wallets.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  {walletOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
             </div>

@@ -51,6 +51,12 @@ test('/api/treasury/transactions denies budget_viewer', async () => {
   expect(res.status).toBe(403)
 })
 
+test('/api/treasury/transactions/months denies budget_viewer', async () => {
+  const { GET } = await import('@/app/api/treasury/transactions/months/route')
+  const res = await GET(makeReq('http://localhost/api/treasury/transactions/months?entity=Opco', VIEWER))
+  expect(res.status).toBe(403)
+})
+
 test('/api/treasury/overview denies budget_viewer', async () => {
   const { GET } = await import('@/app/api/treasury/overview/route')
   const res = await GET(makeReq('http://localhost/api/treasury/overview', VIEWER))

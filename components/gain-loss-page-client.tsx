@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum } from '@/lib/format'
+import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import type { GainLossEntry, GainLossResponse, GainLossSummary } from '@/lib/types'
@@ -52,17 +53,21 @@ export function GainLossPageClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity, initialEntity])
 
-  const wallets = useMemo(() => {
-    const set = new Set<string>()
-    gainLoss.forEach(g => { if (g.wallet) set.add(g.wallet) })
-    return [...set].sort()
-  }, [gainLoss])
+  const { options: walletOptions } = useEntityWallets(entity)
+
+  // Stale-selection reset — drop a wallet that's no longer in the registry
+  // (e.g., after entity switch or wallet deletion).
+  useEffect(() => {
+    if (walletFilter && walletOptions.length > 0 && !walletOptions.some(o => o.value === walletFilter)) {
+      setWalletFilter('')
+    }
+  }, [walletFilter, walletOptions])
 
   const filtered = useMemo(() => {
     return gainLoss.filter(g => {
       if (tokenFilter && g.asset !== tokenFilter) return false
       if (termFilter && g.term !== termFilter) return false
-      if (walletFilter && g.wallet !== walletFilter) return false
+      if (walletFilter && g.walletAddr !== walletFilter) return false
       return true
     })
   }, [gainLoss, tokenFilter, termFilter, walletFilter])
@@ -76,8 +81,12 @@ export function GainLossPageClient({
 
   const columns = [
     {
-      key: 'soldDate', label: 'Sold Date', width: '110px',
-      render: (g: GainLossEntry) => <span style={{ fontSize: '0.72rem' }}>{new Date(g.soldDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>,
+      key: 'soldDate', label: 'Sold Date', width: '120px',
+      render: (g: GainLossEntry) => (
+        <span style={{ fontSize: '0.72rem' }}>
+          {new Date(g.soldDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+        </span>
+      ),
     },
     {
       key: 'wallet', label: 'Wallet', width: '180px',
@@ -215,7 +224,7 @@ export function GainLossPageClient({
                 </select>
                 <select className="fsel" value={walletFilter} onChange={e => setWalletFilter(e.target.value)}>
                   <option value="">All wallets</option>
-                  {wallets.map(w => <option key={w} value={w}>{w}</option>)}
+                  {walletOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
             </div>

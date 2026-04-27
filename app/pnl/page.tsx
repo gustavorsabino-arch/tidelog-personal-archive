@@ -88,15 +88,29 @@ export default function PnLPage() {
   const period = useMemo(() => toRange(mode, year, month), [mode, year, month])
 
   const swrKey = `/api/qb/pnl?entity=${entity}&periodStart=${period.start}&periodEnd=${period.end}`
-  const { data, isLoading, error: swrError, mutate } = useSWR<PnlResponse>(
+  const { data, isLoading, error: swrError } = useSWR<PnlResponse>(
     swrKey,
     apiFetch<PnlResponse>,
   )
-  const loading = isLoading
   const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
-  const totals = data?.totals
-  const netClass = (totals?.netIncome ?? 0) >= 0 ? 'green' : 'red'
+  // Only trust `data` when its echoed entity/period match what we're currently
+  // requesting. SWR can return the previous successful fetch's response during
+  // the brief window after the key changes (entity tab switch, year change),
+  // and on errored fetches it never replaces the stale value at all. Anchoring
+  // every render on this freshness check stops the cards/table from showing
+  // numbers from a different period.
+  const isCurrentData =
+    !!data &&
+    data.entity === entity &&
+    data.periodStart === period.start &&
+    data.periodEnd === period.end
+  const loading = isLoading || (!isCurrentData && !error)
+  const totals = isCurrentData ? data.totals : null
+  const sections = isCurrentData ? data.sections : []
+  const netClass = totals == null
+    ? ''
+    : (totals.netIncome >= 0 ? 'green' : 'red')
 
   return (
     <div>
@@ -135,7 +149,7 @@ export default function PnLPage() {
         {loading ? <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Loading…</span> : null}
       </div>
 
-      {loading && !data ? (
+      {loading ? (
         <div className="cards-grid">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="card">
@@ -167,7 +181,7 @@ export default function PnLPage() {
       </div>
       )}
 
-      {loading && !data ? (
+      {loading ? (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <tbody>
@@ -188,7 +202,7 @@ export default function PnLPage() {
             Connect {entity} via the Budget → Settings → QuickBooks panel, then retry.
           </div>
         </div>
-      ) : data && data.sections.length === 0 ? (
+      ) : sections.length === 0 ? (
         <div className="empty">
           <div className="empty-icon">📊</div>
           <div>No P&amp;L data for this period.</div>
@@ -203,7 +217,7 @@ export default function PnLPage() {
               </tr>
             </thead>
             <tbody>
-              {data?.sections.map((section, i) => (
+              {sections.map((section, i) => (
                 <PnlRow key={i} node={section} depth={0} />
               ))}
             </tbody>
