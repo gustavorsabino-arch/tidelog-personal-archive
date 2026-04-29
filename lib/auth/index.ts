@@ -29,6 +29,14 @@ export const auth = betterAuth({
     },
   },
 
+  // Better Auth's default in-memory rate limiter is unreliable on Vercel's
+  // serverless runtime: counters aren't shared across invocations, so warm
+  // instances can falsely 429 legitimate sign-ins. Auth endpoints are already
+  // gated by Vercel's edge protection and the proxy's role/email checks.
+  rateLimit: {
+    enabled: false,
+  },
+
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID ?? '',
