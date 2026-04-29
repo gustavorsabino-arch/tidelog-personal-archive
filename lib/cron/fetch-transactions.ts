@@ -127,6 +127,7 @@ type WalletResult = {
   signaturesScanned: number
   moves: number
   inserted: number
+  failedSigs: number
   error?: string
 }
 
@@ -165,6 +166,7 @@ async function processWallet(
   let scanned = 0
   let inserted = 0
   let moves = 0
+  const failedSigs: string[] = []
 
   for (let page = 0; page < pageCap; page++) {
     const pageOpts: Record<string, unknown> = { limit: SIG_PAGE }
@@ -185,13 +187,21 @@ async function processWallet(
     const pageMoves: ParsedMove[] = []
     for (let i = 0; i < toFetch.length; i += TX_CONCURRENCY) {
       const chunk = toFetch.slice(i, i + TX_CONCURRENCY)
-      const txs = await Promise.all(chunk.map((sig) =>
-        heliusRpc('getTransaction', [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }])
-          .then((r: any) => r?.result)
-          .catch(() => null),
-      ))
-      for (const tx of txs) {
-        if (!tx) continue
+      const results = await Promise.all(chunk.map(async (sig) => {
+        try {
+          const r = await heliusRpc('getTransaction', [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }])
+          return { sig, tx: r?.result ?? null, error: r?.error ?? null }
+        } catch (e) {
+          return { sig, tx: null, error: (e as Error).message }
+        }
+      }))
+      for (const { sig, tx, error } of results) {
+        if (!tx) {
+          failedSigs.push(sig)
+          const errMsg = error ? (typeof error === 'string' ? error : JSON.stringify(error)) : 'no result'
+          console.warn(`${prefix}   sig ${sig.slice(0, 8)}… dropped: ${errMsg}`)
+          continue
+        }
         const parsed = parseTransaction(tx, walletRow.address, walletRow.entityId)
         pageMoves.push(...parsed)
       }
@@ -236,8 +246,13 @@ async function processWallet(
   }
 
   const elapsedMs = Date.now() - startedAt
-  console.log(`${prefix} done: ${scanned} scanned, ${moves} moves, ${inserted} inserted in ${elapsedMs}ms`)
-  return { ok: true, signaturesScanned: scanned, moves, inserted }
+  if (failedSigs.length > 0) {
+    const sample = failedSigs.slice(0, 5).map(s => s.slice(0, 8)).join(', ')
+    const more = failedSigs.length > 5 ? `, …+${failedSigs.length - 5} more` : ''
+    console.warn(`${prefix} ${failedSigs.length} sig(s) failed to fetch: ${sample}${more}`)
+  }
+  console.log(`${prefix} done: ${scanned} scanned, ${moves} moves, ${inserted} inserted, ${failedSigs.length} failed in ${elapsedMs}ms`)
+  return { ok: true, signaturesScanned: scanned, moves, inserted, failedSigs: failedSigs.length }
 }
 
 /**
@@ -248,8 +263,13 @@ async function processWallet(
  * drains full wallet history until Helius returns no more signatures. Intended
  * for one-shot historical backfills; don't use on the recurring cron schedule.
  */
-export async function fetchTransactionsJob(opts: { full?: boolean } = {}) {
-  const wallets = await db.select().from(wallet).where(eq(wallet.isExternal, false))
+export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: string } = {}) {
+  const wallets = opts.walletAddr
+    ? await db.select().from(wallet).where(and(eq(wallet.address, opts.walletAddr), eq(wallet.isExternal, false)))
+    : await db.select().from(wallet).where(eq(wallet.isExternal, false))
+  if (opts.walletAddr && wallets.length === 0) {
+    throw new Error(`wallet not found in registry (or is external): ${opts.walletAddr}`)
+  }
   const results: Record<string, WalletResult> = {}
   let totalInserted = 0
   let failed = 0
@@ -264,7 +284,8 @@ export async function fetchTransactionsJob(opts: { full?: boolean } = {}) {
     console.warn(`[fetch-tx] warning: failed to prime latest prices: ${(err as Error).message}`)
   }
 
-  console.log(`[fetch-tx] job start: ${wallets.length} wallets, mode=${opts.full ? 'full' : 'incremental'}`)
+  const scopeNote = opts.walletAddr ? ` scope=single-wallet(${shortAddr(opts.walletAddr)})` : ''
+  console.log(`[fetch-tx] job start: ${wallets.length} wallets, mode=${opts.full ? 'full' : 'incremental'}${scopeNote}`)
   const jobStartedAt = Date.now()
 
   for (let idx = 0; idx < wallets.length; idx++) {
@@ -280,6 +301,7 @@ export async function fetchTransactionsJob(opts: { full?: boolean } = {}) {
         signaturesScanned: 0,
         moves: 0,
         inserted: 0,
+        failedSigs: 0,
         error: (err as Error).message,
       }
       failed++

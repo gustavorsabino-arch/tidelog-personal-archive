@@ -16,6 +16,20 @@ let rpcId = 1
 // -32413 = Helius-specific "Too many requests" returned as JSON-RPC error (HTTP 200 body)
 const RATE_LIMIT_ERROR_CODES = new Set([-32413, -32029])
 
+// Compact param summary for log lines — we want to know which call dropped
+// without dumping the entire request body (some methods take big objects).
+function summarizeParams(method: string, params: unknown[]): string {
+  if (method === 'getTransaction') {
+    const sig = typeof params[0] === 'string' ? params[0] : ''
+    return sig.slice(0, 8) + '…'
+  }
+  if (method === 'getSignaturesForAddress' || method === 'getBalance' || method === 'getTokenAccountsByOwner') {
+    const addr = typeof params[0] === 'string' ? params[0] : ''
+    return addr.slice(0, 4) + '…' + addr.slice(-4)
+  }
+  return '…'
+}
+
 export async function heliusRpc(method: string, params: unknown[], retries = 3) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     await limiter.acquire()
@@ -26,25 +40,45 @@ export async function heliusRpc(method: string, params: unknown[], retries = 3) 
         body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }),
       })
       if (r.status === 429) {
+        if (attempt >= retries) {
+          console.error(`[Helius] DROPPED ${method}(${summarizeParams(method, params)}) after ${retries + 1} attempts (all HTTP 429)`)
+          return undefined
+        }
         const wait = Math.min(2000 * Math.pow(2, attempt), 10000)
         console.warn(`[Helius] 429, waiting ${wait}ms (attempt ${attempt + 1})`)
         await new Promise((res) => setTimeout(res, wait))
         continue
       }
       const data = await r.json()
-      if (data?.error?.code && RATE_LIMIT_ERROR_CODES.has(data.error.code) && attempt < retries) {
+      if (data?.error?.code && RATE_LIMIT_ERROR_CODES.has(data.error.code)) {
+        if (attempt >= retries) {
+          console.error(`[Helius] DROPPED ${method}(${summarizeParams(method, params)}) after ${retries + 1} attempts (rpc rate-limit code=${data.error.code} msg=${data.error.message})`)
+          return data
+        }
         const wait = Math.min(2000 * Math.pow(2, attempt), 10000)
         console.warn(`[Helius] rpc ${data.error.code} ${data.error.message}, waiting ${wait}ms (attempt ${attempt + 1})`)
         await new Promise((res) => setTimeout(res, wait))
         continue
       }
-      if (data.error && attempt < retries) continue
+      if (data.error) {
+        if (attempt >= retries) {
+          console.error(`[Helius] FAILED ${method}(${summarizeParams(method, params)}) after ${retries + 1} attempts: ${JSON.stringify(data.error)}`)
+          return data
+        }
+        continue
+      }
       return data
     } catch (e) {
-      if (attempt === retries) throw e
+      if (attempt === retries) {
+        console.error(`[Helius] DROPPED ${method}(${summarizeParams(method, params)}) after ${retries + 1} attempts (exception): ${(e as Error).message}`)
+        throw e
+      }
       await new Promise(res => setTimeout(res, 1000 * (attempt + 1)))
     }
   }
+  // Defensive: loop should always return or throw above. Logging here means a code change broke that invariant.
+  console.error(`[Helius] DROPPED ${method}(${summarizeParams(method, params)}) — unreachable code path`)
+  return undefined
 }
 
 type BatchRequest = { method: string; params: unknown[] }
