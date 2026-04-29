@@ -8,6 +8,7 @@ import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
 import { useTransactionMonths } from '@/lib/hooks/use-transaction-months'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
+import { CopyButton } from '@/components/copy-button'
 import type { Transaction, TransactionSummary, TransactionsResponse } from '@/lib/types'
 
 type TransactionsPageClientProps = {
@@ -135,6 +136,7 @@ export function TransactionsPageClient({
     return transactions.filter((t) => {
       if ((t.txHash || '').toLowerCase().includes(s)) return true
       if ((t.wallet || '').toLowerCase().includes(s)) return true
+      if ((t.walletAddr || '').toLowerCase().includes(s)) return true
       if ((t.asset || '').toLowerCase().includes(s)) return true
       return false
     })
@@ -174,8 +176,14 @@ export function TransactionsPageClient({
     {
       key: 'wallet', label: 'Wallet', width: '180px',
       render: (t: Transaction) => (
-        <span style={{ fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap', maxWidth: 170 }} title={t.walletAddr}>
-          {t.wallet || fmtAddr(t.walletAddr)}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: 170, minWidth: 0 }}>
+          <span
+            title={t.wallet || t.walletAddr}
+            style={{ fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+          >
+            {t.wallet || fmtAddr(t.walletAddr)}
+          </span>
+          <CopyButton address={t.walletAddr} />
         </span>
       ),
     },
@@ -335,7 +343,7 @@ export function TransactionsPageClient({
                   <option value="">All wallets</option>
                   {walletOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
-                <input className="fsearch" placeholder="Hash / wallet (current page)…" value={search} onChange={e => setSearch(e.target.value)} />
+                <input className="fsearch" placeholder="Tx hash / wallet / address (current page)…" value={search} onChange={e => setSearch(e.target.value)} />
               </div>
             </div>
 

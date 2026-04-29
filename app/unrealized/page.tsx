@@ -5,6 +5,7 @@ import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
+import { CopyButton } from '@/components/copy-button'
 import { computeFIFO } from '@/lib/fifo'
 import type { Transaction, Prices } from '@/lib/types'
 
@@ -159,8 +160,16 @@ export default function UnrealizedPage() {
                     const value = u.qty * u.currentPrice
                     return (
                       <tr key={i}>
-                        <td className="label" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {u.wallet}
+                        <td className="label" style={{ maxWidth: 200 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%', minWidth: 0 }}>
+                            <span
+                              title={u.wallet || u.walletAddr}
+                              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+                            >
+                              {u.wallet}
+                            </span>
+                            <CopyButton address={u.walletAddr} />
+                          </span>
                         </td>
                         <td>
                           <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: `${c}18`, color: c }}>{u.asset}</span>

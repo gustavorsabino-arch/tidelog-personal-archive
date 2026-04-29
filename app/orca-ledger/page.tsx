@@ -8,6 +8,7 @@ import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
 import { useTransactionMonths } from '@/lib/hooks/use-transaction-months'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
+import { CopyButton } from '@/components/copy-button'
 import type { Transaction } from '@/lib/types'
 
 export default function OrcaLedgerPage() {
@@ -95,8 +96,14 @@ export default function OrcaLedgerPage() {
     {
       key: 'wallet', label: 'Wallet', width: '200px',
       render: (t: Transaction) => (
-        <span style={{ fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap', maxWidth: 190 }} title={t.walletAddr}>
-          {t.wallet || fmtAddr(t.walletAddr)}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: 190, minWidth: 0 }}>
+          <span
+            title={t.wallet || t.walletAddr}
+            style={{ fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+          >
+            {t.wallet || fmtAddr(t.walletAddr)}
+          </span>
+          <CopyButton address={t.walletAddr} />
         </span>
       ),
     },

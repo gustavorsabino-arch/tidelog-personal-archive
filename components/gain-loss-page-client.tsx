@@ -7,6 +7,7 @@ import { fmtUSD, fmtNum } from '@/lib/format'
 import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
+import { CopyButton } from '@/components/copy-button'
 import type { GainLossEntry, GainLossResponse, GainLossSummary } from '@/lib/types'
 
 type GainLossPageClientProps = {
@@ -90,7 +91,17 @@ export function GainLossPageClient({
     },
     {
       key: 'wallet', label: 'Wallet', width: '180px',
-      render: (g: GainLossEntry) => <span style={{ fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap', maxWidth: 170 }}>{g.wallet}</span>,
+      render: (g: GainLossEntry) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: 170, minWidth: 0 }}>
+          <span
+            title={g.wallet || g.walletAddr}
+            style={{ fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+          >
+            {g.wallet}
+          </span>
+          <CopyButton address={g.walletAddr} />
+        </span>
+      ),
     },
     {
       key: 'asset', label: 'Token', width: '70px',

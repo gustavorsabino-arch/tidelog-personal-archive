@@ -5,6 +5,7 @@ import { fmtAddr } from '@/lib/format'
 import { getWalletTypeLabel } from '@/lib/overview'
 import { apiFetch } from '@/lib/api'
 import { Skeleton } from '@/components/skeleton'
+import { CopyButton } from '@/components/copy-button'
 import type { Wallet } from '@/lib/types'
 
 export default function WalletsPage() {
@@ -118,7 +119,12 @@ export default function WalletsPage() {
                           {w.entity}
                         </span>
                       </td>
-                      <td className="label">{w.label}</td>
+                      <td className="label">
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span title={w.label}>{w.label}</span>
+                          <CopyButton address={w.address} />
+                        </span>
+                      </td>
                       <td>
                         <a href={`https://solscan.io/account/${w.address}`} target="_blank" rel="noreferrer"
                           style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', color: 'var(--accent)', textDecoration: 'none' }}

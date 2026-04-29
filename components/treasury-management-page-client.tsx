@@ -5,6 +5,7 @@ import { DataTable } from '@/components/data-table'
 import { apiFetch } from '@/lib/api'
 import { fmtAddr, fmtDate, fmtDateTime, fmtNum, fmtUSD } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
+import { CopyButton } from '@/components/copy-button'
 import type {
   TreasuryManagementPosition,
   TreasuryManagementResponse,
@@ -145,9 +146,12 @@ export function TreasuryManagementPageClient({
       key: 'walletLabel', label: 'Wallet', width: '220px',
       render: (position: TreasuryManagementPosition) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span style={{ fontSize: '0.74rem', fontWeight: 600 }}>{position.walletLabel}</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--muted)' }}>
+          <span title={position.walletLabel} style={{ fontSize: '0.74rem', fontWeight: 600 }}>
+            {position.walletLabel}
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--muted)' }}>
             {fmtAddr(position.walletAddr, 6)}
+            <CopyButton address={position.walletAddr} />
           </span>
         </div>
       ),
