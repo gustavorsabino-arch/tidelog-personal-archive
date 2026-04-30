@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { sumCouncilByAccountFromGeneralLedger } from './qb-class-exclusion.ts'
+import { applyCouncilSubtraction, sumCouncilByAccountFromGeneralLedger } from './qb-class-exclusion.ts'
 import type { QboGeneralLedgerReport } from './actuals.ts'
 
 function header(value: string) {
@@ -76,4 +76,24 @@ test('sumCouncilByAccountFromGeneralLedger returns empty map when no Council row
   } as unknown as QboGeneralLedgerReport
 
   assert.deepEqual(sumCouncilByAccountFromGeneralLedger(report), {})
+})
+
+test('applyCouncilSubtraction subtracts per-account amounts and drops zeros', () => {
+  const totals = { '62040': 5000, '60110': 100000, '70000': 250 }
+  const subtraction = { '62040': 1700, '60110': 7000 }
+
+  const result = applyCouncilSubtraction(totals, subtraction)
+
+  assert.deepEqual(result, { '62040': 3300, '60110': 93000, '70000': 250 })
+})
+
+test('applyCouncilSubtraction is a no-op when subtraction map is empty', () => {
+  const totals = { '60110': 100 }
+  assert.deepEqual(applyCouncilSubtraction(totals, {}), { '60110': 100 })
+})
+
+test('applyCouncilSubtraction does not mutate the input totals', () => {
+  const totals = { '62040': 5000 }
+  applyCouncilSubtraction(totals, { '62040': 1000 })
+  assert.deepEqual(totals, { '62040': 5000 })
 })
