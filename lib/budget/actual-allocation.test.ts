@@ -31,6 +31,18 @@ function makeTransaction(
   }
 }
 
+function makeTransactionWithRawClass(
+  id: string,
+  amountUsd: number,
+  rawClassName: string | null,
+  normalizedDepartment: BudgetActualDrillTransaction['normalizedDepartment'],
+): BudgetActualDrillTransaction {
+  return {
+    ...makeTransaction(id, amountUsd, normalizedDepartment),
+    className: rawClassName,
+  }
+}
+
 test('allocates transactions by department and tracks unresolved report remainder', () => {
   const allocation = buildBudgetActualScopeAllocation([
     makeTransaction('t-1', 40, 'Engineering'),
@@ -72,4 +84,22 @@ test('returns the same contribution totals used by overview and department actua
     unresolvedTotalUsd: 15,
     totalUsd: 30,
   })
+})
+
+test('drops Council transactions before bucketing or totals', () => {
+  const allocation = buildBudgetActualScopeAllocation([
+    makeTransactionWithRawClass('keep-1', 40, 'Engineering', 'Engineering'),
+    makeTransactionWithRawClass('drop-1', 1500, 'Council', null),
+    makeTransactionWithRawClass('drop-2', 200, 'Legal:Council', 'Legal'),
+    makeTransactionWithRawClass('keep-2', 25, 'Finance', 'Finance'),
+  ], /* accountTotalUsd already adjusted upstream */ 65)
+
+  // Council txns are absent from allTransactions and from any total/bucket.
+  assert.equal(allocation.allTransactions.length, 2)
+  assert.deepEqual(allocation.allTransactions.map((t) => t.id), ['keep-1', 'keep-2'])
+  assert.equal(allocation.transactionTotalUsd, 65)
+  assert.equal(allocation.unclassifiedTotalUsd, 0)
+  assert.equal(allocation.unresolvedTotalUsd, 0)
+  assert.equal(allocation.departmentTotals.Engineering, 40)
+  assert.equal(allocation.departmentTotals['Finance'], 25)
 })

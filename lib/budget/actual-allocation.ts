@@ -3,6 +3,7 @@ import type {
   BudgetDepartment,
   BudgetDepartmentActualScope,
 } from './types.ts'
+import { isExcludedBudgetQboClassName } from './qb-class.ts'
 
 export type BudgetActualScopeAllocation = {
   allTransactions: BudgetActualDrillTransaction[]
@@ -25,7 +26,9 @@ export function buildBudgetActualScopeAllocation(
   transactions: readonly BudgetActualDrillTransaction[],
   accountTotalUsd: number,
 ): BudgetActualScopeAllocation {
-  const allTransactions = [...transactions]
+  const allTransactions = transactions.filter(
+    (transaction) => !isExcludedBudgetQboClassName(transaction.className),
+  )
   const departmentTransactions: Partial<Record<BudgetDepartment, BudgetActualDrillTransaction[]>> = {}
   const departmentTotals: Partial<Record<BudgetDepartment, number>> = {}
   const unclassifiedTransactions: BudgetActualDrillTransaction[] = []
