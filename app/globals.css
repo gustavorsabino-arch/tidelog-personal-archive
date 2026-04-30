@@ -484,3 +484,8 @@ th.sortable:hover { color: var(--accent) }
   .admin-access-month-grid { grid-template-columns: 1fr }
   .admin-access-department-grid { grid-template-columns: 1fr }
 }
+
+.row-highlight {
+  background: rgba(0, 168, 168, 0.18) !important;
+  transition: background 1.5s ease-out;
+}
