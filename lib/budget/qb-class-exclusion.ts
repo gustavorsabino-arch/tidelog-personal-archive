@@ -1,38 +1,38 @@
-import { readCachedReportsInRange } from '@/lib/qb/cache-reads'
+import { readCachedPerAccountGeneralLedgersInRange } from '@/lib/qb/cache-reads'
 import type { QboEntity } from '@/lib/qb/config'
 
 import type { QboGeneralLedgerReport, QboReportRow } from './actuals.ts'
-import { splitGeneralLedgerByAccount } from './actuals.ts'
 import { isExcludedBudgetQboClassName } from './qb-class.ts'
 
-export function sumCouncilByAccountFromGeneralLedger(
+/**
+ * Sum the amount of every Data row whose Class column matches the Council
+ * exclusion predicate. Walks rows recursively so it works for both
+ * per-account GL (the shape the cron writes — one row per
+ * (entity, account, month)) and any wrapping section structure QB happens
+ * to use. The caller is responsible for grouping by account; this function
+ * just totals one report.
+ */
+export function sumCouncilFromGeneralLedgerReport(
   report: QboGeneralLedgerReport,
-): Record<string, number> {
-  const out: Record<string, number> = {}
-  const byAccount = splitGeneralLedgerByAccount(report)
+): number {
+  let total = 0
 
-  for (const [accountNumber, perAccount] of byAccount) {
-    let total = 0
-
-    function walk(rows: QboReportRow[] | undefined) {
-      if (!rows) return
-      for (const row of rows) {
-        if (row.type === 'Data' && row.ColData) {
-          const className = row.ColData[4]?.value?.trim() ?? ''
-          const amount = Number.parseFloat(row.ColData[6]?.value || '0') || 0
-          if (amount !== 0 && isExcludedBudgetQboClassName(className)) {
-            total += amount
-          }
+  function walk(rows: QboReportRow[] | undefined) {
+    if (!rows) return
+    for (const row of rows) {
+      if (row.type === 'Data' && row.ColData) {
+        const className = row.ColData[4]?.value?.trim() ?? ''
+        const amount = Number.parseFloat(row.ColData[6]?.value || '0') || 0
+        if (amount !== 0 && isExcludedBudgetQboClassName(className)) {
+          total += amount
         }
-        if (row.Rows?.Row) walk(row.Rows.Row)
       }
+      if (row.Rows?.Row) walk(row.Rows.Row)
     }
-
-    walk(perAccount?.Rows?.Row)
-    if (total !== 0) out[accountNumber] = total
   }
 
-  return out
+  walk(report?.Rows?.Row)
+  return total
 }
 
 export function applyCouncilSubtraction(
@@ -63,13 +63,11 @@ export async function loadCouncilSubtractionByAccount(
   start: string,
   end: string,
 ): Promise<Record<string, number>> {
-  const reports = await readCachedReportsInRange<QboGeneralLedgerReport>(entity, 'general_ledger', start, end)
+  const rows = await readCachedPerAccountGeneralLedgersInRange<QboGeneralLedgerReport>(entity, start, end)
   const merged: Record<string, number> = {}
-  for (const report of reports) {
-    const perReport = sumCouncilByAccountFromGeneralLedger(report)
-    for (const [accountNumber, amount] of Object.entries(perReport)) {
-      merged[accountNumber] = (merged[accountNumber] ?? 0) + amount
-    }
+  for (const { accountNumber, data } of rows) {
+    const total = sumCouncilFromGeneralLedgerReport(data)
+    if (total !== 0) merged[accountNumber] = (merged[accountNumber] ?? 0) + total
   }
   return merged
 }

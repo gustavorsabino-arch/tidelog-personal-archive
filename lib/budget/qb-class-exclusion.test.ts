@@ -4,13 +4,9 @@ import assert from 'node:assert/strict'
 import {
   applyCouncilSubtraction,
   filterExcludedClassEntries,
-  sumCouncilByAccountFromGeneralLedger,
+  sumCouncilFromGeneralLedgerReport,
 } from './qb-class-exclusion.ts'
 import type { QboGeneralLedgerReport } from './actuals.ts'
-
-function header(value: string) {
-  return { Header: { ColData: [{ value }] } }
-}
 
 function dataRow(date: string, className: string, amountUsd: number) {
   return {
@@ -28,58 +24,51 @@ function dataRow(date: string, className: string, amountUsd: number) {
   }
 }
 
-test('sumCouncilByAccountFromGeneralLedger sums Council rows by leading-digit account number', () => {
-  const report: QboGeneralLedgerReport = {
+test('sumCouncilFromGeneralLedgerReport totals Council rows in a flat per-account GL', () => {
+  // Per-account GL: rows live directly under Rows.Row, no per-account Header
+  // wrapping, because the cached row is already scoped to one account.
+  const report = {
+    Rows: {
+      Row: [
+        dataRow('2026-03-17', 'Council', 1500),
+        dataRow('2026-03-18', 'Legal', 800),
+        dataRow('2026-03-19', 'Council:Foo', 200),
+      ],
+    },
+  } as unknown as QboGeneralLedgerReport
+
+  assert.equal(sumCouncilFromGeneralLedgerReport(report), 1700)
+})
+
+test('sumCouncilFromGeneralLedgerReport totals Council rows nested under a section header', () => {
+  // Some QB GL responses do wrap rows in a section with the account header;
+  // recursive walk should find Council rows in either shape.
+  const report = {
     Rows: {
       Row: [
         {
-          ...header('62040 Professional Services'),
+          Header: { ColData: [{ value: '62040 Professional Services' }] },
           Rows: {
             Row: [
               dataRow('2026-03-17', 'Council', 1500),
-              dataRow('2026-03-18', 'Legal', 800),
-              dataRow('2026-03-19', 'Council:Foo', 200),
+              dataRow('2026-03-18', 'Engineering', 9000),
+              dataRow('2026-03-19', 'Legal:Council', 200),
             ],
           },
-        },
-        {
-          ...header('60110 Salaries & Wages'),
-          Rows: {
-            Row: [
-              dataRow('2026-03-01', 'Engineering', 50000),
-              dataRow('2026-03-01', 'Legal:Council', 7000),
-            ],
-          },
-        },
-        {
-          ...header('70000 Other'),
-          Rows: { Row: [dataRow('2026-03-01', 'Ops', 100)] },
         },
       ],
     },
   } as unknown as QboGeneralLedgerReport
 
-  const result = sumCouncilByAccountFromGeneralLedger(report)
-
-  assert.deepEqual(result, {
-    '62040': 1700,
-    '60110': 7000,
-  })
+  assert.equal(sumCouncilFromGeneralLedgerReport(report), 1700)
 })
 
-test('sumCouncilByAccountFromGeneralLedger returns empty map when no Council rows exist', () => {
-  const report: QboGeneralLedgerReport = {
-    Rows: {
-      Row: [
-        {
-          ...header('60110 Salaries & Wages'),
-          Rows: { Row: [dataRow('2026-03-01', 'Engineering', 100)] },
-        },
-      ],
-    },
+test('sumCouncilFromGeneralLedgerReport returns 0 when no Council rows exist', () => {
+  const report = {
+    Rows: { Row: [dataRow('2026-03-01', 'Engineering', 100)] },
   } as unknown as QboGeneralLedgerReport
 
-  assert.deepEqual(sumCouncilByAccountFromGeneralLedger(report), {})
+  assert.equal(sumCouncilFromGeneralLedgerReport(report), 0)
 })
 
 test('applyCouncilSubtraction subtracts per-account amounts; preserves untouched accounts', () => {
