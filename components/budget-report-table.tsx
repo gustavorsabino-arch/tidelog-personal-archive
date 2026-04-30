@@ -8,6 +8,7 @@ type BudgetReportTableProps = {
   report: BudgetReportTableModel
   onBudgetCellClick?: (row: BudgetReportRow, column: BudgetReportColumnKey) => void
   onActualCellClick?: (row: BudgetReportRow, column: BudgetReportColumnKey) => void
+  onRevenueRowClick?: () => void
 }
 
 function formatBudgetCell(value: number | null): string {
@@ -48,14 +49,17 @@ function renderCellButton(
     <button
       type="button"
       className={`budget-table-cell-button${tone ? ` ${tone}` : ''}`}
-      onClick={onClick}
+      onClick={(event) => {
+        event.stopPropagation()
+        onClick()
+      }}
     >
       {value}
     </button>
   )
 }
 
-export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick }: BudgetReportTableProps) {
+export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick, onRevenueRowClick }: BudgetReportTableProps) {
   return (
     <div className="section">
       <div className="section-header">
@@ -111,8 +115,21 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
               const ytdTone = varianceTone(row.cells.ytd.budgetUsd, row.cells.ytd.actualUsd)
               const annualTone = varianceTone(row.cells.annual.budgetUsd, row.cells.annual.actualUsd)
               const periodBudgetClickable = canOpenBudgetPlanBreakdown(row, 'period')
-              const periodActualClickable = canOpenBudgetActualDrill(row, 'period', report)
-              const ytdActualClickable = canOpenBudgetActualDrill(row, 'ytd', report)
+              const isRevenueRow = row.tone === 'revenue'
+              const periodActualClickable = !isRevenueRow && canOpenBudgetActualDrill(row, 'period', report)
+              const ytdActualClickable = !isRevenueRow && canOpenBudgetActualDrill(row, 'ytd', report)
+              const revenueRowClickable = isRevenueRow && Boolean(onRevenueRowClick)
+              const periodActualHandler = revenueRowClickable
+                ? onRevenueRowClick
+                : onActualCellClick
+                  ? () => onActualCellClick(row, 'period')
+                  : undefined
+              const ytdActualHandler = revenueRowClickable
+                ? onRevenueRowClick
+                : onActualCellClick
+                  ? () => onActualCellClick(row, 'ytd')
+                  : undefined
+              const annualActualHandler = revenueRowClickable ? onRevenueRowClick : undefined
 
               return (
                 <tr
@@ -121,9 +138,22 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     row.kind === 'total' ? 'budget-report-total-row' : '',
                     row.tone === 'grand-total' ? 'budget-report-grand-total-row' : '',
                     row.tone === 'revenue' ? 'budget-report-revenue-row' : '',
+                    revenueRowClickable ? 'budget-report-revenue-row-clickable' : '',
                   ].filter(Boolean).join(' ')}
+                  onClick={revenueRowClickable ? onRevenueRowClick : undefined}
+                  style={revenueRowClickable ? { cursor: 'pointer' } : undefined}
+                  title={revenueRowClickable ? 'View monthly breakdown' : undefined}
                 >
-                  <td className={row.kind === 'line' ? 'label budget-report-indent' : 'label'}>{row.label}</td>
+                  <td className={row.kind === 'line' ? 'label budget-report-indent' : 'label'}>
+                    {revenueRowClickable ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        {row.label}
+                        <span aria-hidden="true" style={{ color: '#04a776', fontSize: '0.85rem' }}>›</span>
+                      </span>
+                    ) : (
+                      row.label
+                    )}
+                  </td>
                   <td className="num">
                     {renderCellButton(
                       formatBudgetCell(row.cells.period.budgetUsd),
@@ -134,8 +164,8 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                   <td className="num" style={{ color: row.tone === 'revenue' ? '#04a776' : 'var(--muted)' }}>
                     {renderCellButton(
                       formatActualCell(row.cells.period.actualUsd),
-                      periodActualClickable,
-                      onActualCellClick ? () => onActualCellClick(row, 'period') : undefined,
+                      periodActualClickable || revenueRowClickable,
+                      periodActualHandler,
                       row.tone === 'revenue' ? 'revenue' : undefined,
                     )}
                   </td>
@@ -153,8 +183,8 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                   <td className="num" style={{ color: row.tone === 'revenue' ? '#04a776' : 'var(--muted)' }}>
                     {renderCellButton(
                       formatActualCell(row.cells.ytd.actualUsd),
-                      ytdActualClickable,
-                      onActualCellClick ? () => onActualCellClick(row, 'ytd') : undefined,
+                      ytdActualClickable || revenueRowClickable,
+                      ytdActualHandler,
                       row.tone === 'revenue' ? 'revenue' : undefined,
                     )}
                   </td>
@@ -172,8 +202,8 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                   <td className="num" style={{ color: row.tone === 'revenue' ? '#04a776' : 'var(--muted)' }}>
                     {renderCellButton(
                       formatActualCell(row.cells.annual.actualUsd),
-                      false,
-                      onActualCellClick ? () => onActualCellClick(row, 'annual') : undefined,
+                      revenueRowClickable,
+                      annualActualHandler,
                       row.tone === 'revenue' ? 'revenue' : undefined,
                     )}
                   </td>

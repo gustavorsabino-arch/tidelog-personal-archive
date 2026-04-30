@@ -29,6 +29,9 @@ const BudgetPlanBreakdownModal = dynamic(
 const BudgetActualDrillModal = dynamic(
   () => import('@/components/budget-actual-drill-modal').then((m) => m.BudgetActualDrillModal),
 )
+const BudgetRevenueMonthlyModal = dynamic(
+  () => import('@/components/budget-revenue-monthly-modal').then((m) => m.BudgetRevenueMonthlyModal),
+)
 import { BudgetScopeControls } from '@/components/budget-scope-controls'
 import { BudgetReportTable } from '@/components/budget-report-table'
 import { BudgetQbMappingPanel } from '@/components/budget-qb-mapping-panel'
@@ -50,6 +53,7 @@ import type {
   BudgetPlanBreakdownState,
   BudgetReportColumnKey,
   BudgetReportRow,
+  BudgetRevenueMonthlyBreakdown,
   BudgetState,
   BudgetTeamMember,
   BudgetTeamMutationResult,
@@ -204,6 +208,10 @@ export default function BudgetPage() {
   const [headcountActualsCache, setHeadcountActualsCache] = useState<Record<string, BudgetHeadcountActualsState>>({})
   const [headcountActualsLoading, setHeadcountActualsLoading] = useState(false)
   const [headcountActualsError, setHeadcountActualsError] = useState<string | null>(null)
+  const [revenueModalOpen, setRevenueModalOpen] = useState(false)
+  const [revenueModalLoading, setRevenueModalLoading] = useState(false)
+  const [revenueModalError, setRevenueModalError] = useState<string | null>(null)
+  const [revenueMonthlyCache, setRevenueMonthlyCache] = useState<Record<number, BudgetRevenueMonthlyBreakdown>>({})
   const [planBreakdown, setPlanBreakdown] = useState<BudgetPlanBreakdownState | null>(null)
   const [actualDrillOpen, setActualDrillOpen] = useState(false)
   const [actualDrillTitle, setActualDrillTitle] = useState('')
@@ -741,6 +749,23 @@ export default function BudgetPage() {
     }
   }
 
+  async function openRevenueMonthlyModal() {
+    setRevenueModalOpen(true)
+    setRevenueModalError(null)
+
+    if (revenueMonthlyCache[budgetYear]) return
+
+    setRevenueModalLoading(true)
+    try {
+      const breakdown = await apiFetch<BudgetRevenueMonthlyBreakdown>(`/api/budget/revenue/monthly?year=${budgetYear}`)
+      setRevenueMonthlyCache((current) => ({ ...current, [budgetYear]: breakdown }))
+    } catch (error) {
+      setRevenueModalError(error instanceof Error ? error.message : 'Failed to load monthly revenue.')
+    } finally {
+      setRevenueModalLoading(false)
+    }
+  }
+
   async function fetchHeadcountActuals(trigger: 'auto' | 'manual' = 'manual') {
     const cacheKey = overviewActualsCacheKey
     setHeadcountActualsLoading(true)
@@ -1054,6 +1079,7 @@ export default function BudgetPage() {
             report={overviewReport}
             onBudgetCellClick={openBudgetBreakdown}
             onActualCellClick={(row, column) => void openActualDrill(row, column, overviewReport)}
+            onRevenueRowClick={() => void openRevenueMonthlyModal()}
           />
         )
       )}
@@ -1428,6 +1454,16 @@ export default function BudgetPage() {
           setActualDrillOpen(false)
           setActualDrill(null)
           setActualDrillError(null)
+        }}
+      />
+      <BudgetRevenueMonthlyModal
+        open={revenueModalOpen}
+        loading={revenueModalLoading}
+        error={revenueModalError}
+        breakdown={revenueMonthlyCache[budgetYear] ?? null}
+        onClose={() => {
+          setRevenueModalOpen(false)
+          setRevenueModalError(null)
         }}
       />
     </div>

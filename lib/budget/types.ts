@@ -289,6 +289,22 @@ export type BudgetOverviewActualsState = {
   lines: BudgetActualLineSet
 }
 
+export type BudgetRevenueMonthEntry = {
+  month: BudgetMonthKey
+  periodStart: string
+  actualUsd: number
+}
+
+export type BudgetRevenueMonthlyBreakdown = {
+  year: number
+  accountNumber: string
+  entity: string
+  months: BudgetRevenueMonthEntry[]
+  ytdTotalUsd: number
+  annualTotalUsd: number
+  fetchedAt: string
+}
+
 export type BudgetDepartmentActualsState = {
   source: 'quickbooks'
   year: number

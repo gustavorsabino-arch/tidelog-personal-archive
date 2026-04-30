@@ -120,6 +120,36 @@ export async function readCachedReportsInRange<T>(
 }
 
 /**
+ * Same as readCachedReportsInRange, but exposes each row's periodStart so the
+ * caller can group results by month instead of aggregating across the range.
+ */
+export async function readCachedReportsInRangeWithPeriod<T>(
+  entity: QboEntity,
+  reportType: QbReportType,
+  periodStart: string,
+  periodEnd: string,
+): Promise<{ periodStart: string; periodEnd: string; data: T }[]> {
+  const rows = await db.select({
+    periodStart: qbReportCache.periodStart,
+    periodEnd: qbReportCache.periodEnd,
+    data: qbReportCache.data,
+  })
+    .from(qbReportCache)
+    .where(and(
+      eq(qbReportCache.entityId, entityToId(entity)),
+      eq(qbReportCache.reportType, reportType),
+      gte(qbReportCache.periodStart, periodStart),
+      lte(qbReportCache.periodEnd, periodEnd),
+    ))
+    .orderBy(asc(qbReportCache.periodStart))
+  return rows.map((row) => ({
+    periodStart: row.periodStart,
+    periodEnd: row.periodEnd,
+    data: row.data as T,
+  }))
+}
+
+/**
  * Return cached per-account GL reports for a specific account number across
  * the given range. The cron writes one row per (entity, account, month) with
  * filterParams = { account, accountNumber }; we filter by accountNumber so
