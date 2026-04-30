@@ -21,7 +21,7 @@ const NORMALIZED_DEPARTMENT_BY_TOKEN: Record<string, BudgetDepartment> = Object.
     }
 
     if (department === 'Legal') {
-      entries.push(['governance', department], ['council', department])
+      entries.push(['governance', department])
     }
 
     if (department === 'Ops') {

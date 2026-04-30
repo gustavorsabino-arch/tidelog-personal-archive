@@ -5,5 +5,5 @@ import { normalizeBudgetDepartmentName } from './departments.ts'
 
 test('normalizes Zagreus legal class aliases into the Legal department', () => {
   assert.equal(normalizeBudgetDepartmentName('Governance'), 'Legal')
-  assert.equal(normalizeBudgetDepartmentName('Council'), 'Legal')
+  assert.equal(normalizeBudgetDepartmentName('Council'), null)
 })
