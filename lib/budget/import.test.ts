@@ -81,6 +81,30 @@ test('maps legacy Finance & Accounting sheet names onto the canonical Finance de
   assert.equal(parsed.departments[0]?.lines.profSvc, 120000)
 })
 
+test('captures top-level monthly rows whose label sits in column 0', () => {
+  const workbook = XLSX.utils.book_new()
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['', '', '', 'Jan', 'Feb', 'Mar'],
+    ['', '', 'Salaries & Wages', 100, 100, 100],
+    ['Travel & Entertainment', '', '', 25, 30, 45],
+    ['Office', '', '', 0, 50, 0],
+    ['', '', 'Industry Relations', 10, 20, 30],
+    ['Contingency', '', '', 5, 5, 5],
+    ['Total Expenses', '', '', 140, 205, 180],
+  ])
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Engineering')
+
+  const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+  const parsed = parseBudgetWorkbook(buffer, 'Engineering', 'annual')
+  const dept = parsed.departments[0]
+  assert.equal(dept?.lines.salary, 300)
+  assert.equal(dept?.lines.travel, 100)
+  assert.equal(dept?.lines.rent, 50)
+  assert.equal(dept?.lines.industryRelations, 60)
+  assert.equal(dept?.lines.contingency, 15)
+  assert.equal(dept?.unmappedLineItems.length, 0)
+})
+
 test('parses multi-month sheets using the requested month column', () => {
   const workbook = XLSX.utils.book_new()
   const monthlySheet = XLSX.utils.aoa_to_sheet([

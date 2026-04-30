@@ -99,6 +99,8 @@ const LINE_ITEM_ALIASES: Record<string, BudgetLineKey> = {
   'misc expenses': 'hardware',
   'hardware': 'hardware',
   'hardware / misc': 'hardware',
+  'industry relations': 'industryRelations',
+  'contingency': 'contingency',
 }
 
 for (const entry of BUDGET_LINE_CATALOG) {
@@ -270,6 +272,11 @@ function getLineItemFromMonthlyRow(row: unknown[]): string {
   const fallback = row[1]
   if (typeof fallback === 'string' && fallback.trim() && !normalizeLineItem(fallback).startsWith('total')) {
     return fallback.trim()
+  }
+
+  const topLevel = row[0]
+  if (typeof topLevel === 'string' && topLevel.trim() && !normalizeLineItem(topLevel).startsWith('total')) {
+    return topLevel.trim()
   }
 
   return ''

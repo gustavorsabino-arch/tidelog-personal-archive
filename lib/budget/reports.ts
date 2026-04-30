@@ -90,6 +90,7 @@ const PRIMARY_EXPENSE_SECTIONS: BudgetReportSectionSpec[] = [
     lines: [
       { category: 'Professional Services', label: 'Professional Services', key: 'profSvc' },
       { category: 'Professional Services', label: 'Corporate Compliance', key: 'corpCompliance' },
+      { category: 'Professional Services', label: 'Industry Relations', key: 'industryRelations' },
     ],
     subtotalLabel: 'Total Professional Services',
   },
