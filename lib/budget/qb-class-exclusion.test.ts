@@ -3,72 +3,82 @@ import assert from 'node:assert/strict'
 
 import {
   applyCouncilSubtraction,
+  composeCouncilSubtractionByAccount,
   filterExcludedClassEntries,
-  sumCouncilFromGeneralLedgerReport,
 } from './qb-class-exclusion.ts'
-import type { QboGeneralLedgerReport } from './actuals.ts'
+import type { BudgetQboTransactionPayloadRecord } from './qb-transaction-payload.ts'
 
-function dataRow(date: string, className: string, amountUsd: number) {
+function makeRecord(
+  lines: ReadonlyArray<{
+    accountId: string | null
+    className: string | null
+    amountUsd: number | null
+  }>,
+): BudgetQboTransactionPayloadRecord {
   return {
-    type: 'Data',
-    ColData: [
-      { value: date },                    // 0 date
-      { value: 'JE-1', id: 'tx-1' },      // 1 txn ref
-      { value: '' },                      // 2 doc number
-      { value: '' },                      // 3 name
-      { value: className },               // 4 class
-      { value: '' },                      // 5 memo
-      { value: amountUsd.toFixed(2) },    // 6 amount
-      { value: '0.00' },                  // 7 running balance
-    ],
+    txnId: 'tx-1',
+    transactionType: 'Bill',
+    resourceType: 'bill',
+    sourceRowDate: '2026-03-17',
+    sourceRowClassName: 'Council',
+    txDate: '2026-03-17',
+    documentNumber: null,
+    memo: null,
+    counterpartyName: null,
+    lines: lines.map((line) => ({
+      accountId: line.accountId,
+      accountName: null,
+      className: line.className,
+      normalizedDepartment: null,
+      amountUsd: line.amountUsd,
+      description: null,
+      entityName: null,
+    })),
+    error: null,
   }
 }
 
-test('sumCouncilFromGeneralLedgerReport totals Council rows in a flat per-account GL', () => {
-  // Per-account GL: rows live directly under Rows.Row, no per-account Header
-  // wrapping, because the cached row is already scoped to one account.
-  const report = {
-    Rows: {
-      Row: [
-        dataRow('2026-03-17', 'Council', 1500),
-        dataRow('2026-03-18', 'Legal', 800),
-        dataRow('2026-03-19', 'Council:Foo', 200),
-      ],
-    },
-  } as unknown as QboGeneralLedgerReport
+test('composeCouncilSubtractionByAccount sums Council lines by accountNumber via the catalog', () => {
+  const records = [
+    makeRecord([
+      { accountId: '596', className: 'Council', amountUsd: 1500 },
+    ]),
+    makeRecord([
+      { accountId: '610', className: 'Engineering', amountUsd: 9000 },
+      { accountId: '596', className: 'Council:Foo', amountUsd: 200 },
+      { accountId: '596', className: 'Legal', amountUsd: 800 },
+    ]),
+  ]
+  const accountNumberById = new Map([
+    ['596', '62040'],
+    ['610', '62070'],
+  ])
 
-  assert.equal(sumCouncilFromGeneralLedgerReport(report), 1700)
+  const result = composeCouncilSubtractionByAccount(records, accountNumberById)
+
+  assert.deepEqual(result, { '62040': 1700 })
 })
 
-test('sumCouncilFromGeneralLedgerReport totals Council rows nested under a section header', () => {
-  // Some QB GL responses do wrap rows in a section with the account header;
-  // recursive walk should find Council rows in either shape.
-  const report = {
-    Rows: {
-      Row: [
-        {
-          Header: { ColData: [{ value: '62040 Professional Services' }] },
-          Rows: {
-            Row: [
-              dataRow('2026-03-17', 'Council', 1500),
-              dataRow('2026-03-18', 'Engineering', 9000),
-              dataRow('2026-03-19', 'Legal:Council', 200),
-            ],
-          },
-        },
-      ],
-    },
-  } as unknown as QboGeneralLedgerReport
+test('composeCouncilSubtractionByAccount returns empty when no Council lines exist', () => {
+  const records = [
+    makeRecord([{ accountId: '596', className: 'Engineering', amountUsd: 9000 }]),
+  ]
+  const accountNumberById = new Map([['596', '62040']])
 
-  assert.equal(sumCouncilFromGeneralLedgerReport(report), 1700)
+  assert.deepEqual(composeCouncilSubtractionByAccount(records, accountNumberById), {})
 })
 
-test('sumCouncilFromGeneralLedgerReport returns 0 when no Council rows exist', () => {
-  const report = {
-    Rows: { Row: [dataRow('2026-03-01', 'Engineering', 100)] },
-  } as unknown as QboGeneralLedgerReport
+test('composeCouncilSubtractionByAccount skips lines with missing accountId, missing amount, or unmapped account', () => {
+  const records = [
+    makeRecord([
+      { accountId: null, className: 'Council', amountUsd: 100 },
+      { accountId: '596', className: 'Council', amountUsd: null },
+      { accountId: 'unknown-id', className: 'Council', amountUsd: 50 },
+    ]),
+  ]
+  const accountNumberById = new Map([['596', '62040']])
 
-  assert.equal(sumCouncilFromGeneralLedgerReport(report), 0)
+  assert.deepEqual(composeCouncilSubtractionByAccount(records, accountNumberById), {})
 })
 
 test('applyCouncilSubtraction subtracts per-account amounts; preserves untouched accounts', () => {
