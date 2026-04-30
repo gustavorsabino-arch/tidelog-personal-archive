@@ -42,9 +42,20 @@ export function applyCouncilSubtraction(
   const result: Record<string, number> = { ...totals }
   for (const [accountNumber, councilAmount] of Object.entries(subtraction)) {
     if (!councilAmount) continue
-    result[accountNumber] = (result[accountNumber] ?? 0) - councilAmount
+    result[accountNumber] = Math.max(0, (result[accountNumber] ?? 0) - councilAmount)
   }
   return result
+}
+
+export function filterExcludedClassEntries(
+  classified: Readonly<Record<string, number>>,
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [rawClass, amount] of Object.entries(classified)) {
+    if (isExcludedBudgetQboClassName(rawClass)) continue
+    out[rawClass] = amount
+  }
+  return out
 }
 
 export async function loadCouncilSubtractionByAccount(

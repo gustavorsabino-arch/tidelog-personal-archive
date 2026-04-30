@@ -17,8 +17,12 @@ import {
   type QboProfitAndLossReport,
 } from './actuals.ts'
 import { parseQboGeneralLedgerRows } from './qb-general-ledger.ts'
-import { isExcludedBudgetQboClassName, normalizeBudgetQboClassName } from './qb-class.ts'
-import { applyCouncilSubtraction, loadCouncilSubtractionByAccount } from './qb-class-exclusion.ts'
+import { normalizeBudgetQboClassName } from './qb-class.ts'
+import {
+  applyCouncilSubtraction,
+  filterExcludedClassEntries,
+  loadCouncilSubtractionByAccount,
+} from './qb-class-exclusion.ts'
 import { loadBudgetQbMappingState } from './qb-mapping-db.ts'
 import type { BudgetHeadcountActualEntry, BudgetHeadcountActualsState, BudgetQbMappingRow, BudgetViewState } from './types.ts'
 
@@ -149,8 +153,7 @@ export async function fetchBudgetHeadcountActuals(view: BudgetViewState): Promis
     const glTotals = aggregateGeneralLedgerRowsByClass(enrichedRows)
     let assigned = 0
 
-    for (const [rawClass, amount] of Object.entries(glTotals.classified)) {
-      if (isExcludedBudgetQboClassName(rawClass)) continue
+    for (const [rawClass, amount] of Object.entries(filterExcludedClassEntries(glTotals.classified))) {
       const department = normalizeBudgetQboClassName(rawClass)
       if (department) {
         if (task.lineKey === 'salary') byDepartment[department].salaryActualUsd += amount

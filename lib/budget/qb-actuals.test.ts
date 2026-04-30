@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { composeCoreProductRevenueByMonth } from './qb-actuals.ts'
+import { composeBudgetOverviewMappedLines, composeCoreProductRevenueByMonth } from './qb-actuals.ts'
 import type { QboProfitAndLossReport } from './actuals.ts'
+import type { BudgetQbMappingRow } from './types.ts'
 
 function makeReport(accountTotals: Record<string, number>): QboProfitAndLossReport {
   return {
@@ -107,4 +108,44 @@ test('returns metadata on the breakdown', () => {
   assert.equal(breakdown.accountNumber, '40110')
   assert.equal(breakdown.entity, 'Opco')
   assert.equal(breakdown.fetchedAt, '2026-04-30T12:00:00.000Z')
+})
+
+const PROFESSIONAL_SERVICES_LINE: BudgetQbMappingRow = {
+  cat: 'Operating Expenses',
+  line: 'Professional Services',
+  key: 'professionalServices',
+  accounts: [62040],
+}
+
+test('composeBudgetOverviewMappedLines subtracts Council per account before mapping', () => {
+  const result = composeBudgetOverviewMappedLines(
+    [{
+      reports: [makeReport({ '62040': 5000 })],
+      councilSubtraction: { '62040': 1500 },
+    }],
+    [PROFESSIONAL_SERVICES_LINE],
+  )
+
+  assert.equal(result.professionalServices, 3500)
+})
+
+test('composeBudgetOverviewMappedLines sums per-account totals across multi-month and multi-entity reports', () => {
+  const result = composeBudgetOverviewMappedLines(
+    [
+      {
+        reports: [
+          makeReport({ '62040': 1000 }),
+          makeReport({ '62040': 2000 }),
+        ],
+        councilSubtraction: { '62040': 500 },
+      },
+      {
+        reports: [makeReport({ '62040': 4000 })],
+        councilSubtraction: {},
+      },
+    ],
+    [PROFESSIONAL_SERVICES_LINE],
+  )
+
+  assert.equal(result.professionalServices, 6500)
 })
