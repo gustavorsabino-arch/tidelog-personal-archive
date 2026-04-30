@@ -138,13 +138,13 @@ export async function fetchBudgetOverviewActuals(view: BudgetViewState): Promise
   async function getMappedLines(start: string, end: string): Promise<BudgetLineAmounts> {
     const totals: BudgetLineAmounts = {}
 
-    const perEntityReports = await Promise.all(
-      entities.map(async (entity) => ({
-        entity,
-        reports: await readCachedReportsInRange<QboProfitAndLossReport>(entity, 'profit_and_loss', start, end),
-        councilSubtraction: await loadCouncilSubtractionByAccount(entity, start, end),
-      })),
-    )
+    const perEntityReports = await Promise.all(entities.map(async (entity) => {
+      const [reports, councilSubtraction] = await Promise.all([
+        readCachedReportsInRange<QboProfitAndLossReport>(entity, 'profit_and_loss', start, end),
+        loadCouncilSubtractionByAccount(entity, start, end),
+      ])
+      return { entity, reports, councilSubtraction }
+    }))
 
     for (const { reports, councilSubtraction } of perEntityReports) {
       const aggregatedTotals: Record<string, number> = {}
