@@ -27,6 +27,8 @@ const EXTENSION_BUDGET_LINE_CATALOG = [
   { key: 'corpFees', label: 'Corporate Fees', category: 'Professional Services' },
   { key: 'lobbying', label: 'Lobbying', category: 'Professional Services' },
   { key: 'mmFees', label: 'Market Maker Fees', category: 'Transaction Fees' },
+  { key: 'industryRelations', label: 'Industry Relations', category: 'Professional Services' },
+  { key: 'contingency', label: 'Contingency', category: 'Contingency' },
 ] as const
 
 export const BUDGET_LINE_CATALOG = [

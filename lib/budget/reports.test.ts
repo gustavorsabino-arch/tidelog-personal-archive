@@ -63,6 +63,7 @@ test('builds overview report with the fixed v1 row layout', () => {
     'mktExp',
     'profSvc',
     'corpCompliance',
+    'industryRelations',
     'travel',
     'colos',
     'bankFees',
