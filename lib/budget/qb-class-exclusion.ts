@@ -1,37 +1,26 @@
 import { readCachedPerAccountGeneralLedgersInRange } from '@/lib/qb/cache-reads'
 import type { QboEntity } from '@/lib/qb/config'
 
-import type { QboGeneralLedgerReport, QboReportRow } from './actuals.ts'
+import type { QboGeneralLedgerReport } from './actuals.ts'
+import { parseQboGeneralLedgerRows } from './qb-general-ledger.ts'
 import { isExcludedBudgetQboClassName } from './qb-class.ts'
 
 /**
  * Sum the amount of every Data row whose Class column matches the Council
- * exclusion predicate. Walks rows recursively so it works for both
- * per-account GL (the shape the cron writes — one row per
- * (entity, account, month)) and any wrapping section structure QB happens
- * to use. The caller is responsible for grouping by account; this function
- * just totals one report.
+ * exclusion predicate. Delegates row parsing to the same parser the drill
+ * uses (`parseQboGeneralLedgerRows`), which locates the amount column
+ * dynamically — real cached GL rows have varying column counts, so a
+ * fixed-index lookup is unreliable.
  */
 export function sumCouncilFromGeneralLedgerReport(
   report: QboGeneralLedgerReport,
 ): number {
   let total = 0
-
-  function walk(rows: QboReportRow[] | undefined) {
-    if (!rows) return
-    for (const row of rows) {
-      if (row.type === 'Data' && row.ColData) {
-        const className = row.ColData[4]?.value?.trim() ?? ''
-        const amount = Number.parseFloat(row.ColData[6]?.value || '0') || 0
-        if (amount !== 0 && isExcludedBudgetQboClassName(className)) {
-          total += amount
-        }
-      }
-      if (row.Rows?.Row) walk(row.Rows.Row)
+  for (const row of parseQboGeneralLedgerRows(report)) {
+    if (row.amountUsd && isExcludedBudgetQboClassName(row.className)) {
+      total += row.amountUsd
     }
   }
-
-  walk(report?.Rows?.Row)
   return total
 }
 
