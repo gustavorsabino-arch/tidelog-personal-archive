@@ -26,6 +26,7 @@ import {
   attachBudgetActualDrillControlTotals,
   type BudgetActualDrillTask,
 } from './qb-drill-plan.ts'
+import { applyCouncilSubtraction, loadCouncilSubtractionByAccount } from './qb-class-exclusion.ts'
 import { loadBudgetQbMappingState } from './qb-mapping-db.ts'
 import type { BudgetQboTransactionPayloadCache } from './qb-transaction-payload.ts'
 import type {
@@ -153,10 +154,12 @@ export async function fetchBudgetActualDrill(
   // GL reports load lazily since we only need the accounts the planned tasks
   // actually reference.
   const perEntity = await Promise.all(entities.map(async (entity) => {
-    const [totals, catalog] = await Promise.all([
+    const [rawTotals, catalog, councilSubtraction] = await Promise.all([
       readAggregatedPnlTotals(entity, range.start, range.end),
       readCachedAccountCatalogByNumber(entity),
+      loadCouncilSubtractionByAccount(entity, range.start, range.end),
     ])
+    const totals = applyCouncilSubtraction(rawTotals, councilSubtraction)
     return { entity, totals, catalog }
   }))
 
