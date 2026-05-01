@@ -17,6 +17,7 @@ import {
   type QboProfitAndLossReport,
 } from './actuals.ts'
 import { buildBudgetActualScopeAllocation, getBudgetActualScopeContribution } from './actual-allocation.ts'
+import { applyCouncilSubtraction, loadCouncilSubtractionByAccount } from './qb-class-exclusion.ts'
 import { parseQboGeneralLedgerRows } from './qb-general-ledger.ts'
 import { loadBudgetActualLedgerTransactions } from './qb-ledger-transactions.ts'
 import { fetchBudgetRevenueLineSet } from './qb-actuals.ts'
@@ -89,16 +90,23 @@ async function getDepartmentLinesForEntity(
   mappingRows: readonly BudgetQbMappingRow[],
   transactionPayloadCache: BudgetQboTransactionPayloadCache,
 ): Promise<{ lines: BudgetLineAmounts; unclassifiedLines: BudgetLineAmounts }> {
-  // ONE query per source: P&L totals, account catalog, and ALL GL reports for
-  // the entity+range partitioned by account. Previously the GL loader was
-  // called per-account inside a serial loop, and each call re-fetched the
-  // full result set (the SQL didn't filter on the JSONB account key), making
-  // department fan-out 40x slower than necessary.
-  const [accountTotals, accountCatalog, glByAccount] = await Promise.all([
+  // ONE query per source: P&L totals, account catalog, ALL GL reports for the
+  // entity+range partitioned by account, and the per-account Council
+  // subtraction. Previously the GL loader was called per-account inside a
+  // serial loop, and each call re-fetched the full result set (the SQL didn't
+  // filter on the JSONB account key), making department fan-out 40x slower
+  // than necessary. `loadCouncilSubtractionByAccount` returns the dollar
+  // amount of Council-classed txns posted to each account in the range; we
+  // subtract these from the P&L control totals so Council fees don't inflate
+  // any department's line item (they're handled separately, not in the
+  // budget department views).
+  const [rawTotals, accountCatalog, glByAccount, councilSubtraction] = await Promise.all([
     readAggregatedPnlTotals(entity, start, end),
     readCachedAccountCatalogByNumber(entity),
     readCachedGeneralLedgerByAccount<QboGeneralLedgerReport>(entity, start, end),
+    loadCouncilSubtractionByAccount(entity, start, end),
   ])
+  const accountTotals = applyCouncilSubtraction(rawTotals, councilSubtraction)
 
   const lines = createEmptyLineAmounts()
   const unclassifiedLines = createEmptyLineAmounts()
