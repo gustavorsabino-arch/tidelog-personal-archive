@@ -104,6 +104,7 @@ export function OrcaLedgerClient({ initialEntity }: Props) {
     ? rows.find(r => r.txHash === openRow.txHash && r.walletAddr === openRow.internalPairedWalletAddr) ?? null
     : null
   const openSummary = openRow ? summaryByWallet[openRow.walletAddr] ?? null : null
+  const targetIsFiltered = openRow != null && !filtered.includes(openRow)
 
   // Click-to-jump
   const tableRef = useRef<HTMLDivElement>(null)
@@ -117,6 +118,26 @@ export function OrcaLedgerClient({ initialEntity }: Props) {
         setTimeout(() => el.classList.remove('row-highlight'), 1500)
       }
     })
+  }
+
+  function handleShowInTable() {
+    setDirFilter('')
+    setTypeFilter('')
+    setYearFilter('')
+    setMonthFilter('')
+    setWalletFilter('')
+    // After React flushes the filter clear, retry the scroll/highlight on
+    // the now-visible row. Double rAF ensures the table has re-rendered.
+    if (!openTxKey) return
+    const targetKey = openTxKey
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const el = tableRef.current?.querySelector(`[data-row-key="${CSS.escape(targetKey)}"]`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.classList.add('row-highlight')
+        setTimeout(() => el.classList.remove('row-highlight'), 1500)
+      }
+    }))
   }
 
   function handleExport() {
@@ -226,6 +247,8 @@ export function OrcaLedgerClient({ initialEntity }: Props) {
         walletSummary={openSummary}
         onClose={() => setOpenTxKey(null)}
         onJumpTo={jumpTo}
+        targetIsFiltered={targetIsFiltered}
+        onShowInTable={handleShowInTable}
       />
     </div>
   )
