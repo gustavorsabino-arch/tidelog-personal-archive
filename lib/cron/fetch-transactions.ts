@@ -19,6 +19,7 @@ type ParsedMove = {
   price: number | null
   usd: number | null
   priceSource: string | null
+  counterparty: string | null
 }
 
 /** Convert a ParsedMove (cron-internal) to the Transaction shape that
@@ -37,9 +38,73 @@ function moveToTx(m: ParsedMove): Transaction {
     price: m.price,
     usd: m.usd,
     priceSource: m.priceSource,
-    counterparty: null,
+    counterparty: m.counterparty,
     category: null,
   }
+}
+
+/**
+ * Find the wallet owner most likely to be the counterparty for a movement
+ * of `ourDelta` units of `mint` (null = SOL) for `ourOwner`.
+ *
+ * Aggregates per-owner deltas across the relevant balance arrays and returns
+ * the owner with the largest opposite-direction delta. Returns null when no
+ * candidate exists or `meta` lacks the necessary fields.
+ *
+ * Notes:
+ * - For SPL tokens, the same owner can appear across multiple ATAs in one tx
+ *   (e.g. fee account + main account); aggregating by owner avoids returning
+ *   one ATA's owner multiple times.
+ * - For multi-leg routes (e.g. Jupiter swaps), the largest opposite-side
+ *   owner wins — usually the AMM pool. UI can render the address; the user
+ *   can click Solscan if they need to see the protocol.
+ * - Returns null instead of falling back to ATA pubkeys — keeps the column
+ *   honest: only ever a wallet owner address, or empty.
+ */
+function findCounterpartyOwner(
+  ourOwner: string,
+  ourDelta: number,
+  mint: string | null,
+  meta: any,
+  accountKeys: string[],
+): string | null {
+  const totals = new Map<string, number>()
+  if (mint === null) {
+    // SOL — index aligns with accountKeys; the key itself is the "owner" for system accounts.
+    const pre = meta?.preBalances ?? []
+    const post = meta?.postBalances ?? []
+    const len = Math.min(accountKeys.length, pre.length, post.length)
+    for (let i = 0; i < len; i++) {
+      const owner = accountKeys[i]
+      if (!owner) continue
+      const delta = ((post[i] ?? 0) - (pre[i] ?? 0)) / 1e9
+      totals.set(owner, (totals.get(owner) ?? 0) + delta)
+    }
+  } else {
+    for (const b of meta?.preTokenBalances ?? []) {
+      if (b.mint !== mint || !b.owner) continue
+      const amt = parseFloat(b.uiTokenAmount?.uiAmountString ?? '0')
+      totals.set(b.owner, (totals.get(b.owner) ?? 0) - amt)
+    }
+    for (const b of meta?.postTokenBalances ?? []) {
+      if (b.mint !== mint || !b.owner) continue
+      const amt = parseFloat(b.uiTokenAmount?.uiAmountString ?? '0')
+      totals.set(b.owner, (totals.get(b.owner) ?? 0) + amt)
+    }
+  }
+
+  let best: string | null = null
+  let bestAbs = 0
+  for (const [owner, delta] of totals) {
+    if (owner === ourOwner) continue
+    if (Math.sign(delta) === Math.sign(ourDelta)) continue
+    const abs = Math.abs(delta)
+    if (abs > bestAbs) {
+      bestAbs = abs
+      best = owner
+    }
+  }
+  return best
 }
 
 /**
@@ -47,7 +112,8 @@ function moveToTx(m: ParsedMove): Transaction {
  * Extracts SOL deltas from pre/post balances and token deltas from pre/post token balances
  * for focus tokens only (SOL, ORCA, USDC, USDT).
  */
-function parseTransaction(
+// exported for tests
+export function parseTransaction(
   tx: any,
   walletAddress: string,
   entityId: string,
@@ -82,6 +148,7 @@ function parseTransaction(
         price: null,
         usd: null,
         priceSource: null,
+        counterparty: findCounterpartyOwner(walletAddress, delta, null, meta, keys),
       })
     }
   }
@@ -116,6 +183,7 @@ function parseTransaction(
       price: STABLE_TOKENS.has(sym) ? 1 : null,
       usd: STABLE_TOKENS.has(sym) ? Math.abs(delta) : null,
       priceSource: STABLE_TOKENS.has(sym) ? 'stable' : null,
+      counterparty: findCounterpartyOwner(walletAddress, delta, mint, meta, keys),
     })
   }
 
@@ -230,6 +298,7 @@ async function processWallet(
           price: h.price != null ? String(h.price) : null,
           usd: h.usd != null ? String(h.usd) : null,
           priceSource: h.priceSource,
+          counterparty: m.counterparty,
         }
       })
       const res = await db.insert(transaction).values(rowsToInsert).onConflictDoNothing().returning()
