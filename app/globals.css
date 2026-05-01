@@ -484,3 +484,21 @@ th.sortable:hover { color: var(--accent) }
   .admin-access-month-grid { grid-template-columns: 1fr }
   .admin-access-department-grid { grid-template-columns: 1fr }
 }
+
+.row-highlight {
+  background: rgba(0, 168, 168, 0.18) !important;
+  transition: background 1.5s ease-out;
+}
+
+@keyframes drawer-header-flash {
+  0% { background: rgba(0, 168, 168, 0.22); }
+  100% { background: transparent; }
+}
+.drawer-header-flash {
+  animation: drawer-header-flash 1.2s ease-out;
+  border-radius: 6px;
+  padding-right: 36px;  /* keep close button clear */
+  margin-right: -8px;
+  margin-left: -8px;
+  padding-left: 8px;
+}

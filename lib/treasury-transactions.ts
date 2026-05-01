@@ -76,6 +76,11 @@ export async function getTreasuryTransactions({
   }
   if (walletAddr) conditions.push(eq(transaction.walletAddress, walletAddr))
 
+  // Hide synthetic genesis rows from generic transaction reads. The ORCA Ledger
+  // queries directly without this clause so genesis flows into FIFO and the
+  // dedicated ledger UI.
+  conditions.push(sql`${transaction.priceSource} IS DISTINCT FROM 'genesis'`)
+
   const where = and(...conditions)
   // `limit == null` means "unbounded" — FIFO-style internal callers rely on
   // getting every row. `0` or negative means "use a sensible default for UI".
@@ -141,6 +146,7 @@ export async function getTransactionMonths({
 }): Promise<string[]> {
   const conditions = [eq(transaction.entityId, toDbEntity(entity))]
   if (asset) conditions.push(eq(transaction.asset, asset))
+  conditions.push(sql`${transaction.priceSource} IS DISTINCT FROM 'genesis'`)
 
   const monthExpr = sql<string>`to_char(${transaction.blockTime} at time zone 'UTC', 'YYYY-MM')`
   const rows = await db

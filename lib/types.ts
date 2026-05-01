@@ -291,3 +291,71 @@ export interface UnrealizedEntry {
 }
 
 export type Entity = 'Opco' | 'Foundation' | 'Juku' | 'Zagreus'
+
+// ── ORCA Ledger ─────────────────────────────────────────────────────────────
+// Per-acquisition-lot contribution to a single tx.
+// External Out: each lot consumed by this disposal.
+// External In:  one entry describing the lot just created.
+// Internal In:  one entry per lot moved from sender's queue (cost basis preserved).
+// Internal Out: empty (no realization; basis just moved).
+export interface LotTraceEntry {
+  qty: number              // qty taken from / added to this lot for this tx
+  costPerUnit: number      // $ per unit on the lot
+  acqDate: string          // ISO — the lot's original acquisition date
+  acqTxHash: string        // for click-to-jump back to source row
+  acqWalletAddr: string    // important for internal transfers
+  daysHeld: number         // (txDate - acqDate) / 86400
+  term: 'ST' | 'LT'        // <365 days = ST
+  gain: number             // disposal-only: proceeds - cost; In rows = 0
+}
+
+// Public projection of an open lot (engine's internal Lot type stays internal).
+export interface OpenLotView {
+  walletAddr: string
+  qty: number
+  costPerUnit: number
+  acqDate: string
+}
+
+// Full enrichment of a single ORCA tx row.
+export interface OrcaLedgerRow {
+  txHash: string
+  walletAddr: string
+  wallet: string
+  entity: string
+  blockTime: number
+  date: string
+  asset: 'ORCA'
+  qty: number
+  dir: 'In' | 'Out'
+  price: number | null
+  usd: number | null
+  priceSource: string | null
+  counterparty: string | null
+  counterpartyLabel: string | null
+  counterpartyEntity: string | null
+  internal: boolean
+  internalPairedWalletAddr: string | null
+  internalPairedWalletLabel: string | null
+  balanceAfter: number
+  lots: LotTraceEntry[]
+  realizedGain: number
+  realizedTerm: 'ST' | 'LT' | 'mixed' | null
+  noBasis: boolean
+}
+
+export interface OrcaWalletSummary {
+  walletAddr: string
+  wallet: string
+  totalQty: number
+  avgCostPerUnit: number
+  remainingLots: { qty: number; costPerUnit: number; acqDate: string }[]
+  lifetimeRealizedGain: number
+  noBasis: boolean
+}
+
+export interface OrcaLedgerResponse {
+  rows: OrcaLedgerRow[]
+  summaryByWallet: Record<string, OrcaWalletSummary>
+  computedAt: string
+}
