@@ -257,7 +257,7 @@ function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: str
       </td>
       <td style={{ lineHeight: 1.4 }}>
         <span style={{ fontSize: '0.72rem' }}>{row.wallet.slice(0, 20)}</span>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 2 }} onClick={stop}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }} onClick={stop}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--muted)' }}>{fmtAddr(row.walletAddr)}</span>
           <CopyButton address={row.walletAddr} />
         </div>
@@ -275,7 +275,7 @@ function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: str
           return (
             <>
               <span style={{ fontSize: '0.7rem' }}>{label ?? fmtAddr(addr, 6)}</span>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 2 }} onClick={stop}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }} onClick={stop}>
                 <a href={`https://solscan.io/account/${addr}`} target="_blank" rel="noreferrer" style={{ fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--muted)', textDecoration: 'none' }}>{fmtAddr(addr, 6)}</a>
                 <CopyButton address={addr} />
               </div>
