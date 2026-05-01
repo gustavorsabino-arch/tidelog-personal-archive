@@ -1,6 +1,7 @@
 export const CRON_HISTORY_START = '2026-01'
 
 const FROM_RE = /^(\d{4})-(\d{2})$/
+const WALLET_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 
 export type ParseSuccess = {
   ok: true
@@ -8,6 +9,7 @@ export type ParseSuccess = {
   full: boolean
   force: boolean
   forceFrom: string | null
+  walletAddr: string | null
 }
 
 export type ParseFailure = { ok: false; error: string }
@@ -24,29 +26,39 @@ export function parseCronArgs(argv: string[]): ParseResult {
   const full = args.includes('--full')
   const force = args.includes('--force')
   let forceFrom: string | null = null
+  let walletAddr: string | null = null
 
   for (const arg of args) {
-    if (!arg.startsWith('--from=')) continue
-    const value = arg.slice('--from='.length)
-    const match = FROM_RE.exec(value)
-    if (!match) {
-      return { ok: false, error: `--from must be YYYY-MM (got: ${value})` }
+    if (arg.startsWith('--from=')) {
+      const value = arg.slice('--from='.length)
+      const match = FROM_RE.exec(value)
+      if (!match) {
+        return { ok: false, error: `--from must be YYYY-MM (got: ${value})` }
+      }
+      const month = Number(match[2])
+      if (month < 1 || month > 12) {
+        return { ok: false, error: `--from month must be 01-12 (got: ${value})` }
+      }
+      if (value < CRON_HISTORY_START) {
+        return { ok: false, error: `--from must be >= ${CRON_HISTORY_START} (got: ${value})` }
+      }
+      forceFrom = value
+      continue
     }
-    const month = Number(match[2])
-    if (month < 1 || month > 12) {
-      return { ok: false, error: `--from month must be 01-12 (got: ${value})` }
+    if (arg.startsWith('--wallet=')) {
+      const value = arg.slice('--wallet='.length)
+      if (!WALLET_ADDR_RE.test(value)) {
+        return { ok: false, error: `--wallet must be a base58 address, 32-44 chars (got: ${value})` }
+      }
+      walletAddr = value
     }
-    if (value < CRON_HISTORY_START) {
-      return { ok: false, error: `--from must be >= ${CRON_HISTORY_START} (got: ${value})` }
-    }
-    forceFrom = value
   }
 
   if (forceFrom !== null && !force) {
     return { ok: false, error: '--from requires --force' }
   }
 
-  return { ok: true, name, full, force, forceFrom }
+  return { ok: true, name, full, force, forceFrom, walletAddr }
 }
 
 export function looksLikeProd(databaseUrl: string | undefined): boolean {

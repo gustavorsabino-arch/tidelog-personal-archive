@@ -11,6 +11,9 @@
  *
  * Flags:
  *   --full                     (fetch-transactions only) drain full wallet history
+ *   --wallet=<addr>            (fetch-transactions only) limit to a single registered
+ *                              wallet by base58 address; combine with --full for a
+ *                              targeted historical backfill of one wallet.
  *   --force [--from=YYYY-MM]   (fetch-qb-reports only) delete cached rows in
  *                              range and re-fetch from QuickBooks. --from
  *                              defaults to 2026-01. Prompts before running
@@ -25,7 +28,7 @@ import { refreshQbTokensJob } from '@/lib/cron/refresh-qb-tokens'
 import { CRON_HISTORY_START, confirmDestructive, looksLikeProd, parseCronArgs } from './args'
 
 type JobResult = { ok: boolean; [k: string]: unknown }
-type JobOptions = { full?: boolean; force?: boolean; forceFrom?: string }
+type JobOptions = { full?: boolean; force?: boolean; forceFrom?: string; walletAddr?: string }
 
 const JOBS: Record<string, (opts?: JobOptions) => Promise<JobResult>> = {
   'fetch-balances': fetchBalancesJob,
@@ -36,10 +39,11 @@ const JOBS: Record<string, (opts?: JobOptions) => Promise<JobResult>> = {
 
 function usage(): never {
   console.error(
-    `usage: bun run cron <job-name> [--full] [--force [--from=YYYY-MM]]\n\n`
+    `usage: bun run cron <job-name> [--full] [--wallet=<addr>] [--force [--from=YYYY-MM]]\n\n`
     + `available jobs:\n  ${Object.keys(JOBS).join('\n  ')}\n\n`
     + `flags:\n`
     + `  --full            (fetch-transactions only) drain full wallet history\n`
+    + `  --wallet=<addr>   (fetch-transactions only) limit to a single registered wallet\n`
     + `  --force           (fetch-qb-reports only) delete cached rows in range, then re-fetch\n`
     + `  --from=YYYY-MM    (with --force) earliest month to re-fetch; default ${CRON_HISTORY_START}`,
   )
@@ -64,6 +68,11 @@ async function main() {
     process.exit(2)
   }
 
+  if (parsed.walletAddr && parsed.name !== 'fetch-transactions') {
+    console.error(`--wallet is only supported for fetch-transactions (got: ${parsed.name})`)
+    process.exit(2)
+  }
+
   const forceFrom = parsed.force ? (parsed.forceFrom ?? CRON_HISTORY_START) : undefined
 
   if (parsed.force && looksLikeProd(process.env.DATABASE_URL)) {
@@ -81,7 +90,12 @@ async function main() {
 
   const startedAt = Date.now()
   try {
-    const result = await job({ full: parsed.full, force: parsed.force, forceFrom })
+    const result = await job({
+      full: parsed.full,
+      force: parsed.force,
+      forceFrom,
+      walletAddr: parsed.walletAddr ?? undefined,
+    })
     const durationMs = Date.now() - startedAt
     await logAudit({
       action: `cron.${parsed.name}.succeeded`,

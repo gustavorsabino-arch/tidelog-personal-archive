@@ -13,7 +13,41 @@ test('parses bare job name', () => {
     full: false,
     force: false,
     forceFrom: null,
+    walletAddr: null,
   })
+})
+
+test('parses --wallet=<addr>', () => {
+  const addr = 'HnfkTtEG1ZEfyv3bkXeHu1J7ef2DzuDmQ99DDbQs8jg1'
+  const res = parse(['fetch-transactions', `--wallet=${addr}`])
+  expect(res.ok).toBe(true)
+  if (res.ok) expect(res.walletAddr).toBe(addr)
+})
+
+test('parses --full --wallet=<addr> together', () => {
+  const addr = 'HnfkTtEG1ZEfyv3bkXeHu1J7ef2DzuDmQ99DDbQs8jg1'
+  const res = parse(['fetch-transactions', '--full', `--wallet=${addr}`])
+  expect(res.ok).toBe(true)
+  if (res.ok) {
+    expect(res.full).toBe(true)
+    expect(res.walletAddr).toBe(addr)
+  }
+})
+
+test('rejects malformed --wallet (too short)', () => {
+  const res = parse(['fetch-transactions', '--wallet=tooShort'])
+  expect(res.ok).toBe(false)
+  if (!res.ok) expect(res.error).toContain('--wallet')
+})
+
+test('rejects malformed --wallet (contains 0/O/I/l ambiguous chars)', () => {
+  const res = parse(['fetch-transactions', '--wallet=0OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO'])
+  expect(res.ok).toBe(false)
+})
+
+test('rejects empty --wallet=', () => {
+  const res = parse(['fetch-transactions', '--wallet='])
+  expect(res.ok).toBe(false)
 })
 
 test('parses --full', () => {
