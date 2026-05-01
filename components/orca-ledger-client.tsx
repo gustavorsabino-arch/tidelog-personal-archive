@@ -6,6 +6,7 @@ import { ENTITIES } from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtAddr, MONTH_SHORT_NAMES } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
 import { OrcaLedgerDrawer } from '@/components/orca-ledger-drawer'
+import { CopyButton } from '@/components/copy-button'
 import { exportOrcaLedgerXLSX } from '@/lib/orca-ledger-export'
 import type { OrcaLedgerResponse, OrcaLedgerRow } from '@/lib/types'
 
@@ -243,7 +244,11 @@ function Card({ label, value, sub, className }: { label: string; value: string; 
 
 function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: string; onOpen: (k: string) => void }) {
   const isGenesis = row.priceSource === 'genesis'
-  const typePill = isGenesis ? { label: 'GENESIS', bg: '#3a2a1a', fg: '#fc6' } : row.internal ? { label: 'INTERNAL', bg: '#1a2035', fg: '#6af' } : { label: 'EXTERNAL', bg: '#1a2a1a', fg: '#6f6' }
+  const typePill = isGenesis
+    ? { label: 'GENESIS',  bg: 'var(--orange-bg)',  fg: 'var(--orange)',  border: 'color-mix(in srgb, var(--orange) 25%, transparent)' }
+    : row.internal
+      ? { label: 'INTERNAL', bg: 'var(--accent-bg)', fg: 'var(--accent)', border: 'color-mix(in srgb, var(--accent) 25%, transparent)' }
+      : { label: 'EXTERNAL', bg: 'transparent',     fg: 'var(--muted)',  border: 'var(--border)' }
   const stop = (e: React.MouseEvent) => e.stopPropagation()
   return (
     <tr data-row-key={k} onClick={() => onOpen(k)} style={{ cursor: 'pointer' }}>
@@ -251,8 +256,11 @@ function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: str
         {new Date(row.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
       </td>
       <td style={{ lineHeight: 1.4 }}>
-        <span style={{ fontSize: '0.72rem' }}>{row.wallet.slice(0, 20)}</span><br />
-        <span style={{ fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--muted)', cursor: 'pointer' }} onClick={(e) => { stop(e); navigator.clipboard?.writeText(row.walletAddr) }} title={row.walletAddr}>{fmtAddr(row.walletAddr)} 📋</span>
+        <span style={{ fontSize: '0.72rem' }}>{row.wallet.slice(0, 20)}</span>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 2 }} onClick={stop}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--muted)' }}>{fmtAddr(row.walletAddr)}</span>
+          <CopyButton address={row.walletAddr} />
+        </div>
       </td>
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ fontWeight: 700, textAlign: 'center', fontSize: '1rem' }}>{row.dir === 'In' ? '↑' : '↓'}</td>
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{row.dir === 'In' ? '+' : '-'}{fmtNum(row.qty, 2)}</td>
@@ -260,14 +268,33 @@ function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: str
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{row.usd != null ? fmtUSD(row.usd) : '—'}</td>
       <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem', color: row.balanceAfter < 0 ? 'var(--red)' : 'var(--text)' }}>{fmtNum(row.balanceAfter, 2)}</td>
       <td style={{ lineHeight: 1.4 }}>
-        {row.counterparty ? (
-          <>
-            <span style={{ fontSize: '0.7rem' }}>{(row.counterpartyLabel ?? fmtAddr(row.counterparty, 6))}</span><br />
-            <a onClick={stop} href={`https://solscan.io/account/${row.counterparty}`} target="_blank" rel="noreferrer" style={{ fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--muted)' }}>{fmtAddr(row.counterparty, 6)}</a>
-          </>
-        ) : <span style={{ color: 'var(--muted)' }}>—</span>}
+        {(() => {
+          const addr = row.counterparty ?? row.internalPairedWalletAddr
+          const label = row.counterpartyLabel ?? row.internalPairedWalletLabel
+          if (!addr) return <span style={{ color: 'var(--muted)' }}>—</span>
+          return (
+            <>
+              <span style={{ fontSize: '0.7rem' }}>{label ?? fmtAddr(addr, 6)}</span>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 2 }} onClick={stop}>
+                <a href={`https://solscan.io/account/${addr}`} target="_blank" rel="noreferrer" style={{ fontFamily: 'var(--mono)', fontSize: '0.63rem', color: 'var(--muted)', textDecoration: 'none' }}>{fmtAddr(addr, 6)}</a>
+                <CopyButton address={addr} />
+              </div>
+            </>
+          )
+        })()}
       </td>
-      <td><span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', padding: '2px 6px', borderRadius: 3, background: typePill.bg, color: typePill.fg }}>{typePill.label}</span></td>
+      <td>
+        <span style={{
+          fontFamily: 'var(--mono)',
+          fontSize: '0.65rem',
+          fontWeight: 600,
+          padding: '2px 6px',
+          borderRadius: 3,
+          background: typePill.bg,
+          color: typePill.fg,
+          border: `1px solid ${typePill.border}`,
+        }}>{typePill.label}</span>
+      </td>
       <td style={{ fontFamily: 'var(--mono)', fontSize: '0.67rem' }}><LotsCell row={row} /></td>
       <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.7rem', fontWeight: 600 }}>
         {row.dir === 'Out' && row.lots.length > 0 ? (

@@ -1,6 +1,7 @@
 'use client'
 import { useEffect } from 'react'
 import { fmtNum, fmtUSD, fmtAddr } from '@/lib/format'
+import { CopyButton } from '@/components/copy-button'
 import type { OrcaLedgerRow, OrcaWalletSummary, LotTraceEntry } from '@/lib/types'
 
 interface Props {
@@ -65,14 +66,24 @@ function Header({ row }: { row: OrcaLedgerRow }) {
       <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
         {new Date(row.date).toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' })} UTC
       </div>
-      <div style={{ fontSize: '0.78rem', marginTop: 8 }}>
-        <strong>{row.wallet}</strong> · <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted)' }}>{fmtAddr(row.walletAddr, 6)}</span>
+      <div style={{ fontSize: '0.78rem', marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <strong>{row.wallet}</strong>
+        <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted)' }}>{fmtAddr(row.walletAddr, 6)}</span>
+        <CopyButton address={row.walletAddr} />
       </div>
-      {row.counterparty && (
-        <div style={{ fontSize: '0.78rem' }}>
-          Counterparty: {row.counterpartyLabel ?? <span style={{ fontFamily: 'var(--mono)' }}>{fmtAddr(row.counterparty, 6)}</span>}
-        </div>
-      )}
+      {(() => {
+        const addr = row.counterparty ?? row.internalPairedWalletAddr
+        const label = row.counterpartyLabel ?? row.internalPairedWalletLabel
+        if (!addr) return null
+        return (
+          <div style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>Counterparty:</span>
+            {label && <span>{label}</span>}
+            <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted)' }}>{fmtAddr(addr, 6)}</span>
+            <CopyButton address={addr} />
+          </div>
+        )
+      })()}
       <div style={{ fontSize: '0.78rem' }}>
         Tx: {isGenesis
           ? <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted2)' }}>{row.txHash}</span>

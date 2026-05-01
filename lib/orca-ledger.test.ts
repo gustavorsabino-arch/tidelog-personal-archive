@@ -86,6 +86,7 @@ function makeRow(over: Partial<OrcaLedgerRow>): OrcaLedgerRow {
     counterpartyEntity: null,
     internal: false,
     internalPairedWalletAddr: null,
+    internalPairedWalletLabel: null,
     balanceAfter: 0,
     lots,
     realizedGain,

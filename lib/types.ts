@@ -336,6 +336,7 @@ export interface OrcaLedgerRow {
   counterpartyEntity: string | null
   internal: boolean
   internalPairedWalletAddr: string | null
+  internalPairedWalletLabel: string | null
   balanceAfter: number
   lots: LotTraceEntry[]
   realizedGain: number

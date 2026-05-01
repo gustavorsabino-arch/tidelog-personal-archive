@@ -14,7 +14,7 @@ const sampleRow: OrcaLedgerRow = {
   blockTime: 1700000000, date: '2023-11-14T22:13:20Z', asset: 'ORCA',
   qty: 100, dir: 'Out', price: 2, usd: 200, priceSource: 'birdeye',
   counterparty: 'cp1', counterpartyLabel: null, counterpartyEntity: null,
-  internal: false, internalPairedWalletAddr: null, balanceAfter: 0,
+  internal: false, internalPairedWalletAddr: null, internalPairedWalletLabel: null, balanceAfter: 0,
   lots: [
     { qty: 60, costPerUnit: 1, acqDate: '2023-01-01', acqTxHash: 't0a', acqWalletAddr: 'wA', daysHeld: 300, term: 'ST', gain: 60 },
     { qty: 40, costPerUnit: 1.5, acqDate: '2023-06-01', acqTxHash: 't0b', acqWalletAddr: 'wA', daysHeld: 160, term: 'ST', gain: 20 },

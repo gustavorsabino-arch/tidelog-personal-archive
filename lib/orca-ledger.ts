@@ -99,6 +99,9 @@ export async function getOrcaLedger(entity: string): Promise<OrcaLedgerResponse>
       counterpartyEntity: cp?.entity ?? null,
       internal: traceEntry.internal,
       internalPairedWalletAddr: traceEntry.internalPairedWalletAddr,
+      internalPairedWalletLabel: traceEntry.internalPairedWalletAddr
+        ? walletInfo.get(traceEntry.internalPairedWalletAddr)?.label ?? null
+        : null,
       balanceAfter: traceEntry.balanceAfter,
       lots: traceEntry.lots,
       realizedGain,
