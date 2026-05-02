@@ -618,6 +618,9 @@ th.sortable:hover { color: var(--accent) }
     gap: 8px;
   }
 
+  /* Budget admin entry points hidden on mobile/tablet — desktop-only flows. */
+  .budget-admin-only { display: none !important }
+
 }
 
 .row-highlight {
