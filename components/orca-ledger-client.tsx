@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import useSWR, { mutate } from 'swr'
+import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES } from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtAddr, MONTH_SHORT_NAMES } from '@/lib/format'
@@ -158,17 +158,12 @@ export function OrcaLedgerClient({ initialEntity }: Props) {
         <div className="page-sub">ORCA token movements with FIFO trace</div>
       </div>
 
-      <div className="controls-bar" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div className="controls-bar">
         <div className="entity-tabs">
           {ENTITIES.map(e => (
             <button key={e} className={`entity-tab${entity === e ? ' active' : ''}`} onClick={() => setEntity(e)}>{e}</button>
           ))}
         </div>
-        <button
-          onClick={() => mutate(swrKey)}
-          style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: '0.7rem', padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--muted)', cursor: 'pointer' }}
-          title="Re-fetch from server"
-        >⟳ Refresh</button>
       </div>
 
       {isLoading ? <LoadingSkeleton /> : error ? <div className="error-msg">{error}</div> : (

@@ -156,6 +156,8 @@ td.num { text-align: right }
 td.green { color: var(--green) }
 td.red { color: var(--red) }
 td.muted { color: var(--muted); font-size: 0.7rem }
+.gain-pos { color: var(--green) }
+.gain-neg { color: var(--red) }
 td.label { font-family: var(--sans); font-size: 0.78rem }
 
 /* ─── FILTER CONTROLS ─────────────────────────────────────────── */
