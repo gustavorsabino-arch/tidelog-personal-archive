@@ -9,6 +9,11 @@ const sans = IBM_Plex_Sans({ subsets: ['latin'], weight: ['400', '500', '600', '
 
 export const metadata = { title: 'Tidelog' }
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+}
+
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // Resolve access from x-user-* headers (set by the proxy) on the server so
   // the client paints with access already in hand — no /api/me round-trip.
