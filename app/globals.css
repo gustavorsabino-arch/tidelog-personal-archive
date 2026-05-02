@@ -617,6 +617,20 @@ th.sortable:hover { color: var(--accent) }
     width: 100%;
     gap: 8px;
   }
+
+  /* Sticky-scroll behaviour for drill-modal tables. Mirrors .table-wrap rules
+     but scoped to the .mobile-sticky-table class so it works inside modal
+     scroll containers (which aren't .table-wrap). */
+  .mobile-sticky-table { display: block; overflow-x: auto; }
+  .mobile-sticky-table thead th { position: sticky; top: 0; z-index: 2 }
+  .mobile-sticky-table th.sticky-first,
+  .mobile-sticky-table td.sticky-first {
+    position: sticky; left: 0;
+    background: var(--surface);
+    z-index: 1;
+    box-shadow: 1px 0 0 var(--border);
+  }
+  .mobile-sticky-table thead th.sticky-first { z-index: 3; background: var(--surface2) }
 }
 
 .row-highlight {

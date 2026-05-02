@@ -97,10 +97,10 @@ export function BudgetRevenueMonthlyModal({
                 {breakdown.entity} · YTD total {fmtUSD(breakdown.ytdTotalUsd, 0)} · Annual {fmtUSD(breakdown.annualTotalUsd, 0)}
               </div>
               <div className="table-wrap">
-                <table className="budget-actual-drill-table">
+                <table className="budget-actual-drill-table mobile-sticky-table">
                   <thead>
                     <tr>
-                      <th>Month</th>
+                      <th className="sticky-first">Month</th>
                       <th className="num">Revenue</th>
                     </tr>
                   </thead>
@@ -113,7 +113,7 @@ export function BudgetRevenueMonthlyModal({
 
                       return (
                         <tr key={entry.month} style={{ opacity: muted ? 0.45 : 1 }}>
-                          <td className="label" style={{ color: muted ? 'var(--muted)' : undefined }}>
+                          <td className="sticky-first label" style={{ color: muted ? 'var(--muted)' : undefined }}>
                             {MONTH_LABELS[entry.month] ?? entry.month}
                           </td>
                           <td className="num" style={{ fontWeight: 600, color: tone }}>
