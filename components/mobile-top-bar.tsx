@@ -4,6 +4,8 @@ import { usePathname } from 'next/navigation'
 import { Sidebar } from './sidebar'
 import type { AccessMeResponse } from '@/lib/access-model'
 
+// Mobile top bar uses shorter labels than the desktop Sidebar's NAV_ITEMS to
+// fit the 52px-tall bar; intentional divergence, not an oversight.
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Overview',
   '/treasury-management': 'Treasury Mgmt',
@@ -67,6 +69,7 @@ export function MobileTopBar({ access }: { access: AccessMeResponse | null }) {
             type="button"
             className="mobile-drawer-backdrop"
             aria-label="Close menu"
+            tabIndex={-1}
             onClick={() => setOpen(false)}
           />
           <div className="mobile-drawer-panel">
