@@ -580,6 +580,16 @@ th.sortable:hover { color: var(--accent) }
   }
   .table-wrap thead th.sticky-first { z-index: 3; background: var(--surface2) } /* above body sticky cells; match sticky header bg */
   .table-wrap tbody tr:hover td.sticky-first { background: var(--bg) }
+
+  /* Budget report has a two-row header (group labels + Budget/Actual/Var).
+     The second row sticks below the first using a fixed top offset. */
+  .budget-report-table-wrap thead tr:nth-child(2) th { top: 32px } /* ≈ first row line-height with padding */
+  .budget-report-table-wrap thead .budget-report-group-header { z-index: 2 }
+  .budget-report-table-wrap thead .budget-table-divider { z-index: 2 }
+
+  /* Compact divider columns on phone so they don't waste horizontal space */
+  .budget-report-table-wrap td.budget-table-divider { min-width: 6px; padding: 0 }
+  .budget-report-table-wrap th.budget-table-divider { min-width: 6px; padding: 0 }
 }
 
 .row-highlight {
