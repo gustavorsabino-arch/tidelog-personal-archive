@@ -483,8 +483,33 @@ th.sortable:hover { color: var(--accent) }
 }
 
 @media (max-width: 640px) {
+  /* Existing admin grid stacking */
   .admin-access-month-grid { grid-template-columns: 1fr }
   .admin-access-department-grid { grid-template-columns: 1fr }
+
+  /* Mobile baseline — prevents iOS auto-zoom on input focus */
+  input, select, textarea { font-size: 16px }
+
+  /* Mobile baseline — readable touch targets on interactive controls.
+     Scoped to elements that are explicitly buttons/triggers, NOT every link. */
+  button:not(.budget-table-cell-button):not(.budget-chip-remove),
+  .btn-primary,
+  .btn-secondary,
+  .fetch-btn,
+  .tab-btn,
+  .dept-pill,
+  .sb-item { min-height: 44px }
+
+  /* Mobile baseline — readable table density */
+  table { font-size: 0.82rem }
+  thead th { font-size: 0.7rem; padding: 10px 12px }
+  tbody td { padding: 10px 12px }
+
+  /* Drill cells specifically — bigger tap target inside cells */
+  .budget-table-cell-button { min-height: 40px; padding: 8px 6px }
+
+  /* Modal padding tightened for narrow phones */
+  .modal { padding: 14px }
 }
 
 .row-highlight {
