@@ -45,7 +45,7 @@ function PnlRow({ node, depth }: { node: PnlSection | PnlAccount; depth: number 
   if (node.kind === 'account') {
     return (
       <tr>
-        <td style={{ padding: '6px 10px', paddingLeft: depth * 16 + 10 }}>
+        <td style={{ paddingTop: 6, paddingRight: 10, paddingBottom: 6, paddingLeft: depth * 16 + 10 }}>
           {node.glCode ? (
             <span style={{
               fontFamily: 'var(--mono)', fontSize: '0.7rem', background: 'var(--surface2)',
@@ -63,7 +63,7 @@ function PnlRow({ node, depth }: { node: PnlSection | PnlAccount; depth: number 
     <>
       <tr>
         <td colSpan={2} style={{
-          padding: '8px 10px', paddingLeft: depth * 16 + 10,
+          paddingTop: 8, paddingRight: 10, paddingBottom: 8, paddingLeft: depth * 16 + 10,
           fontWeight: 600, fontSize: '0.85rem', color: sectionColor(node.sectionKind),
           borderTop: '1px solid var(--border)',
         }}>
