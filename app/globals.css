@@ -590,6 +590,14 @@ th.sortable:hover { color: var(--accent) }
   /* Compact divider columns on phone so they don't waste horizontal space */
   .budget-report-table-wrap td.budget-table-divider { min-width: 6px; padding: 0 }
   .budget-report-table-wrap th.budget-table-divider { min-width: 6px; padding: 0 }
+
+  /* Restore row-variant tints on the sticky first column (otherwise the
+     0,2,1-specificity sticky-first rule would mask the 0,1,1 row tints). */
+  .budget-report-category-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 84%, white 16%) }
+  .budget-report-category-row-revenue td.sticky-first { background: #e6f9f4 }
+  .budget-report-total-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 92%, white 8%) }
+  .budget-report-grand-total-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 88%, white 12%) }
+  .budget-report-revenue-row td.sticky-first { background: #f0fdf7 }
 }
 
 .row-highlight {
