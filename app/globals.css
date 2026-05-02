@@ -492,7 +492,7 @@ th.sortable:hover { color: var(--accent) }
 
   /* Mobile baseline — readable touch targets on interactive controls.
      Scoped to elements that are explicitly buttons/triggers, NOT every link. */
-  button:not(.budget-table-cell-button):not(.budget-chip-remove),
+  button:not(.budget-table-cell-button):not(.budget-chip-remove):not(.entity-tab):not(.mode-btn),
   .btn-primary,
   .btn-secondary,
   .fetch-btn,
@@ -508,8 +508,10 @@ th.sortable:hover { color: var(--accent) }
   /* Drill cells specifically — bigger tap target inside cells */
   .budget-table-cell-button { min-height: 40px; padding: 8px 6px }
 
-  /* Modal padding tightened for narrow phones */
-  .modal { padding: 14px }
+  /* Modal padding tightened for narrow phones (preserves full-width section borders) */
+  .modal-header { padding: 12px 14px }
+  .modal-body { padding: 12px 14px }
+  .modal-footer { padding: 10px 14px }
 }
 
 .row-highlight {
