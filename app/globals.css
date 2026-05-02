@@ -578,7 +578,7 @@ th.sortable:hover { color: var(--accent) }
     z-index: 1;
     box-shadow: 1px 0 0 var(--border);
   }
-  .table-wrap thead th.sticky-first { z-index: 3 } /* above the body sticky cells */
+  .table-wrap thead th.sticky-first { z-index: 3; background: var(--surface2) } /* above body sticky cells; match sticky header bg */
   .table-wrap tbody tr:hover td.sticky-first { background: var(--bg) }
 }
 
