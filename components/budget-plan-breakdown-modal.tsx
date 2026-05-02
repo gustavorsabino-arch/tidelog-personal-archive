@@ -39,7 +39,7 @@ export function BudgetPlanBreakdownModal({ breakdown, onClose }: BudgetPlanBreak
           <button className="modal-close" onClick={onClose} aria-label="Close budget breakdown modal">×</button>
         </div>
 
-        <div className="modal-body" style={{ padding: 20 }}>
+        <div className="modal-body">
           <div className="table-wrap">
             <table>
               <thead>

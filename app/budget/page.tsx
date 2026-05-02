@@ -1179,6 +1179,7 @@ export default function BudgetPage() {
                         <button type="button" className="card-clickable budget-admin-only" onClick={() => setSelectedHeadcountDepartment(dept)}>
                           {getBudgetDepartmentLabel(dept)}
                         </button>
+                        <span className="budget-admin-fallback">{getBudgetDepartmentLabel(dept)}</span>
                       </td>
                       <td className="num">{count}</td>
                       <td className="num">{fmtUSD(salaryUsd, 0)}</td>

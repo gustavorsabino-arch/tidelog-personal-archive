@@ -536,6 +536,7 @@ th.sortable:hover { color: var(--accent) }
   .admin-access-inline-warning { max-width: 100% }
   /* Budget admin entry points hidden on mobile/tablet — desktop-only flows. */
   .budget-admin-only { display: none !important }
+  .budget-admin-fallback { display: inline-block }
 }
 
 @media (max-width: 640px) {
@@ -626,6 +627,8 @@ th.sortable:hover { color: var(--accent) }
   background: rgba(0, 168, 168, 0.18) !important;
   transition: background 1.5s ease-out;
 }
+
+.budget-admin-fallback { display: none }
 
 @keyframes drawer-header-flash {
   0% { background: rgba(0, 168, 168, 0.22); }
