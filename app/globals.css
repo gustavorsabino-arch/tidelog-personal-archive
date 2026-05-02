@@ -598,6 +598,25 @@ th.sortable:hover { color: var(--accent) }
   .budget-report-total-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 92%, white 8%) }
   .budget-report-grand-total-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 88%, white 12%) }
   .budget-report-revenue-row td.sticky-first { background: #f0fdf7 }
+
+  /* Budget scope controls — stack vertically, full-width selects */
+  .budget-scope-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .budget-scope-toolbar .budget-scope-inline-field {
+    width: 100%;
+  }
+  .budget-scope-toolbar .budget-scope-inline-field .fsel {
+    width: 100%;
+    min-height: 44px;
+  }
+  .budget-scope-mode-wrap {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 8px;
+  }
 }
 
 .row-highlight {
