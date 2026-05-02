@@ -41,7 +41,7 @@ export function BudgetPlanBreakdownModal({ breakdown, onClose }: BudgetPlanBreak
 
         <div className="modal-body" style={{ padding: 20 }}>
           <div className="table-wrap">
-            <table className="mobile-sticky-table">
+            <table>
               <thead>
                 <tr>
                   <th className="sticky-first">Department</th>

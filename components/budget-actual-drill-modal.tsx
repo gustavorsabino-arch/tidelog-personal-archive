@@ -101,7 +101,7 @@ export function BudgetActualDrillModal({
               ) : null}
 
               <div className="table-wrap">
-                <table className="budget-actual-drill-table mobile-sticky-table">
+                <table className="budget-actual-drill-table">
                   <thead>
                     <tr>
                       <th className="sticky-first">Transaction date</th>

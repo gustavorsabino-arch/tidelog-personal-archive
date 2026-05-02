@@ -97,7 +97,7 @@ export function BudgetRevenueMonthlyModal({
                 {breakdown.entity} · YTD total {fmtUSD(breakdown.ytdTotalUsd, 0)} · Annual {fmtUSD(breakdown.annualTotalUsd, 0)}
               </div>
               <div className="table-wrap">
-                <table className="budget-actual-drill-table mobile-sticky-table">
+                <table className="budget-actual-drill-table">
                   <thead>
                     <tr>
                       <th className="sticky-first">Month</th>
