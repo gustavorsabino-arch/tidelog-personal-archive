@@ -566,6 +566,20 @@ th.sortable:hover { color: var(--accent) }
   .modal-header { padding: 12px 14px }
   .modal-body { padding: 12px 14px }
   .modal-footer { padding: 10px 14px }
+
+  /* Sticky first column + sticky header inside .table-wrap on phones.
+     Applies to any table (DataTable or bespoke) whose first column cell
+     carries the .sticky-first class. */
+  .table-wrap thead th { position: sticky; top: 0; z-index: 2 }
+  .table-wrap th.sticky-first,
+  .table-wrap td.sticky-first {
+    position: sticky; left: 0;
+    background: var(--surface);
+    z-index: 1;
+    box-shadow: 1px 0 0 var(--border);
+  }
+  .table-wrap thead th.sticky-first { z-index: 3 } /* above the body sticky cells */
+  .table-wrap tbody tr:hover td.sticky-first { background: var(--bg) }
 }
 
 .row-highlight {

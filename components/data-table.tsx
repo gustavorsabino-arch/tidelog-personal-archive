@@ -48,12 +48,13 @@ export function DataTable<T extends Record<string, unknown>>({ data, columns, de
       <table>
         <thead>
           <tr>
-            {columns.map(col => (
+            {columns.map((col, index) => (
               <th
                 key={col.key}
                 className={[
                   col.numeric ? 'num' : '',
                   col.sortable !== false ? (sort.col === col.key ? `sort-${sort.dir}` : '') : 'no-sort',
+                  index === 0 ? 'sticky-first' : '',
                 ].filter(Boolean).join(' ')}
                 style={col.width ? { width: col.width } : undefined}
                 onClick={() => col.sortable !== false && toggleSort(col.key)}
@@ -73,8 +74,11 @@ export function DataTable<T extends Record<string, unknown>>({ data, columns, de
           ) : (
             sorted.map((row, i) => (
               <tr key={i}>
-                {columns.map(col => (
-                  <td key={col.key} className={col.numeric ? 'num' : ''}>
+                {columns.map((col, index) => (
+                  <td
+                    key={col.key}
+                    className={[col.numeric ? 'num' : '', index === 0 ? 'sticky-first' : ''].filter(Boolean).join(' ')}
+                  >
                     {col.render(row)}
                   </td>
                 ))}
