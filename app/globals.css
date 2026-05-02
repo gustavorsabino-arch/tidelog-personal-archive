@@ -534,6 +534,8 @@ th.sortable:hover { color: var(--accent) }
   .admin-access-form-actions { align-items: flex-start }
   .admin-access-button-row { width: 100%; justify-content: flex-start }
   .admin-access-inline-warning { max-width: 100% }
+  /* Budget admin entry points hidden on mobile/tablet — desktop-only flows. */
+  .budget-admin-only { display: none !important }
 }
 
 @media (max-width: 640px) {
@@ -617,9 +619,6 @@ th.sortable:hover { color: var(--accent) }
     width: 100%;
     gap: 8px;
   }
-
-  /* Budget admin entry points hidden on mobile/tablet — desktop-only flows. */
-  .budget-admin-only { display: none !important }
 
 }
 
