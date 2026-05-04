@@ -602,6 +602,16 @@ th.sortable:hover { color: var(--accent) }
   .budget-report-grand-total-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 88%, white 12%) }
   .budget-report-revenue-row td.sticky-first { background: #f0fdf7 }
 
+  /* Category-row labels: the colSpan=12 cell already starts at left:0, so
+     position:sticky on the cell never engages. Pin the label text via an
+     inner sticky span instead — keeps the gray bar visible across the row,
+     and the label visible at the left edge while scrolling horizontally. */
+  .budget-report-category-label {
+    position: sticky;
+    left: 12px;
+    display: inline-block;
+  }
+
   /* Budget scope controls — stack vertically, full-width selects */
   .budget-scope-toolbar {
     flex-direction: column;

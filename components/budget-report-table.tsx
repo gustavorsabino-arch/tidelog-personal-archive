@@ -106,7 +106,7 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     key={row.key}
                     className={`budget-report-category-row${row.tone === 'revenue' ? ' budget-report-category-row-revenue' : ''}`}
                   >
-                    <td colSpan={12} className="sticky-first">{row.label}</td>
+                    <td colSpan={12} className="sticky-first"><span className="budget-report-category-label">{row.label}</span></td>
                   </tr>
                 )
               }
