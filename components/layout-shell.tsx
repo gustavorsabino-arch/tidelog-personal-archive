@@ -6,6 +6,7 @@ import { AccessProvider, useSharedAccess } from '@/lib/access-context'
 import { isBudgetOnlyUser, type AccessMeResponse } from '@/lib/access-model'
 
 import { Sidebar } from './sidebar'
+import { MobileTopBar } from './mobile-top-bar'
 
 const NO_SIDEBAR_ROUTES = ['/login']
 
@@ -44,6 +45,7 @@ function LayoutShellContent({ children }: { children: React.ReactNode }) {
   return (
     <div className="layout">
       {!error ? <Sidebar access={access} /> : null}
+      {!error ? <MobileTopBar access={access} /> : null}
       <main className="content">{children}</main>
     </div>
   )

@@ -104,7 +104,7 @@ export function BudgetActualDrillModal({
                 <table className="budget-actual-drill-table">
                   <thead>
                     <tr>
-                      <th>Transaction date</th>
+                      <th className="sticky-first">Transaction date</th>
                       <th>Ref</th>
                       <th>Name</th>
                       <th>Memo / Description</th>
@@ -120,7 +120,7 @@ export function BudgetActualDrillModal({
 
                       return (
                         <tr key={transaction.id}>
-                          <td style={{ color: 'var(--muted)', whiteSpace: 'nowrap' }}>{transaction.date || '—'}</td>
+                          <td className="sticky-first" style={{ color: 'var(--muted)', whiteSpace: 'nowrap' }}>{transaction.date || '—'}</td>
                           <td style={{ color: 'var(--muted)', fontSize: '0.66rem', whiteSpace: 'nowrap' }}>{transaction.documentNumber || '—'}</td>
                           <td className="label" title={transaction.name || '—'}>{transaction.name || '—'}</td>
                           <td className="label" title={transaction.memo || '—'}>{transaction.memo || '—'}</td>

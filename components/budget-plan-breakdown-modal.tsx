@@ -39,12 +39,12 @@ export function BudgetPlanBreakdownModal({ breakdown, onClose }: BudgetPlanBreak
           <button className="modal-close" onClick={onClose} aria-label="Close budget breakdown modal">×</button>
         </div>
 
-        <div className="modal-body" style={{ padding: 20 }}>
+        <div className="modal-body">
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Department</th>
+                  <th className="sticky-first">Department</th>
                   <th className="num">Budget</th>
                   <th className="num">% of Total</th>
                 </tr>
@@ -52,7 +52,7 @@ export function BudgetPlanBreakdownModal({ breakdown, onClose }: BudgetPlanBreak
               <tbody>
                 {breakdown.entries.length > 0 ? breakdown.entries.map((entry) => (
                   <tr key={entry.department}>
-                    <td className="label">{getBudgetDepartmentLabel(entry.department)}</td>
+                    <td className="sticky-first label">{getBudgetDepartmentLabel(entry.department)}</td>
                     <td className="num">{fmtUSD(entry.amountUsd, 0)}</td>
                     <td className="num">
                       <div className="budget-breakdown-share">

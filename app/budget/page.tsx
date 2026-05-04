@@ -929,12 +929,12 @@ export default function BudgetPage() {
         {canImportPlan || canOpenQbConnect ? (
           <div className="budget-page-actions">
             {canOpenQbConnect ? (
-              <button className="btn-secondary budget-import-trigger" onClick={() => setIsQbModalOpen(true)}>
+              <button className="btn-secondary budget-import-trigger budget-admin-only" onClick={() => setIsQbModalOpen(true)}>
                 QuickBooks
               </button>
             ) : null}
             {canImportPlan ? (
-              <button className="btn-primary budget-import-trigger" onClick={openImportModal}>
+              <button className="btn-primary budget-import-trigger budget-admin-only" onClick={openImportModal}>
                 Import v1 Workbook
               </button>
             ) : null}
@@ -952,7 +952,7 @@ export default function BudgetPage() {
       {visibleBudgetTabs.length > 1 && (
         <div className="tab-bar budget-tab-bar">
           {visibleBudgetTabs.map(t => (
-            <button key={t.key} className={`tab-btn budget-tab-btn${activeTab === t.key ? ' active' : ''}`} onClick={() => setActiveTab(t.key)}>
+            <button key={t.key} className={`tab-btn budget-tab-btn${activeTab === t.key ? ' active' : ''}${t.key !== 'overview' ? ' budget-admin-only' : ''}`} onClick={() => setActiveTab(t.key)}>
               {t.label}
             </button>
           ))}
@@ -1018,7 +1018,7 @@ export default function BudgetPage() {
             </span>
           </div>
           {canImportPlan ? (
-            <div className="status-bar-actions">
+            <div className="status-bar-actions budget-admin-only">
               <button className="btn-secondary" onClick={openImportModal}>
                 Import v1 Workbook
               </button>
@@ -1036,7 +1036,7 @@ export default function BudgetPage() {
             </span>
           </div>
           {canImportPlan ? (
-            <div className="status-bar-actions">
+            <div className="status-bar-actions budget-admin-only">
               <button className="btn-secondary" onClick={openImportModal}>
                 Import Missing Tabs
               </button>
@@ -1176,9 +1176,10 @@ export default function BudgetPage() {
                   {visibleHeadcountByDepartment.map(({ dept, count, salaryUsd, salaryActualUsd, bonusUsd, bonusActualUsd, compVarianceUsd }) => (
                     <tr key={dept}>
                       <td className="label">
-                        <button type="button" className="card-clickable" onClick={() => setSelectedHeadcountDepartment(dept)}>
+                        <button type="button" className="card-clickable budget-admin-only" onClick={() => setSelectedHeadcountDepartment(dept)}>
                           {getBudgetDepartmentLabel(dept)}
                         </button>
+                        <span className="budget-admin-fallback">{getBudgetDepartmentLabel(dept)}</span>
                       </td>
                       <td className="num">{count}</td>
                       <td className="num">{fmtUSD(salaryUsd, 0)}</td>
@@ -1197,7 +1198,7 @@ export default function BudgetPage() {
 
       {/* Team roster */}
       {activeTab === 'team' && (
-        <>
+        <div className="budget-admin-only">
           <div className="section-header budget-section-header">
             <span className="section-title">Team Tracker</span>
             <div className="budget-team-header-meta">
@@ -1343,34 +1344,38 @@ export default function BudgetPage() {
               </tbody>
             </table>
           </div>
-        </>
+        </div>
       )}
 
       {activeTab === 'mapping' && (
-        <BudgetQbMappingPanel
-          mapping={mappingState}
-          loading={mappingLoading}
-          saving={mappingSaving}
-          error={mappingError}
-          suggestedAccount={suggestedMappingAccount}
-          onSuggestedAccountHandled={() => setSuggestedMappingAccount(null)}
-          onSave={saveBudgetMapping}
-        />
+        <div className="budget-admin-only">
+          <BudgetQbMappingPanel
+            mapping={mappingState}
+            loading={mappingLoading}
+            saving={mappingSaving}
+            error={mappingError}
+            suggestedAccount={suggestedMappingAccount}
+            onSuggestedAccountHandled={() => setSuggestedMappingAccount(null)}
+            onSave={saveBudgetMapping}
+          />
+        </div>
       )}
 
       {activeTab === 'coverage' && (
-        <BudgetCoveragePanel
-          coverage={coverageState}
-          loading={coverageLoading}
-          error={coverageError}
-          onMapAccount={(accountNumber) => {
-            setSuggestedMappingAccount(accountNumber)
-            setActiveTab('mapping')
-            if (!mappingState && !mappingLoading) {
-              void loadBudgetMapping()
-            }
-          }}
-        />
+        <div className="budget-admin-only">
+          <BudgetCoveragePanel
+            coverage={coverageState}
+            loading={coverageLoading}
+            error={coverageError}
+            onMapAccount={(accountNumber) => {
+              setSuggestedMappingAccount(accountNumber)
+              setActiveTab('mapping')
+              if (!mappingState && !mappingLoading) {
+                void loadBudgetMapping()
+              }
+            }}
+          />
+        </div>
       )}
 
       <BudgetImportModal

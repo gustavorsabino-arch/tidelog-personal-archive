@@ -100,7 +100,7 @@ export function BudgetRevenueMonthlyModal({
                 <table className="budget-actual-drill-table">
                   <thead>
                     <tr>
-                      <th>Month</th>
+                      <th className="sticky-first">Month</th>
                       <th className="num">Revenue</th>
                     </tr>
                   </thead>
@@ -113,7 +113,7 @@ export function BudgetRevenueMonthlyModal({
 
                       return (
                         <tr key={entry.month} style={{ opacity: muted ? 0.45 : 1 }}>
-                          <td className="label" style={{ color: muted ? 'var(--muted)' : undefined }}>
+                          <td className="sticky-first label" style={{ color: muted ? 'var(--muted)' : undefined }}>
                             {MONTH_LABELS[entry.month] ?? entry.month}
                           </td>
                           <td className="num" style={{ fontWeight: 600, color: tone }}>

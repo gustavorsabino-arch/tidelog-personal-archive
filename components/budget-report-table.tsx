@@ -79,7 +79,7 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
         <table>
           <thead>
             <tr>
-              <th rowSpan={2}>Line Item</th>
+              <th rowSpan={2} className="sticky-first">Line Item</th>
               <th colSpan={3} className="budget-report-group-header">{report.periodLabel}</th>
               <th className="budget-table-divider" rowSpan={2} />
               <th colSpan={3} className="budget-report-group-header">{report.ytdLabel}</th>
@@ -106,7 +106,7 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     key={row.key}
                     className={`budget-report-category-row${row.tone === 'revenue' ? ' budget-report-category-row-revenue' : ''}`}
                   >
-                    <td colSpan={12}>{row.label}</td>
+                    <td colSpan={12} className="sticky-first"><span className="budget-report-category-label">{row.label}</span></td>
                   </tr>
                 )
               }
@@ -144,7 +144,7 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                   style={revenueRowClickable ? { cursor: 'pointer' } : undefined}
                   title={revenueRowClickable ? 'View monthly breakdown' : undefined}
                 >
-                  <td className={row.kind === 'line' ? 'label budget-report-indent' : 'label'}>
+                  <td className={`sticky-first ${row.kind === 'line' ? 'label budget-report-indent' : 'label'}`}>
                     {revenueRowClickable ? (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                         {row.label}

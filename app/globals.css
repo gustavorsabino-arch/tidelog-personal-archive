@@ -454,10 +454,64 @@ th.sortable:hover { color: var(--accent) }
 .admin-access-inline-warning { display: inline-flex; align-items: center; min-height: 40px; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--orange) 28%, var(--border)); border-radius: 10px; background: var(--orange-bg); color: var(--orange); font-family: var(--mono); font-size: 0.68rem; line-height: 1.45; max-width: 420px }
 .admin-access-empty { padding: 28px 0 }
 
+/* ─── MOBILE TOP BAR + DRAWER ─────────────────────────────────── */
+.mobile-top-bar { display: none } /* hidden by default; ≤900px media query enables */
+
+.mobile-top-bar-toggle {
+  display: inline-flex; flex-direction: column; justify-content: center;
+  gap: 4px; width: 44px; height: 44px;
+  padding: 10px 12px; border: none; border-radius: 8px;
+  background: transparent; cursor: pointer;
+}
+.mobile-top-bar-toggle:hover { background: var(--bg) }
+.mobile-top-bar-toggle-line { display: block; height: 2px; background: var(--text); border-radius: 2px }
+
+.mobile-top-bar-title {
+  font-family: var(--mono); font-size: 0.95rem; font-weight: 600; color: var(--text);
+}
+
+.mobile-drawer-root {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: stretch;
+}
+.mobile-drawer-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  border: none; padding: 0; cursor: pointer;
+  animation: mobile-drawer-fade 0.18s ease-out;
+}
+.mobile-drawer-panel {
+  position: relative; z-index: 1;
+  width: min(280px, 80vw); height: 100%;
+  background: var(--surface); border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  overflow-y: auto;
+  animation: mobile-drawer-slide 0.22s ease-out;
+}
+.mobile-drawer-panel .sidebar {
+  display: flex !important; /* override the ≤900px hide below */
+  position: static; width: 100%; min-width: 0; height: auto;
+  border-right: none;
+}
+
+@keyframes mobile-drawer-fade {
+  from { opacity: 0 } to { opacity: 1 }
+}
+@keyframes mobile-drawer-slide {
+  from { transform: translateX(-100%) } to { transform: translateX(0) }
+}
+
 /* ─── RESPONSIVE ──────────────────────────────────────────────── */
 @media (max-width: 900px) {
+  .mobile-top-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 12px; height: 52px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 50;
+  }
+  .layout { flex-direction: column } /* stack top bar above content */
+  .content { padding: 14px }
   .sidebar { display: none }
-  .content { padding: 16px }
   .budget-page-header { align-items: flex-start }
   .budget-header-grid { grid-template-columns: 1fr }
   .budget-action-row { align-items: flex-start }
@@ -480,17 +534,111 @@ th.sortable:hover { color: var(--accent) }
   .admin-access-form-actions { align-items: flex-start }
   .admin-access-button-row { width: 100%; justify-content: flex-start }
   .admin-access-inline-warning { max-width: 100% }
+  /* Budget admin entry points hidden on mobile/tablet — desktop-only flows. */
+  .budget-admin-only { display: none !important }
+  .budget-admin-fallback { display: inline-block }
 }
 
 @media (max-width: 640px) {
+  /* Existing admin grid stacking */
   .admin-access-month-grid { grid-template-columns: 1fr }
   .admin-access-department-grid { grid-template-columns: 1fr }
+
+  /* Mobile baseline — prevents iOS auto-zoom on input focus */
+  input, select, textarea { font-size: 16px }
+
+  /* Mobile baseline — readable touch targets on interactive controls.
+     Scoped to elements that are explicitly buttons/triggers, NOT every link. */
+  button:not(.budget-table-cell-button):not(.budget-chip-remove):not(.entity-tab):not(.mode-btn),
+  .btn-primary,
+  .btn-secondary,
+  .fetch-btn,
+  .tab-btn,
+  .dept-pill,
+  .sb-item { min-height: 44px }
+
+  /* Mobile baseline — readable table density */
+  table { font-size: 0.82rem }
+  thead th { font-size: 0.7rem; padding: 10px 12px }
+  tbody td { padding: 10px 12px }
+
+  /* Drill cells specifically — bigger tap target inside cells */
+  .budget-table-cell-button { min-height: 40px; padding: 8px 6px }
+
+  /* Modal padding tightened for narrow phones (preserves full-width section borders) */
+  .modal-header { padding: 12px 14px }
+  .modal-body { padding: 12px 14px }
+  .modal-footer { padding: 10px 14px }
+
+  /* Sticky first column + sticky header inside .table-wrap on phones.
+     Applies to any table (DataTable or bespoke) whose first column cell
+     carries the .sticky-first class. */
+  .table-wrap thead th { position: sticky; top: 0; z-index: 2 }
+  .table-wrap th.sticky-first,
+  .table-wrap td.sticky-first {
+    position: sticky; left: 0;
+    background: var(--surface);
+    z-index: 1;
+    box-shadow: 1px 0 0 var(--border);
+  }
+  .table-wrap thead th.sticky-first { z-index: 3; background: var(--surface2) } /* above body sticky cells; match sticky header bg */
+  .table-wrap tbody tr:hover td.sticky-first { background: var(--bg) }
+
+  /* Budget report has a two-row header (group labels + Budget/Actual/Var).
+     The second row sticks below the first using a fixed top offset. */
+  .budget-report-table-wrap thead tr:nth-child(2) th { top: 32px } /* ≈ first row line-height with padding */
+  .budget-report-table-wrap thead .budget-report-group-header { z-index: 2 }
+  .budget-report-table-wrap thead .budget-table-divider { z-index: 2 }
+
+  /* Compact divider columns on phone so they don't waste horizontal space */
+  .budget-report-table-wrap td.budget-table-divider { min-width: 6px; padding: 0 }
+  .budget-report-table-wrap th.budget-table-divider { min-width: 6px; padding: 0 }
+
+  /* Restore row-variant tints on the sticky first column (otherwise the
+     0,2,1-specificity sticky-first rule would mask the 0,1,1 row tints). */
+  .budget-report-category-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 84%, white 16%) }
+  .budget-report-category-row-revenue td.sticky-first { background: #e6f9f4 }
+  .budget-report-total-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 92%, white 8%) }
+  .budget-report-grand-total-row td.sticky-first { background: color-mix(in srgb, var(--surface2) 88%, white 12%) }
+  .budget-report-revenue-row td.sticky-first { background: #f0fdf7 }
+
+  /* Category-row labels: the colSpan=12 cell already starts at left:0, so
+     position:sticky on the cell never engages. Pin the label text via an
+     inner sticky span instead — keeps the gray bar visible across the row,
+     and the label visible at the left edge while scrolling horizontally. */
+  .budget-report-category-label {
+    position: sticky;
+    left: 12px;
+    display: inline-block;
+  }
+
+  /* Budget scope controls — stack vertically, full-width selects */
+  .budget-scope-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .budget-scope-toolbar .budget-scope-inline-field {
+    width: 100%;
+  }
+  .budget-scope-toolbar .budget-scope-inline-field .fsel {
+    width: 100%;
+    min-height: 44px;
+  }
+  .budget-scope-mode-wrap {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 8px;
+  }
+
 }
 
 .row-highlight {
   background: rgba(0, 168, 168, 0.18) !important;
   transition: background 1.5s ease-out;
 }
+
+.budget-admin-fallback { display: none }
 
 @keyframes drawer-header-flash {
   0% { background: rgba(0, 168, 168, 0.22); }
