@@ -50,6 +50,13 @@
       "when": 1777241130684,
       "tag": "0006_unique_cerebro",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1777733881761,
+      "tag": "0007_orca_genesis_seed",
+      "breakpoints": true
     }
   ]
 }
