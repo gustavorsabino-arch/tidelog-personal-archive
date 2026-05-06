@@ -28,7 +28,7 @@ export function exportUnrealizedXLSX(args: ExportArgs): void {
 export function buildPositionsSheet(args: ExportArgs): XLSX.WorkSheet {
   const isSnapshot = !!args.asOf
   const header = [
-    'Wallet', 'Wallet Address', 'Token',
+    'Entity', 'Wallet', 'Wallet Address', 'Token',
     'Acq Date Min', 'Acq Date Max', 'Avg Cost / Unit',
     'Qty', 'Cost Basis (USD)',
     'Current Price', 'Current Value (USD)',
@@ -36,6 +36,7 @@ export function buildPositionsSheet(args: ExportArgs): XLSX.WorkSheet {
     'Unrealized G/L (USD)', 'Return %', 'Lot Count',
   ]
   const data = args.positions.map(p => [
+    p.entity,
     p.wallet,
     p.walletAddr,
     p.asset,
@@ -63,7 +64,7 @@ export function buildPositionsSheet(args: ExportArgs): XLSX.WorkSheet {
   const totalReturnPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0
 
   const totalRow: (string | number)[] = [
-    'TOTAL', '', '',
+    'TOTAL', '', '', '',
     '', '', '',
     totalQty, totalCost,
     '', totalValue,
@@ -83,12 +84,13 @@ export function buildPositionsSheet(args: ExportArgs): XLSX.WorkSheet {
 // ── Sheet 2: Lots Detail ───────────────────────────────────────────────────
 export function buildLotsDetailSheet(args: ExportArgs): XLSX.WorkSheet {
   const header = [
-    'Wallet', 'Wallet Address', 'Token',
+    'Entity', 'Wallet', 'Wallet Address', 'Token',
     'Acq Date', 'Cost / Unit', 'Qty', 'Cost Basis (USD)',
     'Current Price', 'Current Value (USD)',
     'Unrealized G/L (USD)', 'Return %',
   ]
   const data = args.lots.map(l => [
+    l.entity,
     l.wallet,
     l.walletAddr,
     l.asset,
@@ -107,7 +109,7 @@ export function buildLotsDetailSheet(args: ExportArgs): XLSX.WorkSheet {
   const totalValue = args.lots.reduce((s, l) => s + (l.currentValue ?? 0), 0)
   const totalGain = args.lots.reduce((s, l) => s + (l.unrealGain ?? 0), 0)
   data.push([
-    'TOTAL', '', '',
+    'TOTAL', '', '', '',
     '', '', totalQty, totalCost,
     '', totalValue,
     totalGain, '',

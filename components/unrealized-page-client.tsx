@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
-import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
+import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtDate, MONTH_SHORT_NAMES } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
 import { CopyButton } from '@/components/copy-button'
@@ -18,6 +18,8 @@ interface Props {
 }
 
 const groupKey = (p: { walletAddr: string; asset: string }) => `${p.walletAddr}::${p.asset}`
+
+const ENTITY_TABS = ['All', ...ENTITIES] as const
 
 export function UnrealizedPageClient({ initialEntity }: Props) {
   const [entity, setEntity] = useState(initialEntity)
@@ -52,6 +54,7 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
   const months = data?.monthsAvailable ?? []
   const missingPrices = data?.missingPrices ?? []
   const isSnapshot = !!data?.asOf
+  const isAll = entity === 'All'
 
   const yearOptions = useMemo(
     () => [...new Set(months.map((ym) => ym.slice(0, 4)))].sort().reverse(),
@@ -137,7 +140,7 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
 
   // Base columns: Wallet, Token, Acq, Cost $, Qty, Cost Basis, Current $,
   // Current Val, Unrealized, %. Snapshot mode adds Prior Val and Δ Month.
-  const colCount = 10 + (isSnapshot ? 2 : 0)
+  const colCount = 10 + (isSnapshot ? 2 : 0) + (isAll ? 1 : 0)
 
   return (
     <div>
@@ -148,7 +151,7 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
 
       <div className="controls-bar">
         <div className="entity-tabs">
-          {ENTITIES.map(e => (
+          {ENTITY_TABS.map(e => (
             <button key={e} className={`entity-tab${entity === e ? ' active' : ''}`} onClick={() => setEntity(e)}>{e}</button>
           ))}
         </div>
@@ -212,6 +215,7 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
                 <thead>
                   <tr>
                     <th className="sticky-first">Wallet</th>
+                    {isAll && <th>Entity</th>}
                     <th>Token</th>
                     <th>Acquired</th>
                     <th className="num">Cost $</th>
@@ -235,9 +239,9 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
                     const isOpen = expanded.has(k)
                     const groupLots = lotsByGroup.get(k) ?? []
                     return [
-                      <PositionRow key={k} p={p} isOpen={isOpen} hasMultipleLots={p.lotCount > 1} onToggle={() => toggleExpand(k)} isSnapshot={isSnapshot} />,
+                      <PositionRow key={k} p={p} isOpen={isOpen} hasMultipleLots={p.lotCount > 1} onToggle={() => toggleExpand(k)} isSnapshot={isSnapshot} showEntity={isAll} />,
                       ...(isOpen ? groupLots.map((lot, i) => (
-                        <LotRow key={`${k}::lot::${i}`} lot={lot} isSnapshot={isSnapshot} />
+                        <LotRow key={`${k}::lot::${i}`} lot={lot} isSnapshot={isSnapshot} showEntity={isAll} />
                       )) : []),
                     ]
                   })}
@@ -268,14 +272,16 @@ function Card({ label, value, className }: { label: string; value: string; class
   )
 }
 
-function PositionRow({ p, isOpen, hasMultipleLots, onToggle, isSnapshot }: {
+function PositionRow({ p, isOpen, hasMultipleLots, onToggle, isSnapshot, showEntity }: {
   p: UnrealizedPosition
   isOpen: boolean
   hasMultipleLots: boolean
   onToggle: () => void
   isSnapshot: boolean
+  showEntity: boolean
 }) {
   const c = TOKEN_COLORS[p.asset] || '#888'
+  const ec = ENTITY_COLORS[p.entity] || 'var(--muted)'
   const noPrice = p.currentPrice == null
   return (
     <tr style={{ cursor: hasMultipleLots ? 'pointer' : 'default' }} onClick={hasMultipleLots ? onToggle : undefined}>
@@ -288,6 +294,11 @@ function PositionRow({ p, isOpen, hasMultipleLots, onToggle, isSnapshot }: {
           <CopyButton address={p.walletAddr} />
         </span>
       </td>
+      {showEntity && (
+        <td>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: `${ec}18`, color: ec }}>{p.entity}</span>
+        </td>
+      )}
       <td>
         <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: `${c}18`, color: c }}>{p.asset}</span>
       </td>
@@ -307,11 +318,12 @@ function PositionRow({ p, isOpen, hasMultipleLots, onToggle, isSnapshot }: {
   )
 }
 
-function LotRow({ lot, isSnapshot }: { lot: UnrealizedLot; isSnapshot: boolean }) {
+function LotRow({ lot, isSnapshot, showEntity }: { lot: UnrealizedLot; isSnapshot: boolean; showEntity: boolean }) {
   const noPrice = lot.currentPrice == null
   return (
     <tr style={{ background: 'rgba(255,255,255,0.03)', fontSize: '0.7rem' }}>
       <td className="sticky-first" style={{ paddingLeft: 32, color: 'var(--muted)', fontStyle: 'italic' }}>lot</td>
+      {showEntity && <td></td>}
       <td></td>
       <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>{fmtDate(lot.acqDate)}</td>
       <td className="num" style={{ color: 'var(--muted)' }}>${lot.costPerUnit.toFixed(lot.asset === 'ORCA' ? 4 : 2)}</td>

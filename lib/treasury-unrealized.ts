@@ -11,6 +11,7 @@
 import { computeFIFOWithTrace } from '@/lib/fifo'
 import { getCurrentPrices, getHistoricalPrice } from '@/lib/defillama'
 import { getTreasuryTransactionsAsc } from '@/lib/treasury-transactions'
+import { ENTITIES } from '@/lib/constants'
 import type {
   OpenLotView,
   Transaction,
@@ -18,6 +19,8 @@ import type {
   UnrealizedPosition,
   UnrealizedResponse,
 } from '@/lib/types'
+
+export const ALL_ENTITIES_SENTINEL = 'All'
 
 export interface GetUnrealizedParams {
   entity: string
@@ -136,8 +139,14 @@ export async function getTreasuryUnrealized({
   const priorDate = priorYm ? endOfMonthUtc(priorYm) : null
   const priorUnix = priorDate ? Math.floor(priorDate.getTime() / 1000) : null
 
-  // 1. Pull all txs for entity (asc, includes genesis).
-  const allTxs = await getTreasuryTransactionsAsc(entity)
+  // 1. Pull all txs for entity (asc, includes genesis). 'All' fans out to every
+  //    entity in parallel and concatenates — FIFO re-sorts within each
+  //    entity::asset group, and internal-transfer detection stays scoped per
+  //    entity, so concat-and-feed is correct.
+  const entitiesToFetch = entity === ALL_ENTITIES_SENTINEL ? [...ENTITIES] : [entity]
+  const allTxs = (
+    await Promise.all(entitiesToFetch.map((e) => getTreasuryTransactionsAsc(e)))
+  ).flat()
 
   // monthsAvailable derives from ALL non-genesis blockTimes (genesis is a
   // synthetic basis row, not user-meaningful as a snapshot point).
