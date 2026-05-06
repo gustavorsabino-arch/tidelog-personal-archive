@@ -3,11 +3,10 @@ import assert from 'node:assert/strict'
 
 import { getPnlData, PnlNotCachedError } from './pnl-data.ts'
 
-// We mock readCachedReportsInRange via the module exports. Since pnl-data.ts
-// imports it directly, we use bun's module-mocking via dynamic injection: in
-// these tests we replace the implementation through a test seam. For now,
-// this test file uses the live DB and is structured as an integration test.
-// If the live DB is unavailable, skip via `process.env.SKIP_DB_TESTS`.
+// Integration test against the live DB; pure-merge logic is covered separately
+// in pnl-combine.test.ts. Set `SKIP_DB_TESTS=1` to skip — but note that loading
+// pnl-data.ts transitively imports lib/db, so DB_MODE/DATABASE_URL must still
+// be defined in the environment for this file to even import.
 
 test('getPnlData returns partialEntities = [] for single-entity scope', async () => {
   if (process.env.SKIP_DB_TESTS) return
