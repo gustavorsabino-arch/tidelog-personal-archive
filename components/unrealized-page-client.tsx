@@ -23,17 +23,21 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
   const [entity, setEntity] = useState(initialEntity)
   const [tokenFilter, setTokenFilter] = useState('')
   const [walletFilter, setWalletFilter] = useState('')
-  const [monthFilter, setMonthFilter] = useState('') // '' = live; 'YYYY-MM' = snapshot
+  // Year + month picked separately: year is a UI disclosure that narrows the
+  // month list. Snapshot triggers only when both are set; year-alone stays live.
+  const [yearFilter, setYearFilter] = useState('')
+  const [monthFilter, setMonthFilter] = useState('') // 'MM' within yearFilter
   const [signFilter, setSignFilter] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   // Reset filters and expansion when the entity changes — different population.
   useEffect(() => {
-    setTokenFilter(''); setWalletFilter(''); setMonthFilter(''); setSignFilter('')
+    setTokenFilter(''); setWalletFilter(''); setYearFilter(''); setMonthFilter(''); setSignFilter('')
     setExpanded(new Set())
   }, [entity])
 
-  const swrKey = `/api/treasury/unrealized?entity=${entity}${monthFilter ? `&asOf=${monthFilter}` : ''}`
+  const asOf = yearFilter && monthFilter ? `${yearFilter}-${monthFilter}` : ''
+  const swrKey = `/api/treasury/unrealized?entity=${entity}${asOf ? `&asOf=${asOf}` : ''}`
   const { data, isLoading, error: swrError } = useSWR<UnrealizedResponse>(
     swrKey,
     apiFetch<UnrealizedResponse>,
@@ -49,6 +53,22 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
   const missingPrices = data?.missingPrices ?? []
   const isSnapshot = !!data?.asOf
 
+  const yearOptions = useMemo(
+    () => [...new Set(months.map((ym) => ym.slice(0, 4)))].sort().reverse(),
+    [months],
+  )
+  const monthsByYear = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const ym of months) {
+      const y = ym.slice(0, 4)
+      const m = ym.slice(5, 7)
+      if (!map[y]) map[y] = []
+      map[y].push(m)
+    }
+    for (const y of Object.keys(map)) map[y].sort().reverse()
+    return map
+  }, [months])
+
   // Drop stale filter selections after entity-change response arrives.
   useEffect(() => {
     if (tokenFilter && tokenOptions.length > 0 && !tokenOptions.includes(tokenFilter)) setTokenFilter('')
@@ -57,8 +77,14 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
     if (walletFilter && walletOptions.length > 0 && !walletOptions.some(w => w.walletAddr === walletFilter)) setWalletFilter('')
   }, [walletOptions, walletFilter])
   useEffect(() => {
-    if (monthFilter && months.length > 0 && !months.includes(monthFilter)) setMonthFilter('')
-  }, [months, monthFilter])
+    if (yearFilter && yearOptions.length > 0 && !yearOptions.includes(yearFilter)) {
+      setYearFilter(''); setMonthFilter('')
+    }
+  }, [yearOptions, yearFilter])
+  useEffect(() => {
+    if (!monthFilter) return
+    if (!yearFilter || !monthsByYear[yearFilter]?.includes(monthFilter)) setMonthFilter('')
+  }, [monthsByYear, yearFilter, monthFilter])
 
   const filtered = useMemo(() => positions.filter(p => {
     if (tokenFilter && p.asset !== tokenFilter) return false
@@ -105,7 +131,7 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
       computedAt: data.computedAt,
       entity,
       asOf: data.asOf,
-      activeFilters: { token: tokenFilter, wallet: walletFilter, month: monthFilter, sign: signFilter },
+      activeFilters: { token: tokenFilter, wallet: walletFilter, month: asOf, sign: signFilter },
     })
   }
 
@@ -152,7 +178,7 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
 
           <div className="section">
             <div className="section-header">
-              <span className="section-title">{filtered.length} open position{filtered.length === 1 ? '' : 's'}{isSnapshot && data?.asOf ? ` · ${fmtMonthLabel(monthFilter)}` : ''}</span>
+              <span className="section-title">{filtered.length} open position{filtered.length === 1 ? '' : 's'}{isSnapshot && data?.asOf ? ` · ${fmtMonthLabel(asOf)}` : ''}</span>
               <div className="section-filters">
                 <select className="fsel" value={tokenFilter} onChange={e => setTokenFilter(e.target.value)}>
                   <option value="">All tokens</option>
@@ -162,9 +188,15 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
                   <option value="">All wallets</option>
                   {walletOptions.map(w => <option key={w.walletAddr} value={w.walletAddr}>{w.wallet}</option>)}
                 </select>
-                <select className="fsel" value={monthFilter} onChange={e => setMonthFilter(e.target.value)}>
+                <select className="fsel" value={yearFilter} onChange={e => { setYearFilter(e.target.value); setMonthFilter('') }}>
                   <option value="">Live</option>
-                  {months.map(m => <option key={m} value={m}>{fmtMonthLabel(m)}</option>)}
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <select className="fsel" value={monthFilter} onChange={e => setMonthFilter(e.target.value)} disabled={!yearFilter}>
+                  <option value="">{yearFilter ? 'Pick month' : 'Select year first'}</option>
+                  {yearFilter && (monthsByYear[yearFilter] ?? []).map(m => (
+                    <option key={m} value={m}>{MONTH_SHORT_NAMES[Number(m) - 1]}</option>
+                  ))}
                 </select>
                 <select className="fsel" value={signFilter} onChange={e => setSignFilter(e.target.value)}>
                   <option value="">All</option>
