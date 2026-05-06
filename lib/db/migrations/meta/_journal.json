@@ -57,6 +57,13 @@
       "when": 1777733881761,
       "tag": "0007_orca_genesis_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1778066938421,
+      "tag": "0008_orca_genesis_correction",
+      "breakpoints": true
     }
   ]
 }

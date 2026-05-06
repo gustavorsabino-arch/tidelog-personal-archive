@@ -311,6 +311,9 @@ export interface LotTraceEntry {
 
 // Public projection of an open lot (engine's internal Lot type stays internal).
 export interface OpenLotView {
+  entity: string
+  asset: string
+  wallet: string
   walletAddr: string
   qty: number
   costPerUnit: number
@@ -357,5 +360,53 @@ export interface OrcaWalletSummary {
 export interface OrcaLedgerResponse {
   rows: OrcaLedgerRow[]
   summaryByWallet: Record<string, OrcaWalletSummary>
+  computedAt: string
+}
+
+// ── Unrealized ─────────────────────────────────────────────────────────────
+export interface UnrealizedPosition {
+  entity: string
+  asset: string
+  wallet: string
+  walletAddr: string
+  qty: number
+  costBasis: number
+  avgCostPerUnit: number
+  currentPrice: number | null
+  currentValue: number | null
+  unrealGain: number | null
+  returnPct: number | null
+  acqDateMin: string
+  acqDateMax: string
+  lotCount: number
+  priorPrice: number | null
+  priorValue: number | null
+  deltaMonth: number | null
+}
+
+export interface UnrealizedLot {
+  entity: string
+  asset: string
+  wallet: string
+  walletAddr: string
+  acqDate: string
+  qty: number
+  costPerUnit: number
+  costBasis: number
+  currentPrice: number | null
+  currentValue: number | null
+  unrealGain: number | null
+  returnPct: number | null
+}
+
+export interface UnrealizedResponse {
+  positions: UnrealizedPosition[]
+  lots: UnrealizedLot[]
+  asOf: string | null
+  priorAsOf: string | null
+  monthsAvailable: string[]
+  walletOptions: Array<{ walletAddr: string; wallet: string }>
+  tokenOptions: string[]
+  missingPrices: string[]
   computedAt: string
 }
