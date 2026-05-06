@@ -317,9 +317,14 @@ export function computeFIFOWithTrace(
 
     // Build openLots projection
     for (const [walletAddr, lots] of walletLots.entries()) {
+      const walletLabel =
+        moves.find(tx => tx.walletAddr === walletAddr)?.wallet || walletAddr
       for (const lot of lots) {
         if (lot.remaining > 1e-8) {
           openLots.push({
+            entity,
+            asset,
+            wallet: walletLabel,
             walletAddr,
             qty: lot.remaining,
             costPerUnit: lot.costPerUnit,
