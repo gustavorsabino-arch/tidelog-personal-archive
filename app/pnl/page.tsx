@@ -6,13 +6,21 @@ import { ENTITIES, ENTITY_COLORS } from '@/lib/constants'
 import { fmtUSD } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
 import type { PnlAccount, PnlSection, PnlTree } from '@/lib/qb/pnl'
+import type { QboEntity } from '@/lib/qb/config'
+import { GlDrillDrawer } from './gl-drill-drawer'
+import type { GlDrillScope } from '@/lib/qb/gl-data'
 
 type PnlResponse = PnlTree & {
   entity: string
   periodStart: string
   periodEnd: string
   fetchedAt: string
+  partialEntities: string[]
 }
+
+type EntityChoice = QboEntity | 'All'
+
+const ENTITY_TABS: EntityChoice[] = ['All', ...ENTITIES]
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -20,6 +28,14 @@ const MONTH_NAMES = [
 ]
 
 type Mode = 'month' | 'ytd'
+
+type DrillState = {
+  entity: GlDrillScope
+  accountNumber: string
+  accountLabel: string
+  periodStart: string
+  periodEnd: string
+}
 
 function getCurrentPeriod(): { year: number; month: number } {
   const now = new Date()
@@ -41,16 +57,24 @@ function sectionColor(sectionKind: PnlSection['sectionKind']): string {
   return 'var(--green)'
 }
 
-function PnlRow({ node, depth }: { node: PnlSection | PnlAccount; depth: number }) {
+function PnlRow({
+  node, depth, onGlClick,
+}: {
+  node: PnlSection | PnlAccount
+  depth: number
+  onGlClick: (glCode: string, label: string) => void
+}) {
   if (node.kind === 'account') {
+    const handleClick = node.glCode ? () => onGlClick(node.glCode!, node.label) : undefined
     return (
       <tr>
         <td style={{ paddingTop: 6, paddingRight: 10, paddingBottom: 6, paddingLeft: depth * 16 + 10 }}>
           {node.glCode ? (
-            <span style={{
-              fontFamily: 'var(--mono)', fontSize: '0.7rem', background: 'var(--surface2)',
-              color: 'var(--accent)', padding: '1px 6px', borderRadius: 4, marginRight: 8,
-            }}>{node.glCode}</span>
+            <button
+              className="gl-badge-button"
+              onClick={handleClick}
+              title="View transactions"
+            >{node.glCode}</button>
           ) : null}
           <span>{node.glCode ? node.label.replace(/^\d{4,}\s*·?\s*/, '') : node.label}</span>
         </td>
@@ -72,7 +96,7 @@ function PnlRow({ node, depth }: { node: PnlSection | PnlAccount; depth: number 
         </td>
       </tr>
       {node.children.map((child, i) => (
-        <PnlRow key={i} node={child} depth={depth + 1} />
+        <PnlRow key={i} node={child} depth={depth + 1} onGlClick={onGlClick} />
       ))}
     </>
   )
@@ -80,10 +104,11 @@ function PnlRow({ node, depth }: { node: PnlSection | PnlAccount; depth: number 
 
 export default function PnLPage() {
   const current = useMemo(getCurrentPeriod, [])
-  const [entity, setEntity] = useState<(typeof ENTITIES)[number]>('Opco')
+  const [entity, setEntity] = useState<EntityChoice>('Opco')
   const [mode, setMode] = useState<Mode>('ytd')
   const [year, setYear] = useState(current.year)
   const [month, setMonth] = useState(current.month)
+  const [drill, setDrill] = useState<DrillState | null>(null)
 
   const period = useMemo(() => toRange(mode, year, month), [mode, year, month])
 
@@ -94,12 +119,6 @@ export default function PnLPage() {
   )
   const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
-  // Only trust `data` when its echoed entity/period match what we're currently
-  // requesting. SWR can return the previous successful fetch's response during
-  // the brief window after the key changes (entity tab switch, year change),
-  // and on errored fetches it never replaces the stale value at all. Anchoring
-  // every render on this freshness check stops the cards/table from showing
-  // numbers from a different period.
   const isCurrentData =
     !!data &&
     data.entity === entity &&
@@ -108,9 +127,23 @@ export default function PnLPage() {
   const loading = isLoading || (!isCurrentData && !error)
   const totals = isCurrentData ? data.totals : null
   const sections = isCurrentData ? data.sections : []
+  const partialEntities = isCurrentData ? (data.partialEntities ?? []) : []
   const netClass = totals == null
     ? ''
     : (totals.netIncome >= 0 ? 'green' : 'red')
+
+  // Drill-down captures the page's entity at click time so changing the entity
+  // tab while a drawer is open doesn't yank its data out from under the user.
+  // To switch the drawer to a different scope, close and reopen.
+  function openDrill(glCode: string, label: string) {
+    setDrill({
+      entity,
+      accountNumber: glCode,
+      accountLabel: label,
+      periodStart: period.start,
+      periodEnd: period.end,
+    })
+  }
 
   return (
     <div>
@@ -121,12 +154,12 @@ export default function PnLPage() {
 
       <div className="controls-bar">
         <div className="entity-tabs">
-          {ENTITIES.map((e) => (
+          {ENTITY_TABS.map((e) => (
             <button
               key={e}
               className={`entity-tab${entity === e ? ' active' : ''}`}
               onClick={() => setEntity(e)}
-              style={entity === e ? { color: ENTITY_COLORS[e] } : undefined}
+              style={entity === e && e !== 'All' ? { color: ENTITY_COLORS[e] } : undefined}
             >
               {e}
             </button>
@@ -148,6 +181,16 @@ export default function PnLPage() {
         </select>
         {loading ? <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Loading…</span> : null}
       </div>
+
+      {entity === 'All' && partialEntities.length > 0 && !loading && (
+        <div style={{
+          padding: '10px 14px', margin: '0 0 12px',
+          background: 'rgba(255,200,0,0.1)', border: '1px solid rgba(255,200,0,0.4)',
+          borderRadius: 'var(--radius)', fontSize: '0.8rem',
+        }}>
+          Showing {ENTITIES.length - partialEntities.length} of {ENTITIES.length} entities — {partialEntities.join(', ')} data unavailable for this period.
+        </div>
+      )}
 
       {loading ? (
         <div className="cards-grid">
@@ -199,7 +242,9 @@ export default function PnLPage() {
           <div className="empty-icon">⚠️</div>
           <div>{error}</div>
           <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: 4 }}>
-            Connect {entity} via the Budget → Settings → QuickBooks panel, then retry.
+            {entity === 'All'
+              ? 'Connect at least one entity via Budget → Settings → QuickBooks, then retry.'
+              : `Connect ${entity} via the Budget → Settings → QuickBooks panel, then retry.`}
           </div>
         </div>
       ) : sections.length === 0 ? (
@@ -218,12 +263,22 @@ export default function PnLPage() {
             </thead>
             <tbody>
               {sections.map((section, i) => (
-                <PnlRow key={i} node={section} depth={0} />
+                <PnlRow key={i} node={section} depth={0} onGlClick={openDrill} />
               ))}
             </tbody>
           </table>
         </div>
       )}
+
+      <GlDrillDrawer
+        open={drill !== null}
+        onClose={() => setDrill(null)}
+        entity={drill?.entity ?? 'Opco'}
+        accountNumber={drill?.accountNumber ?? ''}
+        accountLabel={drill?.accountLabel ?? ''}
+        periodStart={drill?.periodStart ?? ''}
+        periodEnd={drill?.periodEnd ?? ''}
+      />
     </div>
   )
 }
