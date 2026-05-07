@@ -64,6 +64,13 @@
       "when": 1778066938421,
       "tag": "0008_orca_genesis_correction",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1778181050284,
+      "tag": "0009_otm_tge_mint_as_genesis",
+      "breakpoints": true
     }
   ]
 }
