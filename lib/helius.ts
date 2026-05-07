@@ -3,14 +3,17 @@
  * Server-side only (uses env vars).
  */
 import { RateLimiter } from './rate-limiter'
+import { getSym } from '@/lib/constants'
 
 const HELIUS_KEY = process.env.HELIUS_API_KEY || process.env.HELIUS_KEY || ''
 const RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`
 const REST_URL = 'https://api.helius.xyz/v0'
 
-// Free tier is ~10 req/s. Set HELIUS_RPS to match your plan (8 is safe for free).
+// Free tier caps differ per API surface: JSON-RPC ~10 RPS, Enhanced API 2 RPS.
 const HELIUS_RPS = Math.max(1, Number.parseInt(process.env.HELIUS_RPS || '8', 10) || 8)
+const HELIUS_ENHANCED_RPS = Math.max(1, Number.parseInt(process.env.HELIUS_ENHANCED_RPS || '2', 10) || 2)
 const limiter = new RateLimiter(HELIUS_RPS, HELIUS_RPS)
+const enhancedLimiter = new RateLimiter(HELIUS_ENHANCED_RPS, HELIUS_ENHANCED_RPS)
 let rpcId = 1
 
 // -32413 = Helius-specific "Too many requests" returned as JSON-RPC error (HTTP 200 body)
@@ -127,13 +130,155 @@ export async function heliusRpcBatch(requests: BatchRequest[], retries = 3): Pro
   return []
 }
 
-export async function heliusEnhanced(signatures: string[]) {
-  await limiter.acquire()
-  const r = await fetch(`${REST_URL}/transactions?api-key=${HELIUS_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transactions: signatures }),
-  })
-  if (!r.ok) throw new Error(`Helius enhanced: ${r.status}`)
-  return r.json()
+export async function heliusEnhanced(signatures: string[], retries = 3): Promise<any[]> {
+  const url = `${REST_URL}/transactions?api-key=${HELIUS_KEY}`
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    await enhancedLimiter.acquire()
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: signatures }),
+      })
+      if (r.status === 429) {
+        if (attempt >= retries) {
+          console.error(`[Helius] DROPPED enhancedTransactions(${signatures.length} sigs) after ${retries + 1} attempts (all HTTP 429)`)
+          return []
+        }
+        const wait = Math.min(2000 * Math.pow(2, attempt), 10000)
+        console.warn(`[Helius] 429, waiting ${wait}ms (attempt ${attempt + 1})`)
+        await new Promise((res) => setTimeout(res, wait))
+        continue
+      }
+      if (!r.ok) {
+        if (attempt >= retries) {
+          console.error(`[Helius] DROPPED enhancedTransactions(${signatures.length} sigs) after ${retries + 1} attempts (HTTP ${r.status})`)
+          return []
+        }
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)))
+        continue
+      }
+      const data = await r.json()
+      if (!Array.isArray(data)) {
+        if (attempt >= retries) {
+          console.error(`[Helius] DROPPED enhancedTransactions(${signatures.length} sigs) — non-array response: ${JSON.stringify(data).slice(0, 200)}`)
+          return []
+        }
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)))
+        continue
+      }
+      return data
+    } catch (e) {
+      if (attempt >= retries) {
+        console.error(`[Helius] DROPPED enhancedTransactions(${signatures.length} sigs) after ${retries + 1} attempts (exception): ${(e as Error).message}`)
+        return []
+      }
+      await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)))
+    }
+  }
+  return []
+}
+
+type AddressTxOpts = {
+  before?: string
+  until?: string
+  limit?: number
+  commitment?: 'finalized' | 'confirmed'
+}
+
+/**
+ * GET https://api.helius.xyz/v0/addresses/<address>/transactions
+ * Returns Helius's pre-parsed tx array. Uses the Enhanced API rate limiter (2 RPS free tier).
+ * Returns [] on terminal failure so callers' loops terminate cleanly. Failures are logged
+ * via [Helius] DROPPED in the same format as heliusRpc.
+ */
+export async function heliusGetAddressTransactions(
+  address: string,
+  opts: AddressTxOpts = {},
+  retries = 3,
+): Promise<any[]> {
+  const params = new URLSearchParams()
+  params.set('api-key', HELIUS_KEY)
+  params.set('limit', String(opts.limit ?? 100))
+  if (opts.before) params.set('before', opts.before)
+  if (opts.until) params.set('until', opts.until)
+  if (opts.commitment) params.set('commitment', opts.commitment)
+  const url = `${REST_URL}/addresses/${address}/transactions?${params.toString()}`
+  const tag = `${address.slice(0, 4)}…${address.slice(-4)}`
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    await enhancedLimiter.acquire()
+    try {
+      const r = await fetch(url, { method: 'GET' })
+      if (r.status === 429) {
+        if (attempt >= retries) {
+          console.error(`[Helius] DROPPED getAddressTransactions(${tag}) after ${retries + 1} attempts (all HTTP 429)`)
+          return []
+        }
+        const wait = Math.min(2000 * Math.pow(2, attempt), 10000)
+        console.warn(`[Helius] 429, waiting ${wait}ms (attempt ${attempt + 1})`)
+        await new Promise((res) => setTimeout(res, wait))
+        continue
+      }
+      if (!r.ok) {
+        if (attempt >= retries) {
+          console.error(`[Helius] DROPPED getAddressTransactions(${tag}) after ${retries + 1} attempts (HTTP ${r.status})`)
+          return []
+        }
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)))
+        continue
+      }
+      const data = await r.json()
+      if (!Array.isArray(data)) {
+        if (attempt >= retries) {
+          console.error(`[Helius] DROPPED getAddressTransactions(${tag}) — non-array response: ${JSON.stringify(data).slice(0, 200)}`)
+          return []
+        }
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)))
+        continue
+      }
+      return data
+    } catch (e) {
+      if (attempt >= retries) {
+        console.error(`[Helius] DROPPED getAddressTransactions(${tag}) after ${retries + 1} attempts (exception): ${(e as Error).message}`)
+        return []
+      }
+      await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)))
+    }
+  }
+  return []
+}
+
+const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+
+/**
+ * Enumerate a wallet's known ATAs for focus tokens (ORCA/USDC/USDT).
+ * Wraps `getTokenAccountsByOwner` JSON-RPC method. Filters to focus mints.
+ * Returns [] on RPC error so callers can proceed without ATA enumeration.
+ *
+ * SOL is native (no ATA), so getSym will map it but we exclude it by only
+ * accepting mints that map to non-SOL focus symbols.
+ *
+ * Used by the cron's ATA-aware sig discovery (see fetch-transactions.ts).
+ */
+export async function heliusGetTokenAccountsByOwner(
+  owner: string,
+): Promise<Array<{ ata: string; mint: string }>> {
+  const r = await heliusRpc('getTokenAccountsByOwner', [
+    owner,
+    { programId: TOKEN_PROGRAM_ID },
+    { encoding: 'jsonParsed' },
+  ])
+  if (!r || r.error || !r.result?.value) return []
+
+  const out: Array<{ ata: string; mint: string }> = []
+  for (const acc of r.result.value as any[]) {
+    const ata = acc?.pubkey
+    const mint = acc?.account?.data?.parsed?.info?.mint
+    if (!ata || !mint) continue
+    const sym = getSym(mint)
+    if (!sym || sym === 'SOL') continue  // non-focus or native (no ATA)
+    out.push({ ata, mint })
+  }
+  return out
 }

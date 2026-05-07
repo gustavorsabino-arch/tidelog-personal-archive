@@ -1,7 +1,7 @@
 import { and, desc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { wallet, transaction } from '@/lib/db/schema'
-import { heliusRpc } from '@/lib/helius'
+import { heliusRpc, heliusEnhanced, heliusGetTokenAccountsByOwner } from '@/lib/helius'
 import { FOCUS_SET, STABLE_TOKENS, getSym } from '@/lib/constants'
 import { hydrateTransactionPrices, primeLatestPrices } from '@/lib/transaction-pricing'
 import type { Transaction } from '@/lib/types'
@@ -47,11 +47,10 @@ function moveToTx(m: ParsedMove): Transaction {
  * Find the wallet owner most likely to be the counterparty for a movement
  * of `ourDelta` units of `mint` (null = SOL) for `ourOwner`.
  *
- * Aggregates per-owner deltas across the relevant balance arrays and returns
- * the owner with the largest opposite-direction delta. Returns null when no
- * candidate exists or `meta` lacks the necessary fields.
+ * Aggregates per-owner deltas across `accountData[]` and returns the owner
+ * with the largest opposite-direction delta. Returns null when no candidate
+ * exists or `accountData` lacks the necessary entries.
  *
- * Notes:
  * - For SPL tokens, the same owner can appear across multiple ATAs in one tx
  *   (e.g. fee account + main account); aggregating by owner avoids returning
  *   one ATA's owner multiple times.
@@ -65,31 +64,27 @@ function findCounterpartyOwner(
   ourOwner: string,
   ourDelta: number,
   mint: string | null,
-  meta: any,
-  accountKeys: string[],
+  accountData: any[],
 ): string | null {
   const totals = new Map<string, number>()
+
   if (mint === null) {
-    // SOL — index aligns with accountKeys; the key itself is the "owner" for system accounts.
-    const pre = meta?.preBalances ?? []
-    const post = meta?.postBalances ?? []
-    const len = Math.min(accountKeys.length, pre.length, post.length)
-    for (let i = 0; i < len; i++) {
-      const owner = accountKeys[i]
-      if (!owner) continue
-      const delta = ((post[i] ?? 0) - (pre[i] ?? 0)) / 1e9
-      totals.set(owner, (totals.get(owner) ?? 0) + delta)
+    // SOL — aggregate nativeBalanceChange per account. account ≡ owner for system accounts.
+    for (const a of accountData ?? []) {
+      if (!a?.account) continue
+      const delta = (a.nativeBalanceChange ?? 0) / 1e9
+      totals.set(a.account, (totals.get(a.account) ?? 0) + delta)
     }
   } else {
-    for (const b of meta?.preTokenBalances ?? []) {
-      if (b.mint !== mint || !b.owner) continue
-      const amt = parseFloat(b.uiTokenAmount?.uiAmountString ?? '0')
-      totals.set(b.owner, (totals.get(b.owner) ?? 0) - amt)
-    }
-    for (const b of meta?.postTokenBalances ?? []) {
-      if (b.mint !== mint || !b.owner) continue
-      const amt = parseFloat(b.uiTokenAmount?.uiAmountString ?? '0')
-      totals.set(b.owner, (totals.get(b.owner) ?? 0) + amt)
+    for (const a of accountData ?? []) {
+      for (const c of a?.tokenBalanceChanges ?? []) {
+        if (c.mint !== mint || !c.userAccount) continue
+        const decimals = c.rawTokenAmount?.decimals ?? 0
+        const raw = parseFloat(c.rawTokenAmount?.tokenAmount ?? '0')
+        const safeRaw = Number.isFinite(raw) ? raw : 0
+        const amt = safeRaw / Math.pow(10, decimals)
+        totals.set(c.userAccount, (totals.get(c.userAccount) ?? 0) + amt)
+      }
     }
   }
 
@@ -108,34 +103,34 @@ function findCounterpartyOwner(
 }
 
 /**
- * Decode a Helius-returned full transaction into one or more normalized movements.
- * Extracts SOL deltas from pre/post balances and token deltas from pre/post token balances
- * for focus tokens only (SOL, ORCA, USDC, USDT).
+ * Decode a Helius Enhanced-API parsed transaction into one or more normalized
+ * movements. Reads SOL deltas from `accountData[].nativeBalanceChange` and token
+ * deltas from `accountData[].tokenBalanceChanges[]` for focus tokens only
+ * (SOL, ORCA, USDC, USDT).
  */
 // exported for tests
 export function parseTransaction(
   tx: any,
   walletAddress: string,
   entityId: string,
+  logPrefix?: string,
+  walletAtas?: Set<string>,
 ): ParsedMove[] {
-  if (!tx?.meta) return []
-  const meta = tx.meta
-  const keys = (tx.transaction?.message?.accountKeys || []).map(
-    (k: any) => (typeof k === 'string' ? k : k.pubkey),
-  )
-  const walletIdx = keys.indexOf(walletAddress)
-  const blockTimeUnix = tx.blockTime
+  if (!tx || tx.transactionError != null) return []
+  const accountData = Array.isArray(tx.accountData) ? tx.accountData : []
+  const blockTimeUnix = tx.timestamp
   if (!blockTimeUnix) return []
   const blockTime = new Date(blockTimeUnix * 1000)
-  const sig = tx.transaction?.signatures?.[0] || ''
+  const sig = tx.signature ?? ''
   const moves: ParsedMove[] = []
 
-  // SOL delta
-  if (walletIdx >= 0) {
-    const pre = (meta.preBalances?.[walletIdx] || 0) / 1e9
-    const post = (meta.postBalances?.[walletIdx] || 0) / 1e9
-    const fee = (meta.fee || 0) / 1e9
-    const delta = post - pre + fee
+  // SOL delta — net change for this wallet from accountData, then add back fee
+  // if this wallet was the feePayer (so we measure intent, not gas cost).
+  const myEntry = accountData.find((a: any) => a?.account === walletAddress)
+  if (myEntry) {
+    const lamports = (myEntry.nativeBalanceChange ?? 0) / 1e9
+    const feeRefund = walletAddress === tx.feePayer ? (tx.fee ?? 0) / 1e9 : 0
+    const delta = lamports + feeRefund
     if (Math.abs(delta) > 0.001) {
       moves.push({
         txHash: sig,
@@ -148,29 +143,48 @@ export function parseTransaction(
         price: null,
         usd: null,
         priceSource: null,
-        counterparty: findCounterpartyOwner(walletAddress, delta, null, meta, keys),
+        counterparty: findCounterpartyOwner(walletAddress, delta, null, accountData),
       })
     }
   }
 
-  // Token deltas
-  const preMap: Record<string, number> = {}
-  const postMap: Record<string, number> = {}
-  for (const b of (meta.preTokenBalances || [])) {
-    if (b.owner === walletAddress) {
-      preMap[b.mint] = (preMap[b.mint] || 0) + parseFloat(b.uiTokenAmount?.uiAmountString || '0')
-    }
-  }
-  for (const b of (meta.postTokenBalances || [])) {
-    if (b.owner === walletAddress) {
-      postMap[b.mint] = (postMap[b.mint] || 0) + parseFloat(b.uiTokenAmount?.uiAmountString || '0')
+  // Token deltas — aggregate per mint where userAccount === walletAddress,
+  // or where tokenAccount is a known ATA (fallback for legacy Helius entries
+  // where userAccount is missing).
+  const myDeltas: Record<string, number> = {}
+  for (const a of accountData) {
+    for (const c of a?.tokenBalanceChanges ?? []) {
+      const isAttributedToOurWallet =
+        c?.userAccount === walletAddress
+        || (!c?.userAccount && walletAtas && c?.tokenAccount && walletAtas.has(c.tokenAccount))
+      if (!isAttributedToOurWallet) continue
+      const sym = getSym(c.mint)
+      if (!sym || !FOCUS_SET.has(sym)) continue
+      const decimals = c.rawTokenAmount?.decimals ?? 0
+      const raw = parseFloat(c.rawTokenAmount?.tokenAmount ?? '0')
+      const safeRaw = Number.isFinite(raw) ? raw : 0
+      myDeltas[c.mint] = (myDeltas[c.mint] ?? 0) + safeRaw / Math.pow(10, decimals)
     }
   }
 
-  for (const mint of new Set([...Object.keys(preMap), ...Object.keys(postMap)])) {
-    const sym = getSym(mint)
-    if (!sym || !FOCUS_SET.has(sym)) continue
-    const delta = (postMap[mint] || 0) - (preMap[mint] || 0)
+  // Defensive: warn if a focus-mint balance change is missing userAccount entirely
+  // AND the ATA-fallback didn't recover it (Helius parser regression).
+  for (const a of accountData) {
+    for (const c of a?.tokenBalanceChanges ?? []) {
+      if (c?.userAccount) continue
+      // Skip if we successfully recovered via ATA-fallback — warn would be misleading.
+      if (walletAtas && c?.tokenAccount && walletAtas.has(c.tokenAccount)) continue
+      const sym = getSym(c?.mint)
+      if (sym && FOCUS_SET.has(sym)) {
+        const prefix = logPrefix ?? '[fetch-tx]'
+        console.warn(`${prefix}   warn: sig ${sig.slice(0, 8)}… focus-mint ${sym} tokenBalanceChange has no userAccount — Helius parser regression?`)
+      }
+    }
+  }
+
+  for (const mint of Object.keys(myDeltas)) {
+    const sym = getSym(mint)!
+    const delta = myDeltas[mint]
     if (Math.abs(delta) < 0.001) continue
     moves.push({
       txHash: sig,
@@ -183,7 +197,7 @@ export function parseTransaction(
       price: STABLE_TOKENS.has(sym) ? 1 : null,
       usd: STABLE_TOKENS.has(sym) ? Math.abs(delta) : null,
       priceSource: STABLE_TOKENS.has(sym) ? 'stable' : null,
-      counterparty: findCounterpartyOwner(walletAddress, delta, mint, meta, keys),
+      counterparty: findCounterpartyOwner(walletAddress, delta, mint, accountData),
     })
   }
 
@@ -195,17 +209,21 @@ type WalletResult = {
   signaturesScanned: number
   moves: number
   inserted: number
-  failedSigs: number
+  failedTxs: number
   error?: string
 }
 
-const SIG_PAGE = 100
-const MAX_PAGES_PER_WALLET_INCREMENTAL = 10   // ~1000 signatures per run per wallet (safety net)
-const TX_CONCURRENCY = 3                      // concurrent getTransaction calls; free tier is ~10 rps
+const SIG_PAGE = 1000   // getSignaturesForAddress max page
+const ENHANCED_BATCH = 100   // Helius /v0/transactions POST max
+const MAX_PAGES_PER_WALLET_INCREMENTAL = 10   // safety net per source in incremental mode
 
 function shortAddr(addr: string): string {
   return addr.length > 12 ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : addr
 }
+
+type SigSource =
+  | { kind: 'owner'; address: string }
+  | { kind: 'ata'; address: string; mint: string }
 
 async function processWallet(
   walletRow: typeof wallet.$inferSelect,
@@ -214,114 +232,144 @@ async function processWallet(
   const prefix = opts.logPrefix ?? `[fetch-tx ${walletRow.entityId} ${shortAddr(walletRow.address)}]`
   const startedAt = Date.now()
 
-  // Incremental mode: use `until=<latest-known-signature>` so Helius stops
-  // server-side at our high-water mark. Full-backfill mode skips it entirely
-  // and drains the wallet until Helius returns an empty page.
-  let untilSig: string | null = null
+  // Incremental mode: determine the high-water mark — both as a Helius `until` cursor
+  // for the owner source, and as a blockTime cutoff applied to all sources.
+  let untilSig: string | undefined
+  let untilBlockTimeUnix: number | undefined
   if (!opts.full) {
-    const [latest] = await db.select({ txHash: transaction.txHash })
+    const [latest] = await db.select({ txHash: transaction.txHash, blockTime: transaction.blockTime })
       .from(transaction)
       .where(eq(transaction.walletAddress, walletRow.address))
       .orderBy(desc(transaction.blockTime))
       .limit(1)
-    untilSig = latest?.txHash ?? null
+    untilSig = latest?.txHash ?? undefined
+    if (latest?.blockTime) {
+      untilBlockTimeUnix = Math.floor(latest.blockTime.getTime() / 1000)
+    }
   }
 
+  // Enumerate the wallet's focus-mint ATAs. Each ATA address has its own
+  // sig-history universe that owner-keyed queries don't necessarily cover
+  // (e.g. clean SPL transfers where the owner's pubkey isn't in accountKeys).
+  const atas = await heliusGetTokenAccountsByOwner(walletRow.address)
+  const walletAtas = new Set<string>(atas.map(a => a.ata))
+  const sources: SigSource[] = [
+    { kind: 'owner', address: walletRow.address },
+    ...atas.map((a): SigSource => ({ kind: 'ata', address: a.ata, mint: a.mint })),
+  ]
+  console.log(`${prefix} start mode=${opts.full ? 'full' : 'incremental'}${untilSig ? ` until=${untilSig.slice(0, 8)}…` : ''} sources=${sources.length} (1 owner + ${atas.length} atas)`)
+
+  // Page sigs from each source, dedupe via Set.
+  const allSigs = new Set<string>()
   const pageCap = opts.full ? Number.MAX_SAFE_INTEGER : MAX_PAGES_PER_WALLET_INCREMENTAL
-  console.log(`${prefix} start mode=${opts.full ? 'full' : 'incremental'}${untilSig ? ` until=${untilSig.slice(0, 8)}…` : ''}`)
+  let sigErrFiltered = 0
 
-  let before: string | null = null
-  let scanned = 0
-  let inserted = 0
-  let moves = 0
-  const failedSigs: string[] = []
+  for (const source of sources) {
+    let before: string | undefined
+    let pagesWalked = 0
+    for (let page = 0; page < pageCap; page++) {
+      const pageOpts: Record<string, unknown> = { limit: SIG_PAGE }
+      if (before) pageOpts.before = before
+      // `until=<sig>` only valid against the source whose history contains that sig
+      // (the owner's). ATAs have a different sig universe — we use the blockTime
+      // cutoff below instead.
+      if (untilSig && source.kind === 'owner') pageOpts.until = untilSig
 
-  for (let page = 0; page < pageCap; page++) {
-    const pageOpts: Record<string, unknown> = { limit: SIG_PAGE }
-    if (before) pageOpts.before = before
-    if (untilSig) pageOpts.until = untilSig
+      const sigRes = await heliusRpc('getSignaturesForAddress', [source.address, pageOpts])
+      const sigs: Array<{ signature: string; blockTime: number | null; err: unknown }> = sigRes?.result ?? []
+      if (sigs.length === 0) break
 
-    const sigRes = await heliusRpc('getSignaturesForAddress', [walletRow.address, pageOpts])
-    const sigs: any[] = sigRes?.result || []
-    if (sigs.length === 0) break
-
-    const toFetch: string[] = []
-    for (const s of sigs) {
-      scanned++
-      if (s.err) continue
-      toFetch.push(s.signature)
-    }
-
-    const pageMoves: ParsedMove[] = []
-    for (let i = 0; i < toFetch.length; i += TX_CONCURRENCY) {
-      const chunk = toFetch.slice(i, i + TX_CONCURRENCY)
-      const results = await Promise.all(chunk.map(async (sig) => {
-        try {
-          const r = await heliusRpc('getTransaction', [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }])
-          return { sig, tx: r?.result ?? null, error: r?.error ?? null }
-        } catch (e) {
-          return { sig, tx: null, error: (e as Error).message }
-        }
-      }))
-      for (const { sig, tx, error } of results) {
-        if (!tx) {
-          failedSigs.push(sig)
-          const errMsg = error ? (typeof error === 'string' ? error : JSON.stringify(error)) : 'no result'
-          console.warn(`${prefix}   sig ${sig.slice(0, 8)}… dropped: ${errMsg}`)
+      let pageNew = 0
+      let pageErr = 0
+      let pageOldest = Infinity
+      for (const s of sigs) {
+        if (s.err != null) {
+          sigErrFiltered++
+          pageErr++
           continue
         }
-        const parsed = parseTransaction(tx, walletRow.address, walletRow.entityId)
-        pageMoves.push(...parsed)
-      }
-    }
-    moves += pageMoves.length
-
-    // Hydrate prices for the whole page in one batch (uses shared priceCache)
-    const txsForHydrate = pageMoves.map(moveToTx)
-    const { transactions: hydrated } = await hydrateTransactionPrices(txsForHydrate, {
-      priceCache: opts.priceCache ?? {},
-      fetchMissingHistory: true,
-    })
-
-    let pageInserted = 0
-    if (pageMoves.length > 0) {
-      const rowsToInsert = pageMoves.map((m, idx) => {
-        const h = hydrated[idx]
-        return {
-          txHash: m.txHash,
-          walletAddress: m.walletAddress,
-          entityId: m.entityId,
-          blockTime: m.blockTime,
-          asset: m.asset,
-          qty: String(m.qty),
-          direction: m.direction,
-          price: h.price != null ? String(h.price) : null,
-          usd: h.usd != null ? String(h.usd) : null,
-          priceSource: h.priceSource,
-          counterparty: m.counterparty,
+        if (untilBlockTimeUnix != null && s.blockTime != null && s.blockTime <= untilBlockTimeUnix) continue
+        if (!allSigs.has(s.signature)) {
+          allSigs.add(s.signature)
+          pageNew++
         }
-      })
-      const res = await db.insert(transaction).values(rowsToInsert).onConflictDoNothing().returning()
-      pageInserted = res.length
-      inserted += res.length
+        if (s.blockTime != null && s.blockTime < pageOldest) pageOldest = s.blockTime
+      }
+
+      const errSuffix = pageErr > 0 ? ` (${pageErr} err)` : ''
+      console.log(`${prefix}   source=${source.kind}(${shortAddr(source.address)}) page ${page + 1}: ${sigs.length} sigs${errSuffix}, +${pageNew} new`)
+      pagesWalked++
+
+      // Stop conditions
+      if (sigs.length < SIG_PAGE) break
+      if (untilBlockTimeUnix != null && pageOldest <= untilBlockTimeUnix) break
+      const last = sigs[sigs.length - 1]
+      if (!last?.signature || last.signature === before) break
+      before = last.signature
     }
+    if (!opts.full && pagesWalked >= pageCap) {
+      console.warn(`${prefix}   warn: source=${source.kind}(${shortAddr(source.address)}) hit page cap (${pageCap} × ${SIG_PAGE} sigs) — wallet may be behind on this source`)
+    }
+  }
 
-    const oldestTime = sigs[sigs.length - 1]?.blockTime
-    const oldestDate = oldestTime ? new Date(oldestTime * 1000).toISOString().slice(0, 10) : '?'
-    console.log(`${prefix}   page ${page + 1}: +${sigs.length} sigs (total ${scanned}), +${pageInserted} rows, oldest=${oldestDate}`)
+  // Fetch parsed tx data in batches of 100 via Helius Enhanced API.
+  const sigArray = Array.from(allSigs)
+  const allMoves: ParsedMove[] = []
+  let scanned = 0
+  let failedTxs = 0
+  let noMoves = 0
 
-    before = sigs[sigs.length - 1]?.signature ?? null
-    if (!before) break
+  for (let i = 0; i < sigArray.length; i += ENHANCED_BATCH) {
+    const batch = sigArray.slice(i, i + ENHANCED_BATCH)
+    const txs = await heliusEnhanced(batch)
+    if (txs.length !== batch.length) {
+      console.warn(`${prefix}   warn: Helius Enhanced returned ${txs.length} txs for ${batch.length} sigs — ${batch.length - txs.length} silently dropped`)
+    }
+    for (const tx of txs) {
+      scanned++
+      if (tx?.transactionError != null) {
+        failedTxs++
+        continue
+      }
+      const parsed = parseTransaction(tx, walletRow.address, walletRow.entityId, prefix, walletAtas)
+      if (parsed.length === 0) noMoves++
+      allMoves.push(...parsed)
+    }
+  }
+
+  // Hydrate prices for the entire wallet's moves in one batch (uses shared priceCache).
+  const txsForHydrate = allMoves.map(moveToTx)
+  const { transactions: hydrated } = await hydrateTransactionPrices(txsForHydrate, {
+    priceCache: opts.priceCache ?? {},
+    fetchMissingHistory: true,
+  })
+
+  let inserted = 0
+  if (allMoves.length > 0) {
+    const rowsToInsert = allMoves.map((m, idx) => {
+      const h = hydrated[idx]
+      return {
+        txHash: m.txHash,
+        walletAddress: m.walletAddress,
+        entityId: m.entityId,
+        blockTime: m.blockTime,
+        asset: m.asset,
+        qty: String(m.qty),
+        direction: m.direction,
+        price: h.price != null ? String(h.price) : null,
+        usd: h.usd != null ? String(h.usd) : null,
+        priceSource: h.priceSource,
+        counterparty: m.counterparty,
+      }
+    })
+    const res = await db.insert(transaction).values(rowsToInsert).onConflictDoNothing().returning()
+    inserted = res.length
   }
 
   const elapsedMs = Date.now() - startedAt
-  if (failedSigs.length > 0) {
-    const sample = failedSigs.slice(0, 5).map(s => s.slice(0, 8)).join(', ')
-    const more = failedSigs.length > 5 ? `, …+${failedSigs.length - 5} more` : ''
-    console.warn(`${prefix} ${failedSigs.length} sig(s) failed to fetch: ${sample}${more}`)
-  }
-  console.log(`${prefix} done: ${scanned} scanned, ${moves} moves, ${inserted} inserted, ${failedSigs.length} failed in ${elapsedMs}ms`)
-  return { ok: true, signaturesScanned: scanned, moves, inserted, failedSigs: failedSigs.length }
+  const sigErrSuffix = sigErrFiltered > 0 ? ` (${sigErrFiltered} err filtered)` : ''
+  console.log(`${prefix} done: ${allSigs.size} sigs${sigErrSuffix}, ${scanned} txs, ${failedTxs} failed, ${noMoves} no-moves, ${allMoves.length} moves, ${inserted} inserted in ${elapsedMs}ms`)
+  return { ok: true, signaturesScanned: scanned, moves: allMoves.length, inserted, failedTxs }
 }
 
 /**
@@ -370,7 +418,7 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
         signaturesScanned: 0,
         moves: 0,
         inserted: 0,
-        failedSigs: 0,
+        failedTxs: 0,
         error: (err as Error).message,
       }
       failed++
