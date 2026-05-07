@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { isQboEntity } from '@/lib/qb/config'
-import { getPnlData, PnlNotCachedError } from '@/lib/qb/pnl-data'
+import { getPnlData, PnlNotCachedError, type PnlDataScope } from '@/lib/qb/pnl-data'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -13,9 +13,6 @@ const QuerySchema = z.object({
   periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
 
-// Reads P&L data from qb_report_cache only. The cron caches one row per
-// calendar month; single-month queries match that row directly, and multi-
-// month (e.g. YTD) queries aggregate the months that fall inside the range.
 export async function GET(req: Request) {
   const { deny } = await requirePermission('qb:read', req)
   if (deny) return deny
@@ -29,17 +26,22 @@ export async function GET(req: Request) {
   }
 
   const { entity, periodStart, periodEnd } = parsed.data
-  if (!isQboEntity(entity)) {
+  let scope: PnlDataScope
+  if (entity === 'All') {
+    scope = 'All'
+  } else if (isQboEntity(entity)) {
+    scope = entity
+  } else {
     return NextResponse.json({ error: 'Invalid entity', code: 'pnl.invalid_entity' }, { status: 400 })
   }
 
   try {
-    const data = await getPnlData(entity, periodStart, periodEnd)
+    const data = await getPnlData(scope, periodStart, periodEnd)
     return NextResponse.json(data)
   } catch (err) {
     if (err instanceof PnlNotCachedError) {
       return NextResponse.json(
-        { error: err.message, code: err.code, entity, periodStart, periodEnd },
+        { error: err.message, code: err.code, entity: scope, periodStart, periodEnd },
         { status: 404 },
       )
     }
