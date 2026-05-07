@@ -9,6 +9,7 @@ import {
 } from '@/lib/db/schema'
 import { fetchQboJson, qbFetchReport, type QbReportType } from '@/lib/qb/client'
 import { getQboRealmId, isQboEntity, type QboEntity } from '@/lib/qb/config'
+import { buildGlAccountList } from './gl-account-list.ts'
 
 /**
  * How long to trust a non-closed (moving-window or current-month) cache row
@@ -111,26 +112,22 @@ async function buildSpecsForEntity(entityId: string, now: Date = new Date()): Pr
     isClosed: false,
   })
 
-  // GL: one request per mapped account per month. QB's GeneralLedger report
-  // takes a singular `account=<id>` query param — the plural `accounts=`
-  // form isn't actually supported, so the only way to get an account-scoped
-  // report is to fetch each one individually. Matches v1's behavior.
+  // GL: one request per account per month for both budget-mapped accounts and
+  // every P&L-typed account in the catalog. The latter powers the P&L drill-
+  // down on the page; closed-month idempotence keeps subsequent runs cheap.
   const mappings = await db.select({ acct: budgetQbMapping.qbAccountNumber }).from(budgetQbMapping)
-  const uniqueAccounts = Array.from(new Set(mappings.map((m) => m.acct))).sort()
-  if (uniqueAccounts.length === 0) return specs
+  const budgetAccountNumbers = Array.from(new Set(mappings.map((m) => m.acct))).sort()
 
   const catalog = await db.select({
     accountNumber: qbAccountCatalog.qbAccountNumber,
     accountId: qbAccountCatalog.qbAccountId,
+    accountType: qbAccountCatalog.accountType,
   }).from(qbAccountCatalog).where(eq(qbAccountCatalog.entityId, entityId))
-  const idByNumber = new Map<string, string>()
-  for (const row of catalog) {
-    if (row.accountNumber) idByNumber.set(row.accountNumber, row.accountId)
-  }
 
-  for (const accountNumber of uniqueAccounts) {
-    const accountId = idByNumber.get(accountNumber)
-    if (!accountId) continue
+  const accounts = buildGlAccountList(budgetAccountNumbers, catalog)
+  if (accounts.length === 0) return specs
+
+  for (const { accountNumber, accountId } of accounts) {
     for (const m of months) {
       specs.push({
         reportType: 'general_ledger',
