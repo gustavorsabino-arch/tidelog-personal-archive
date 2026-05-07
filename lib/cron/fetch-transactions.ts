@@ -215,6 +215,7 @@ type WalletResult = {
 
 const SIG_PAGE = 1000   // getSignaturesForAddress max page
 const ENHANCED_BATCH = 100   // Helius /v0/transactions POST max
+const INSERT_CHUNK = 500   // chunk DB inserts to avoid Drizzle/postgres-js stack overflow on large wallets
 const MAX_PAGES_PER_WALLET_INCREMENTAL = 10   // safety net per source in incremental mode
 
 function shortAddr(addr: string): string {
@@ -362,8 +363,11 @@ async function processWallet(
         counterparty: m.counterparty,
       }
     })
-    const res = await db.insert(transaction).values(rowsToInsert).onConflictDoNothing().returning()
-    inserted = res.length
+    for (let i = 0; i < rowsToInsert.length; i += INSERT_CHUNK) {
+      const chunk = rowsToInsert.slice(i, i + INSERT_CHUNK)
+      const res = await db.insert(transaction).values(chunk).onConflictDoNothing().returning()
+      inserted += res.length
+    }
   }
 
   const elapsedMs = Date.now() - startedAt
