@@ -284,6 +284,7 @@ async function processWallet(
       let pageErr = 0
       let pageOldest = Infinity
       for (const s of sigs) {
+        if (s.blockTime != null && s.blockTime < pageOldest) pageOldest = s.blockTime
         if (s.err != null) {
           sigErrFiltered++
           pageErr++
@@ -294,7 +295,6 @@ async function processWallet(
           allSigs.add(s.signature)
           pageNew++
         }
-        if (s.blockTime != null && s.blockTime < pageOldest) pageOldest = s.blockTime
       }
 
       const errSuffix = pageErr > 0 ? ` (${pageErr} err)` : ''
