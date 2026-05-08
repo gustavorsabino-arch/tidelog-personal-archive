@@ -362,6 +362,9 @@ th.sortable:hover { color: var(--accent) }
 .empty-icon { font-size: 2rem; opacity: 0.3 }
 .error-msg { background: var(--red-bg); border: 1px solid rgba(217,48,37,0.2); color: var(--red); padding: 10px 14px; border-radius: 6px; font-family: var(--mono); font-size: 0.75rem; margin-bottom: 16px }
 
+.gl-badge-button { font-family: var(--mono); font-size: 0.7rem; background: var(--surface2); color: var(--accent); padding: 1px 6px; border-radius: 4px; margin-right: 8px; border: none; cursor: pointer; transition: background 0.15s }
+.gl-badge-button:hover { background: var(--border) }
+
 /* ─── MODAL ───────────────────────────────────────────────────── */
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(26,35,50,0.45); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(2px) }
 .modal-overlay.open { display: flex }

@@ -1,43 +1,47 @@
 import 'server-only'
 import { readCachedReportsInRange } from '@/lib/qb/cache-reads'
 import { mergePnlTrees, parsePnlReport, type PnlTree, type QboProfitAndLossReport } from '@/lib/qb/pnl'
-import type { QboEntity } from '@/lib/qb/config'
+import { QBO_ENTITIES, type QboEntity } from '@/lib/qb/config'
+import {
+  combineEntityResults,
+  PnlNotCachedError,
+  type EntityLoadResult,
+  type PnlData,
+  type PnlDataScope,
+} from '@/lib/qb/pnl-combine'
 
-export type PnlData = PnlTree & {
-  entity: string
-  periodStart: string
-  periodEnd: string
-  fetchedAt: string
-  cachedMonths: number
-}
+// Re-export the public surface so existing callers of `pnl-data.ts` keep working.
+export { PnlNotCachedError }
+export type { PnlData, PnlDataScope }
 
-export class PnlNotCachedError extends Error {
-  code = 'pnl.not_cached'
-  constructor(entity: string, periodStart: string, periodEnd: string) {
-    super(`No cached P&L for ${entity} between ${periodStart} and ${periodEnd}. Wait for the next fetch-qb-reports cron run.`)
-  }
-}
-
-export async function getPnlData(
+async function loadEntityTree(
   entity: QboEntity,
   periodStart: string,
   periodEnd: string,
-): Promise<PnlData> {
+): Promise<EntityLoadResult> {
   const reports = await readCachedReportsInRange<QboProfitAndLossReport>(
     entity, 'profit_and_loss', periodStart, periodEnd,
   )
-
   if (reports.length === 0) {
-    throw new PnlNotCachedError(entity, periodStart, periodEnd)
+    return { entity, tree: null, cachedMonths: 0 }
+  }
+  const tree = mergePnlTrees(reports.map(parsePnlReport))
+  return { entity, tree, cachedMonths: reports.length }
+}
+
+export async function getPnlData(
+  scope: PnlDataScope,
+  periodStart: string,
+  periodEnd: string,
+): Promise<PnlData> {
+  const fetchedAt = new Date().toISOString()
+  if (scope === 'All') {
+    const results = await Promise.all(
+      QBO_ENTITIES.map((e) => loadEntityTree(e, periodStart, periodEnd)),
+    )
+    return combineEntityResults(results, scope, periodStart, periodEnd, fetchedAt)
   }
 
-  const tree = mergePnlTrees(reports.map(parsePnlReport))
-  return {
-    entity,
-    periodStart,
-    periodEnd,
-    fetchedAt: new Date().toISOString(),
-    cachedMonths: reports.length,
-    ...tree,
-  }
+  const result = await loadEntityTree(scope, periodStart, periodEnd)
+  return combineEntityResults([result], scope, periodStart, periodEnd, fetchedAt)
 }
