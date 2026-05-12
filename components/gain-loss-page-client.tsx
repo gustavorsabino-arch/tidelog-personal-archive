@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
-import { fmtUSD, fmtNum } from '@/lib/format'
+import { fmtUSD, fmtNum, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
 import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
+import { useGainLossMonths } from '@/lib/hooks/use-gain-loss-months'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import { CopyButton } from '@/components/copy-button'
@@ -27,15 +28,27 @@ export function GainLossPageClient({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Filters
+  // Server-side filters (require a refetch)
+  const [yearFilter, setYearFilter] = useState('')
+  const [monthFilter, setMonthFilter] = useState('')
+  // Client-side filters (narrow the already-fetched dataset)
   const [tokenFilter, setTokenFilter] = useState('')
   const [termFilter, setTermFilter] = useState('')
   const [walletFilter, setWalletFilter] = useState('')
 
+  const { options: walletOptions } = useEntityWallets(entity)
+  const { years: yearOptions, byYear: monthsByYear, loading: monthsLoading } = useGainLossMonths(entity)
+
   async function fetchData() {
     setLoading(true)
     try {
-      const res = await apiFetch<GainLossResponse>(`/api/treasury/gain-loss?entity=${entity}`)
+      const params = new URLSearchParams({ entity })
+      const range = monthFilter ? monthToRange(monthFilter) : yearToRange(yearFilter)
+      if (range) {
+        params.set('from', range.from)
+        params.set('to', range.to)
+      }
+      const res = await apiFetch<GainLossResponse>(`/api/treasury/gain-loss?${params}`)
       setGainLoss(res.gainLoss)
       setSummary(res.summary)
       setError(null)
@@ -46,23 +59,59 @@ export function GainLossPageClient({
     }
   }
 
+  // One-way flag: flips true the first time state moves away from SSR initial
+  // values, and stays true. Skips the redundant initial fetch (state already
+  // came from SSR) without suppressing later refetches when the user happens
+  // to reset filters back to their initial values.
+  const hasInteracted = useRef(false)
+
   useEffect(() => {
-    // Skip refetch when state still matches the SSR-provided initial values.
-    // Survives React 19 StrictMode's double-mount, which breaks a ref-based guard.
-    if (entity === initialEntity) return
+    const atInitialState =
+      entity === initialEntity && !yearFilter && !monthFilter
+    if (!atInitialState) hasInteracted.current = true
+    if (!hasInteracted.current && atInitialState) return
     fetchData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entity, initialEntity])
+  }, [entity, initialEntity, yearFilter, monthFilter])
 
-  const { options: walletOptions } = useEntityWallets(entity)
-
-  // Stale-selection reset — drop a wallet that's no longer in the registry
-  // (e.g., after entity switch or wallet deletion).
+  // Stale-selection resets — drop a selection that's no longer in the available
+  // options after an entity switch or data change. Avoids a stuck filter that
+  // would silently produce zero rows.
   useEffect(() => {
     if (walletFilter && walletOptions.length > 0 && !walletOptions.some(o => o.value === walletFilter)) {
       setWalletFilter('')
     }
   }, [walletFilter, walletOptions])
+
+  useEffect(() => {
+    if (!yearFilter) return
+    if (yearOptions.length > 0 && !yearOptions.includes(yearFilter)) {
+      setYearFilter('')
+      setMonthFilter('')
+    }
+  }, [yearFilter, yearOptions])
+
+  useEffect(() => {
+    if (!monthFilter) return
+    const [y, m] = monthFilter.split('-')
+    const monthsForYear = monthsByYear[y]
+    if (monthsForYear && !monthsForYear.includes(m)) {
+      setMonthFilter('')
+    }
+  }, [monthFilter, monthsByYear])
+
+  // Token options reflect the assets present in the current (server-filtered)
+  // dataset, so e.g. narrowing by year hides tokens with no disposals that year.
+  const tokenOptions = useMemo(
+    () => Array.from(new Set(gainLoss.map(g => g.asset))).sort(),
+    [gainLoss],
+  )
+
+  useEffect(() => {
+    if (tokenFilter && tokenOptions.length > 0 && !tokenOptions.includes(tokenFilter)) {
+      setTokenFilter('')
+    }
+  }, [tokenFilter, tokenOptions])
 
   const filtered = useMemo(() => {
     return gainLoss.filter(g => {
@@ -188,7 +237,7 @@ export function GainLossPageClient({
                 {filteredSummary.totalGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.totalGain)}
               </div>
               <div className="card-sub">
-                {tokenFilter || termFilter || walletFilter ? 'Filtered view' : 'Full entity data'}
+                {tokenFilter || termFilter || walletFilter || yearFilter || monthFilter ? 'Filtered view' : 'Full entity data'}
               </div>
             </div>
             <div className="card">
@@ -197,7 +246,7 @@ export function GainLossPageClient({
                 {filteredSummary.shortTermGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.shortTermGain)}
               </div>
               <div className="card-sub">
-                {tokenFilter || termFilter || walletFilter ? 'Filtered view' : 'Full entity data'}
+                {tokenFilter || termFilter || walletFilter || yearFilter || monthFilter ? 'Filtered view' : 'Full entity data'}
               </div>
             </div>
             <div className="card">
@@ -206,14 +255,14 @@ export function GainLossPageClient({
                 {filteredSummary.longTermGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.longTermGain)}
               </div>
               <div className="card-sub">
-                {tokenFilter || termFilter || walletFilter ? 'Filtered view' : 'Full entity data'}
+                {tokenFilter || termFilter || walletFilter || yearFilter || monthFilter ? 'Filtered view' : 'Full entity data'}
               </div>
             </div>
             <div className="card">
               <div className="card-label">Dispositions</div>
               <div className="card-value">{filteredSummary.dispositions}</div>
               <div className="card-sub">
-                {tokenFilter || termFilter || walletFilter ? `${summary.dispositions.toLocaleString()} total` : 'Full entity data'}
+                {tokenFilter || termFilter || walletFilter || yearFilter || monthFilter ? `${summary.dispositions.toLocaleString()} total` : 'Full entity data'}
               </div>
             </div>
           </div>
@@ -223,10 +272,43 @@ export function GainLossPageClient({
             <div className="section-header">
               <span className="section-title">{filtered.length} realized events</span>
               <div className="section-filters">
+                <select
+                  className="fsel"
+                  value={yearFilter}
+                  onChange={e => { setYearFilter(e.target.value); setMonthFilter('') }}
+                  disabled={monthsLoading || yearOptions.length === 0}
+                  title={
+                    monthsLoading
+                      ? 'Loading available periods…'
+                      : yearOptions.length === 0
+                        ? 'This entity has no realized gain/loss yet'
+                        : ''
+                  }
+                >
+                  <option value="">
+                    {monthsLoading
+                      ? 'Loading…'
+                      : yearOptions.length === 0
+                        ? 'No realized events'
+                        : 'All years'}
+                  </option>
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <select
+                  className="fsel"
+                  value={monthFilter}
+                  onChange={e => setMonthFilter(e.target.value)}
+                  disabled={!yearFilter}
+                  title={yearFilter ? '' : 'Select a year first'}
+                >
+                  <option value="">{yearFilter ? 'All months' : 'Select year first'}</option>
+                  {yearFilter && (monthsByYear[yearFilter] ?? []).map(m => (
+                    <option key={m} value={`${yearFilter}-${m}`}>{MONTH_SHORT_NAMES[Number(m) - 1]}</option>
+                  ))}
+                </select>
                 <select className="fsel" value={tokenFilter} onChange={e => setTokenFilter(e.target.value)}>
                   <option value="">All tokens</option>
-                  <option value="SOL">SOL</option>
-                  <option value="ORCA">ORCA</option>
+                  {tokenOptions.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
                 <select className="fsel" value={termFilter} onChange={e => setTermFilter(e.target.value)}>
                   <option value="">All terms</option>
