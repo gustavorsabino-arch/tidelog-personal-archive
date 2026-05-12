@@ -1,13 +1,22 @@
 import { computeFIFO } from '@/lib/fifo'
 import { getCurrentPrices } from '@/lib/defillama'
-import { getTreasuryTransactions } from '@/lib/treasury-transactions'
-import type { GainLossEntry, GainLossResponse } from '@/lib/types'
+import { getTreasuryTransactionsAsc } from '@/lib/treasury-transactions'
+import type { GainLossEntry, GainLossResponse, Transaction } from '@/lib/types'
 
 const GAIN_LOSS_TOKENS = ['SOL', 'ORCA', 'USDC', 'USDT'] as const
 
+// Genesis txs (priceSource='genesis') are the original TGE allocation. They
+// must enter FIFO as cost-basis lots so subsequent disposals match against
+// the TGE price. Mirror the marking the unrealized + ORCA-ledger flows do.
+function markSynthetic(txs: Transaction[]): Transaction[] {
+  return txs.map((t) =>
+    t.priceSource === 'genesis' ? ({ ...t, _synthetic: true } as Transaction) : t,
+  )
+}
+
 async function computeAllGainLoss(entity: string): Promise<GainLossEntry[]> {
-  const [{ transactions }, currentPrices] = await Promise.all([
-    getTreasuryTransactions({ entity, limit: null, offset: 0 }),
+  const [transactions, currentPrices] = await Promise.all([
+    getTreasuryTransactionsAsc(entity),
     getCurrentPrices(),
   ])
 
@@ -17,9 +26,10 @@ async function computeAllGainLoss(entity: string): Promise<GainLossEntry[]> {
     if (typeof p === 'number') prices[token] = p
   }
 
-  // FIFO must run over the full transaction history; narrowing the input
-  // would corrupt lot matching. Date filtering happens on the output below.
-  const { gainLoss } = computeFIFO(transactions, prices)
+  // FIFO must run over the full transaction history (including genesis lots);
+  // narrowing the input would corrupt lot matching. Date filtering happens on
+  // the output below.
+  const { gainLoss } = computeFIFO(markSynthetic(transactions), prices)
   return gainLoss
 }
 
