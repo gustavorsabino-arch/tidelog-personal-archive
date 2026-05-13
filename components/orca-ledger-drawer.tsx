@@ -212,7 +212,7 @@ function LotRow({ l, onJumpTo, showJump = false, showGain = false }: { l: LotTra
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: '0.78rem' }}>
       <div>
-        <div>{new Date(l.acqDate).toLocaleDateString('en-US', { dateStyle: 'medium' })}</div>
+        <div>{new Date(l.acqDate).toLocaleDateString('en-US', { dateStyle: 'medium', timeZone: 'UTC' })}</div>
         <div style={{ color: 'var(--muted)', fontSize: '0.7rem' }}>{l.daysHeld}d · {l.term}</div>
       </div>
       <div style={{ textAlign: 'right' }}>

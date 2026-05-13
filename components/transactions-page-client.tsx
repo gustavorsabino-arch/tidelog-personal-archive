@@ -164,10 +164,11 @@ export function TransactionsPageClient({
               month: 'short',
               day: 'numeric',
               ...(yearFilter ? {} : { year: 'numeric' }),
+              timeZone: 'UTC',
             })}
             {' '}
             <span style={{ color: 'var(--muted)', fontSize: '0.65rem' }}>
-              {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC
             </span>
           </span>
         )

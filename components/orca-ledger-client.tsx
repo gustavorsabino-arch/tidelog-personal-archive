@@ -271,7 +271,7 @@ function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: str
   return (
     <tr data-row-key={k} onClick={() => onOpen(k)} style={{ cursor: 'pointer' }}>
       <td style={{ fontSize: '0.72rem' }}>
-        {new Date(row.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+        {new Date(row.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
       </td>
       <td style={{ lineHeight: 1.4 }}>
         <span style={{ fontSize: '0.72rem' }}>{row.wallet.slice(0, 20)}</span>

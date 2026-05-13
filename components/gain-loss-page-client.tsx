@@ -134,7 +134,7 @@ export function GainLossPageClient({
       key: 'soldDate', label: 'Sold Date', width: '120px',
       render: (g: GainLossEntry) => (
         <span style={{ fontSize: '0.72rem' }}>
-          {new Date(g.soldDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+          {new Date(g.soldDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
         </span>
       ),
     },
