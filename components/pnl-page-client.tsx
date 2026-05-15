@@ -21,6 +21,7 @@ type Props = {
   initialYear: number
   initialMonth: number
   initialData: PnlData | null
+  availableYears: number[]
 }
 
 const ENTITY_TABS: EntityChoice[] = ['All', ...ENTITIES]
@@ -102,7 +103,7 @@ function PnlRow({
   )
 }
 
-function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth }: Omit<Props, 'initialData'>) {
+function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth, availableYears }: Omit<Props, 'initialData'>) {
   const router = useRouter()
   const [entity, setEntity] = useState<EntityChoice>(initialEntity)
   const [mode, setMode] = useState<PnlMode>(initialMode)
@@ -123,13 +124,16 @@ function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth }:
     router.replace(`/pnl?${params.toString()}`)
   }
 
-  // Year dropdown shows current real-world year ± 1, plus the selected year
-  // if it's outside that window (e.g. arrived via shareable URL like ?year=2030).
+  // Year dropdown is sourced from the cache (years that actually have cached
+  // P&L data, computed server-side and passed as availableYears) plus the
+  // current real-world year ± 1 (so users can still navigate forward into a
+  // not-yet-cached month and see the "wait for cron" state) plus the selected
+  // year (defensive against shareable URLs like ?year=2030).
   const yearOptions = useMemo(() => {
     const now = new Date().getUTCFullYear()
-    const set = new Set([now - 1, now, now + 1, year])
+    const set = new Set<number>([...availableYears, now - 1, now, now + 1, year])
     return [...set].sort((a, b) => a - b)
-  }, [year])
+  }, [availableYears, year])
 
   function handleEntity(next: EntityChoice) {
     setEntity(next)
@@ -241,11 +245,11 @@ function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth }:
       <div className="cards-grid">
         <div className="card">
           <div className="card-label">Total Revenue</div>
-          <div className="card-value green">{fmtUSD(totals?.revenue ?? 0)}</div>
+          <div className="card-value green">{fmtUSD((totals?.revenue ?? 0) + (totals?.otherIncome ?? 0))}</div>
         </div>
         <div className="card">
           <div className="card-label">Total Expenses</div>
-          <div className="card-value red">{fmtUSD(Math.abs(totals?.expense ?? 0))}</div>
+          <div className="card-value red">{fmtUSD(Math.abs(totals?.expense ?? 0) + Math.abs(totals?.otherExpense ?? 0))}</div>
         </div>
         <div className="card">
           <div className="card-label">Net Income</div>
@@ -331,6 +335,7 @@ export function PnlPageClient(props: Props) {
         initialMode={props.initialMode}
         initialYear={props.initialYear}
         initialMonth={props.initialMonth}
+        availableYears={props.availableYears}
       />
     </SWRConfig>
   )

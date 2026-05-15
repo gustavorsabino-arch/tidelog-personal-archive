@@ -210,6 +210,11 @@ const REPORT_PATHS: Record<QbReportType, string> = {
  * Fetch a QuickBooks report for the given entity + parameters.
  * Returns the raw QB response JSON; cron upserts this into qb_report_cache.
  */
+// Use home-currency columns (subt_amount / rbal_amount), not native-currency
+// (subt_nat_amount / rbal_nat_amount). The `_nat_` variants are only populated
+// for multi-currency-enabled realms; QB silently drops them for single-currency
+// realms, leaving the response without an amount column. The non-`_nat_`
+// variants are populated for every realm.
 const GL_REQUIRED_COLUMNS = [
   'tx_date',
   'txn_type',
@@ -217,8 +222,8 @@ const GL_REQUIRED_COLUMNS = [
   'name',
   'klass_name',
   'memo',
-  'subt_nat_amount',
-  'rbal_nat_amount',
+  'subt_amount',
+  'rbal_amount',
 ].join(',')
 
 export async function qbFetchReport(

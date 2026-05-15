@@ -137,7 +137,7 @@ export function GlDrillDrawer({
           padding: '12px 16px', display: 'flex', gap: 12, alignItems: 'center',
           borderBottom: '1px solid var(--border)',
         }}>
-          {allClasses.length > 0 && (
+          {allClasses.length > 1 && (
             <select
               className="fsel"
               value={classFilter}

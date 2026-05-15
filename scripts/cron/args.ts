@@ -1,4 +1,4 @@
-export const CRON_HISTORY_START = '2026-01'
+export const CRON_HISTORY_START = '2019-01'
 
 const FROM_RE = /^(\d{4})-(\d{2})$/
 const WALLET_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/

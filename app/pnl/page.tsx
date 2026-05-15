@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { PnlPageClient, type EntityChoice, type PnlMode } from '@/components/pnl-page-client'
 import { getPnlData, PnlNotCachedError, type PnlData, type PnlDataScope } from '@/lib/qb/pnl-data'
+import { getCachedReportYears } from '@/lib/qb/cache-reads'
 import { isQboEntity } from '@/lib/qb/config'
 import { getServerUser } from '@/lib/auth/get-user'
 import { hasPermission } from '@/lib/auth/permissions'
@@ -64,16 +65,14 @@ export default async function PnlPage({
   const periodStart = mode === 'ytd' ? `${year}-01-01` : `${year}-${mm}-01`
 
   const scope: PnlDataScope = entity
-  let initialData: PnlData | null = null
-  try {
-    initialData = await getPnlData(scope, periodStart, periodEnd)
-  } catch (err) {
-    if (err instanceof PnlNotCachedError) {
-      initialData = null
-    } else {
+  const [initialDataResult, availableYears] = await Promise.all([
+    getPnlData(scope, periodStart, periodEnd).catch((err) => {
+      if (err instanceof PnlNotCachedError) return null
       throw err
-    }
-  }
+    }),
+    getCachedReportYears('profit_and_loss'),
+  ])
+  const initialData: PnlData | null = initialDataResult
 
   return (
     <PnlPageClient
@@ -82,6 +81,7 @@ export default async function PnlPage({
       initialYear={year}
       initialMonth={month}
       initialData={initialData}
+      availableYears={availableYears}
     />
   )
 }

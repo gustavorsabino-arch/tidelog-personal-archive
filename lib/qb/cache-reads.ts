@@ -7,7 +7,7 @@
  * the cron has stored.
  */
 
-import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
 import {
@@ -101,6 +101,25 @@ export async function readCachedGeneralLedger<T>(
  * YTD / annual range read is composed by loading the month rows and letting
  * the caller aggregate.
  */
+/**
+ * Distinct years that have at least one cached report of the given type.
+ * Used by UIs (e.g. P&L year picker) to populate dropdowns from real data
+ * rather than a hardcoded range.
+ */
+export async function getCachedReportYears(reportType: QbReportType): Promise<number[]> {
+  const rows = await db.execute<{ year: number }>(
+    sql`SELECT DISTINCT EXTRACT(YEAR FROM ${qbReportCache.periodStart})::int AS year
+        FROM ${qbReportCache}
+        WHERE ${qbReportCache.reportType} = ${reportType}
+        ORDER BY year DESC`,
+  )
+  // drizzle returns rows as an array-like; normalise then sort defensively.
+  return Array.from(rows as unknown as { year: number }[])
+    .map((row) => row.year)
+    .filter((year): year is number => Number.isInteger(year))
+    .sort((a, b) => a - b)
+}
+
 export async function readCachedReportsInRange<T>(
   entity: QboEntity,
   reportType: QbReportType,

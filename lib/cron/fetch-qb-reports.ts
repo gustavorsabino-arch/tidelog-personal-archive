@@ -27,10 +27,14 @@ const ACCOUNT_CATALOG_STALE_MS = 24 * 60 * 60 * 1000
 const TRANSACTION_PAYLOAD_CONCURRENCY = 6
 
 /**
- * First year of operation. Closed months before this year are never fetched.
- * Override with QB_HISTORY_START_YEAR if you ever need earlier data.
+ * Earliest year QB-cached reports go back to. Closed months before this are
+ * never fetched. The default (2019) is intentionally generous — covers the
+ * earliest known activity across entities (Opco's books start in 2019). Note:
+ * this is the QB-data floor only; the budget page enforces its own
+ * `MIN_BUDGET_YEAR` (lib/budget/scope.ts) independently. Override per-env via
+ * QB_HISTORY_START_YEAR if needed.
  */
-const HISTORY_START_YEAR = Number(process.env.QB_HISTORY_START_YEAR || '2026')
+const HISTORY_START_YEAR = Number(process.env.QB_HISTORY_START_YEAR || '2019')
 
 type ReportSpec = {
   reportType: QbReportType
