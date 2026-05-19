@@ -1,129 +1,132 @@
 import { and, asc, eq, inArray } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
-import { transaction, wallet } from '@/lib/db/schema'
-import { computeFIFOWithTrace } from '@/lib/fifo'
-import { getCurrentPrices } from '@/lib/defillama'
-import { rowToTransaction } from '@/lib/treasury-transactions'
+import { transaction, wallet, transactionGain, fifoState } from '@/lib/db/schema'
 import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import type {
-  OrcaLedgerResponse,
-  OrcaLedgerRow,
-  OrcaWalletSummary,
-  Transaction,
+  OrcaLedgerResponse, OrcaLedgerRow, OrcaWalletSummary, LotTraceEntry, OpenLotView,
 } from '@/lib/types'
 
-type WalletRow = typeof wallet.$inferSelect
-
 export async function getOrcaLedger(entity: string): Promise<OrcaLedgerResponse> {
-  // 1. Pull all ORCA tx for the entity, ascending by blockTime, In before Out
-  //    at the same timestamp. Genesis is included (no IS DISTINCT FROM clause).
   const dbEntity = toDbEntity(entity)
-  const txRows = await db
-    .select()
+  const cpWallet = alias(wallet, 'cp_wallet_orca')
+
+  // 1. Joined query: tx + own-wallet label + counterparty-wallet label/entity + gain row.
+  //    Ascending by blockTime, In before Out at the same instant — matches the FIFO
+  //    ordering the writer used to produce these gain rows. Genesis is included
+  //    (no priceSource filter) — same as the live-compute path used to do.
+  const joined = await db
+    .select({
+      txn: transaction,
+      walletLabel: wallet.label,
+      counterpartyLabel: cpWallet.label,
+      counterpartyEntityId: cpWallet.entityId,
+      gain: {
+        stGain: transactionGain.stGain,
+        ltGain: transactionGain.ltGain,
+        realizedTerm: transactionGain.realizedTerm,
+        internal: transactionGain.internal,
+        internalPairedWalletAddr: transactionGain.internalPairedWalletAddr,
+        noBasis: transactionGain.noBasis,
+        lots: transactionGain.lots,
+        balanceAfter: transactionGain.balanceAfter,
+      },
+    })
     .from(transaction)
+    .leftJoin(wallet, eq(wallet.address, transaction.walletAddress))
+    .leftJoin(cpWallet, eq(cpWallet.address, transaction.counterparty))
+    .leftJoin(
+      transactionGain,
+      and(
+        eq(transactionGain.txHash, transaction.txHash),
+        eq(transactionGain.walletAddress, transaction.walletAddress),
+        eq(transactionGain.direction, transaction.direction),
+        // Asset is part of the PK on transaction_gain — a single tx can produce
+        // moves for multiple assets on the same wallet+direction (e.g. swaps).
+        eq(transactionGain.asset, transaction.asset),
+      ),
+    )
     .where(and(eq(transaction.entityId, dbEntity), eq(transaction.asset, 'ORCA')))
     .orderBy(asc(transaction.blockTime), asc(transaction.direction))
 
-  // 2. Resolve wallet labels for tx wallets and counterparties.
-  const walletAddrs = Array.from(new Set(txRows.map(r => r.walletAddress)))
-  const counterpartyAddrs = Array.from(new Set(
-    txRows.map(r => r.counterparty).filter((a): a is string => !!a),
+  // 2. Load the per-entity open-lot snapshot.
+  const stateRows = await db
+    .select()
+    .from(fifoState)
+    .where(and(eq(fifoState.entityId, dbEntity), eq(fifoState.asset, 'ORCA')))
+  const openLots: OpenLotView[] = (stateRows[0]?.openLots as OpenLotView[]) ?? []
+
+  // 3. Resolve internal-paired wallet labels. Some paired wallets may not appear in
+  //    `joined` directly (e.g. no row's own walletAddress matches that addr), so do one
+  //    targeted lookup.
+  const pairedAddrs = Array.from(new Set(
+    joined.map(r => r.gain?.internalPairedWalletAddr).filter((a): a is string => !!a),
   ))
-  const allLookupAddrs = Array.from(new Set([...walletAddrs, ...counterpartyAddrs]))
-  const walletRows: WalletRow[] = allLookupAddrs.length
-    ? await db.select().from(wallet).where(inArray(wallet.address, allLookupAddrs))
+  const pairedRows = pairedAddrs.length
+    ? await db.select().from(wallet).where(inArray(wallet.address, pairedAddrs))
     : []
-  const walletInfo = new Map(walletRows.map(w => [w.address, { label: w.label, entity: toDisplayEntity(w.entityId) }]))
-  const labelOf = (addr: string) => walletInfo.get(addr)?.label ?? addr
+  const pairedLabelOf = new Map(pairedRows.map(w => [w.address, w.label]))
 
-  // 3. Map DB rows → Transaction shape, including the synthetic flag for genesis.
-  const transactions: Transaction[] = txRows.map(r =>
-    rowToTransaction(r, walletInfo.get(r.walletAddress)?.label ?? ''),
-  )
-  const syntheticByKey = new Set<string>()
-  for (const r of txRows) {
-    if (r.priceSource === 'genesis') {
-      syntheticByKey.add(`${r.txHash}::${r.walletAddress}::${r.direction === 'in' ? 'In' : 'Out'}`)
-    }
-  }
-  const fifoInput = transactions.map(t => {
-    const key = `${t.txHash}::${t.walletAddr}::${t.dir}`
-    return syntheticByKey.has(key) ? { ...t, _synthetic: true } : t
-  }) as Transaction[]
-
-  // 4. Current price for unrealized side.
-  const currentPrices = await getCurrentPrices().catch(() => ({} as Record<string, number>))
-  const orcaPrice = typeof currentPrices.ORCA === 'number' ? currentPrices.ORCA : 0
-
-  // 5. Run engine.
-  const { gainLoss, trace, openLots } = computeFIFOWithTrace(
-    fifoInput,
-    orcaPrice > 0 ? { ORCA: orcaPrice } : {},
-  )
-
-  // 6. Build OrcaLedgerRow[].
-  const rows: OrcaLedgerRow[] = transactions.map((t) => {
-    const key = `${t.txHash}::${t.walletAddr}::${t.dir}`
-    const traceEntry = trace.get(key) ?? {
-      lots: [],
-      balanceAfter: 0,
-      internal: false,
-      internalPairedWalletAddr: null,
-      noBasis: false,
-    }
-    const cp = t.counterparty ? walletInfo.get(t.counterparty) ?? null : null
-    const realizedGain = traceEntry.lots.reduce((s, l) => s + l.gain, 0)
-    const terms = new Set(traceEntry.lots.map(l => l.term))
-    const realizedTerm: 'ST' | 'LT' | 'mixed' | null =
-      t.dir !== 'Out' || traceEntry.lots.length === 0
-        ? null
-        : terms.size > 1
-          ? 'mixed'
-          : (terms.has('LT') ? 'LT' : 'ST')
-
+  // 4. Build OrcaLedgerRow[].
+  const rows: OrcaLedgerRow[] = joined.map(r => {
+    const lots = (r.gain?.lots as LotTraceEntry[]) ?? []
+    const realizedGain = lots.reduce((s, l) => s + l.gain, 0)
     return {
-      txHash: t.txHash,
-      walletAddr: t.walletAddr,
-      wallet: t.wallet,
-      entity: t.entity,
-      blockTime: t.blockTime,
-      date: t.date,
+      txHash: r.txn.txHash,
+      walletAddr: r.txn.walletAddress,
+      wallet: r.walletLabel ?? r.txn.walletAddress,
+      entity: toDisplayEntity(r.txn.entityId),
+      blockTime: Math.floor(r.txn.blockTime.getTime() / 1000),
+      date: r.txn.blockTime.toISOString(),
       asset: 'ORCA',
-      qty: t.qty,
-      dir: t.dir,
-      price: t.price,
-      usd: t.usd,
-      priceSource: t.priceSource,
-      counterparty: t.counterparty,
-      counterpartyLabel: cp?.label ?? null,
-      counterpartyEntity: cp?.entity ?? null,
-      internal: traceEntry.internal,
-      internalPairedWalletAddr: traceEntry.internalPairedWalletAddr,
-      internalPairedWalletLabel: traceEntry.internalPairedWalletAddr
-        ? walletInfo.get(traceEntry.internalPairedWalletAddr)?.label ?? null
+      qty: Math.abs(Number(r.txn.qty)),
+      dir: r.txn.direction === 'in' ? 'In' : 'Out',
+      price: r.txn.price === null ? null : Number(r.txn.price),
+      usd: r.txn.usd === null ? null : Number(r.txn.usd),
+      priceSource: r.txn.priceSource,
+      counterparty: r.txn.counterparty,
+      counterpartyLabel: r.counterpartyLabel ?? null,
+      counterpartyEntity: r.counterpartyEntityId ? toDisplayEntity(r.counterpartyEntityId) : null,
+      internal: r.gain?.internal ?? false,
+      internalPairedWalletAddr: r.gain?.internalPairedWalletAddr ?? null,
+      internalPairedWalletLabel: r.gain?.internalPairedWalletAddr
+        ? pairedLabelOf.get(r.gain.internalPairedWalletAddr) ?? null
         : null,
-      balanceAfter: traceEntry.balanceAfter,
-      lots: traceEntry.lots,
+      balanceAfter: r.gain?.balanceAfter ? Number(r.gain.balanceAfter) : 0,
+      lots,
       realizedGain,
-      realizedTerm,
-      noBasis: traceEntry.noBasis,
+      realizedTerm: r.gain?.realizedTerm ?? null,
+      noBasis: r.gain?.noBasis ?? false,
     }
   })
 
-  // 7. Compute summaryByWallet.
-  const summaryByWallet: Record<string, OrcaWalletSummary> = {}
+  // 5. Build summaryByWallet from transaction_gain aggregates + open-lots grouped by wallet.
+  // Sum the per-lot gains directly (full float64 precision) rather than the materialized
+  // stGain+ltGain columns (numeric(20,2) — rounded to cents). The live-compute baseline
+  // used full precision, so this preserves cent-perfect lifetime totals per wallet.
   const lifetimeByWallet = new Map<string, number>()
-  for (const g of gainLoss) {
-    lifetimeByWallet.set(g.walletAddr, (lifetimeByWallet.get(g.walletAddr) ?? 0) + g.gain)
+  for (const r of joined) {
+    const lots = (r.gain?.lots as LotTraceEntry[]) ?? []
+    if (lots.length === 0) continue
+    const gain = lots.reduce((s, l) => s + l.gain, 0)
+    if (gain === 0) continue
+    lifetimeByWallet.set(r.txn.walletAddress, (lifetimeByWallet.get(r.txn.walletAddress) ?? 0) + gain)
   }
   const lotsByWallet = new Map<string, { qty: number; costPerUnit: number; acqDate: string }[]>()
   for (const lot of openLots) {
     if (!lotsByWallet.has(lot.walletAddr)) lotsByWallet.set(lot.walletAddr, [])
     lotsByWallet.get(lot.walletAddr)!.push({ qty: lot.qty, costPerUnit: lot.costPerUnit, acqDate: lot.acqDate })
   }
-  // Walk every wallet that ever appeared in this entity's ORCA history, plus
-  // wallets with realized gains but no remaining open lots.
-  const allWallets = new Set<string>([...walletAddrs, ...lifetimeByWallet.keys()])
+  const labelByWallet = new Map<string, string>()
+  for (const r of joined) {
+    if (r.walletLabel) labelByWallet.set(r.txn.walletAddress, r.walletLabel)
+  }
+  const summaryByWallet: Record<string, OrcaWalletSummary> = {}
+  const allWallets = new Set<string>([
+    ...labelByWallet.keys(),
+    ...lifetimeByWallet.keys(),
+    ...lotsByWallet.keys(),
+  ])
   for (const addr of allWallets) {
     const remainingLots = lotsByWallet.get(addr) ?? []
     const totalQty = remainingLots.reduce((s, l) => s + l.qty, 0)
@@ -132,7 +135,7 @@ export async function getOrcaLedger(entity: string): Promise<OrcaLedgerResponse>
     if (totalQty < 1e-8 && Math.abs(lifetime) < 1e-8) continue
     summaryByWallet[addr] = {
       walletAddr: addr,
-      wallet: labelOf(addr),
+      wallet: labelByWallet.get(addr) ?? addr,
       totalQty,
       avgCostPerUnit: totalQty > 0 ? totalCost / totalQty : 0,
       remainingLots,
@@ -141,5 +144,11 @@ export async function getOrcaLedger(entity: string): Promise<OrcaLedgerResponse>
     }
   }
 
-  return { rows, summaryByWallet, computedAt: new Date().toISOString() }
+  return {
+    rows,
+    summaryByWallet,
+    // Reflect when the materialized data was last refreshed — closer to truth
+    // than a fresh now(). Falls back to now() if no fifo_state row exists yet.
+    computedAt: stateRows[0]?.computedAt?.toISOString() ?? new Date().toISOString(),
+  }
 }

@@ -17,6 +17,7 @@
     "db:seed": "bun run scripts/seed.ts",
     "db:seed:qb-mapping": "bun run scripts/seed-qb-mapping.ts",
     "db:studio": "drizzle-kit studio",
+    "backfill:orca-gains": "bun run scripts/backfill-orca-gains.ts",
     "cron": "bun run scripts/cron/run.ts",
     "cron:fetch-balances": "bun run scripts/cron/run.ts fetch-balances",
     "cron:fetch-transactions": "bun run scripts/cron/run.ts fetch-transactions",
