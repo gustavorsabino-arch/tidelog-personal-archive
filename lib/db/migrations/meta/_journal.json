@@ -71,6 +71,20 @@
       "when": 1778181050284,
       "tag": "0009_otm_tge_mint_as_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1779148215773,
+      "tag": "0010_aspiring_mantis",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1779148999999,
+      "tag": "0011_transaction_gain_pk_include_asset",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,8 @@ import { wallet, transaction } from '@/lib/db/schema'
 import { heliusRpc, heliusEnhanced, heliusGetTokenAccountsByOwner } from '@/lib/helius'
 import { FOCUS_SET, STABLE_TOKENS, getSym } from '@/lib/constants'
 import { hydrateTransactionPrices, primeLatestPrices } from '@/lib/transaction-pricing'
+import { recomputeEntityGains } from '@/lib/orca-gains-writer'
+import { toDisplayEntity } from '@/lib/entity'
 import type { Transaction } from '@/lib/types'
 
 type Direction = 'in' | 'out'
@@ -394,6 +396,7 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
   const results: Record<string, WalletResult> = {}
   let totalInserted = 0
   let failed = 0
+  const entitiesWithInserts = new Set<string>()
 
   // Per-run price cache, shared across all wallets and pages.
   // Pre-populate the `<token>::latest` keys so hydrateTransactionPrices' 3-day
@@ -416,6 +419,7 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
       const r = await processWallet(w, { ...opts, logPrefix, priceCache })
       results[w.address] = r
       totalInserted += r.inserted
+      if (r.inserted > 0) entitiesWithInserts.add(w.entityId)
     } catch (err) {
       results[w.address] = {
         ok: false,
@@ -428,6 +432,18 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
       failed++
     }
   }
+
+  const gainsResults: { entity: string; totals: Record<string, number>; error?: string }[] = []
+  for (const dbEntity of entitiesWithInserts) {
+    const displayEntity = toDisplayEntity(dbEntity)
+    try {
+      const { totals } = await recomputeEntityGains(displayEntity)
+      gainsResults.push({ entity: displayEntity, totals })
+    } catch (e) {
+      gainsResults.push({ entity: displayEntity, totals: {}, error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+  console.log(`[fetch-tx] gains recompute: ${gainsResults.map(g => `${g.entity}={${Object.entries(g.totals).map(([k,v])=>`${k}:${v}`).join(',')}}${g.error ? ` ERR:${g.error}` : ''}`).join(', ')}`)
 
   const elapsedMs = Date.now() - jobStartedAt
   console.log(`[fetch-tx] job done: ${wallets.length} wallets, ${totalInserted} rows inserted, ${failed} failed, ${elapsedMs}ms`)

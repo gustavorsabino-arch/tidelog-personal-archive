@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
-import { transaction, wallet } from '@/lib/db/schema'
+import { transaction, transactionGain, wallet } from '@/lib/db/schema'
 import { STABLE_TOKENS } from '@/lib/constants'
 import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import type { Transaction, TransactionsResponse } from '@/lib/types'
@@ -22,7 +23,22 @@ function toUnix(date: Date): number {
   return Math.floor(date.getTime() / 1000)
 }
 
-export function rowToTransaction(row: TransactionRow, walletLabel: string): Transaction {
+type GainJoinRow = {
+  stGain: string | null
+  ltGain: string | null
+  realizedTerm: 'ST' | 'LT' | 'mixed' | null
+  internal: boolean | null
+  internalPairedWalletAddr: string | null
+  noBasis: boolean | null
+  lots: unknown // jsonb — LotTraceEntry[] at runtime
+}
+
+export function rowToTransaction(
+  row: TransactionRow,
+  walletLabel: string,
+  counterpartyLabel: string | null = null,
+  gain: GainJoinRow | null = null,
+): Transaction {
   const qty = Number(row.qty)
   const isStable = STABLE_TOKENS.has(row.asset)
   const dbPrice = row.price === null ? null : Number(row.price)
@@ -45,6 +61,14 @@ export function rowToTransaction(row: TransactionRow, walletLabel: string): Tran
     priceSource,
     counterparty: row.counterparty,
     category: row.category,
+    counterpartyLabel,
+    stGain: gain?.stGain != null ? Number(gain.stGain) : null,
+    ltGain: gain?.ltGain != null ? Number(gain.ltGain) : null,
+    realizedTerm: gain?.realizedTerm ?? null,
+    internal: gain?.internal ?? null,
+    internalPairedWalletAddr: gain?.internalPairedWalletAddr ?? null,
+    noBasis: gain?.noBasis ?? null,
+    lots: (gain?.lots as Transaction['lots']) ?? null,
   }
 }
 
@@ -94,10 +118,36 @@ export async function getTreasuryTransactions({
   //   3. summary totals (computed from stored USD across the whole filter set;
   //      covers stables and anything the cron has already priced — unpriced
   //      rows contribute 0 here, same as before hydration)
+  const cpWallet = alias(wallet, 'cp_wallet')
+
   const pageQueryBase = db
-    .select({ txn: transaction, walletLabel: wallet.label })
+    .select({
+      txn: transaction,
+      walletLabel: wallet.label,
+      counterpartyLabel: cpWallet.label,
+      gain: {
+        stGain: transactionGain.stGain,
+        ltGain: transactionGain.ltGain,
+        realizedTerm: transactionGain.realizedTerm,
+        internal: transactionGain.internal,
+        internalPairedWalletAddr: transactionGain.internalPairedWalletAddr,
+        noBasis: transactionGain.noBasis,
+        lots: transactionGain.lots,
+      },
+    })
     .from(transaction)
     .leftJoin(wallet, eq(wallet.address, transaction.walletAddress))
+    .leftJoin(cpWallet, eq(cpWallet.address, transaction.counterparty))
+    .leftJoin(
+      transactionGain,
+      and(
+        eq(transactionGain.txHash, transaction.txHash),
+        eq(transactionGain.walletAddress, transaction.walletAddress),
+        eq(transactionGain.direction, transaction.direction),
+        // Asset must match — a single tx can carry both SOL and ORCA moves.
+        eq(transactionGain.asset, transaction.asset),
+      ),
+    )
     .where(where)
     .orderBy(desc(transaction.blockTime))
   const pageQuery = unbounded
@@ -119,7 +169,9 @@ export async function getTreasuryTransactions({
       .where(where),
   ])
 
-  const transactions = pageRows.map((row) => rowToTransaction(row.txn, row.walletLabel ?? ''))
+  const transactions = pageRows.map((row) =>
+    rowToTransaction(row.txn, row.walletLabel ?? '', row.counterpartyLabel ?? null, row.gain ?? null),
+  )
 
   const inflowsUSD = Number(summaryRows[0]?.inflows ?? 0)
   const outflowsUSD = Number(summaryRows[0]?.outflows ?? 0)

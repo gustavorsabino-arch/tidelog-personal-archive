@@ -15,9 +15,10 @@ type Props<T> = {
   columns: Column<T>[]
   defaultSort?: { col: string; dir: 'asc' | 'desc' }
   maxHeight?: string
+  rowClassName?: (row: T) => string | undefined
 }
 
-export function DataTable<T extends Record<string, unknown>>({ data, columns, defaultSort, maxHeight = '600px' }: Props<T>) {
+export function DataTable<T extends Record<string, unknown>>({ data, columns, defaultSort, maxHeight = '600px', rowClassName }: Props<T>) {
   const [sort, setSort] = useState(defaultSort || { col: '', dir: 'desc' as const })
 
   const sorted = useMemo(() => {
@@ -73,7 +74,7 @@ export function DataTable<T extends Record<string, unknown>>({ data, columns, de
             </tr>
           ) : (
             sorted.map((row, i) => (
-              <tr key={i}>
+              <tr key={i} className={rowClassName ? rowClassName(row) : undefined}>
                 {columns.map((col, index) => (
                   <td
                     key={col.key}

@@ -28,6 +28,17 @@ export interface Transaction {
   priceSource: string | null
   counterparty: string | null
   category: string | null
+  // ---- enrichment (populated server-side via JOINs; undefined when the producer didn't compute them,
+  //      null when joined but no match). Marked optional (`?`) so existing producers like
+  //      lib/cron/fetch-transactions.ts:27 (moveToTx) and inline test fixtures keep compiling without edits.
+  counterpartyLabel?: string | null
+  stGain?: number | null
+  ltGain?: number | null
+  realizedTerm?: 'ST' | 'LT' | 'mixed' | null
+  internal?: boolean | null
+  internalPairedWalletAddr?: string | null
+  noBasis?: boolean | null
+  lots?: LotTraceEntry[] | null
 }
 
 export interface TransactionSummary {

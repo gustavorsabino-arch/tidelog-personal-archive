@@ -1,5 +1,6 @@
 'use client'
 
+import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
@@ -17,6 +18,32 @@ type TransactionsPageClientProps = {
   initialTotal: number
   initialSummary: TransactionSummary
   pageSize: number
+}
+
+function renderGainCell(
+  gain: number | null | undefined,
+  t: Transaction,
+  monthStartMs: number | null,
+  bucket: 'ST' | 'LT',
+): React.ReactNode {
+  if (gain == null) return <span style={{ color: 'var(--muted)' }}>—</span>
+  // ⚠ when a consumed lot pre-dates the active filter window — the realized term may
+  // not reflect the cost basis the user expects for "this month's" activity.
+  const acqBeforeWindow =
+    monthStartMs != null && (t.lots ?? []).some(l => Date.parse(l.acqDate) < monthStartMs)
+  const sign = gain > 0 ? '+' : ''
+  const cls = gain > 0 ? 'gain-pos' : gain < 0 ? 'gain-neg' : ''
+  return (
+    <span className={cls} style={{ fontWeight: 500 }}>
+      {acqBeforeWindow && (
+        <span
+          title={`A consumed lot was acquired before the selected period; ${bucket} term may not reflect realized-in-period basis.`}
+          style={{ color: 'var(--warn, #d97706)', marginRight: 4 }}
+        >⚠</span>
+      )}
+      {gain === 0 ? '—' : `${sign}${fmtUSD(gain)}`}
+    </span>
+  )
 }
 
 export function TransactionsPageClient({
@@ -153,8 +180,14 @@ export function TransactionsPageClient({
   const rangeStart = total === 0 ? 0 : offset + 1
   const rangeEnd = Math.min(offset + transactions.length, total)
 
-  const columns = [
-    {
+  const monthStartMs = useMemo(() => {
+    if (!monthFilter) return null
+    const [y, m] = monthFilter.split('-').map(Number)
+    return Date.UTC(y, m - 1, 1)
+  }, [monthFilter])
+
+  const columns = useMemo(() => {
+    const dateCol = {
       key: 'date', label: 'Date', width: yearFilter ? '140px' : '160px',
       render: (t: Transaction) => {
         const d = new Date(t.date)
@@ -173,8 +206,8 @@ export function TransactionsPageClient({
           </span>
         )
       },
-    },
-    {
+    }
+    const walletCol = {
       key: 'wallet', label: 'Wallet', width: '180px',
       render: (t: Transaction) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: 170, minWidth: 0 }}>
@@ -187,47 +220,65 @@ export function TransactionsPageClient({
           <CopyButton address={t.walletAddr} />
         </span>
       ),
-    },
-    {
+    }
+    const counterpartyCol = {
+      key: 'counterparty', label: 'Counterparty', width: '180px', sortable: false,
+      render: (t: Transaction) => {
+        if (!t.counterparty) return <span style={{ color: 'var(--muted)' }}>—</span>
+        const label = t.counterpartyLabel || fmtAddr(t.counterparty)
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: 170, minWidth: 0 }}>
+            <span
+              title={t.counterpartyLabel || t.counterparty}
+              style={{ fontSize: '0.74rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+            >
+              {label}
+            </span>
+            <CopyButton address={t.counterparty} />
+          </span>
+        )
+      },
+    }
+    const dirCol = {
       key: 'dir', label: 'Dir', width: '50px',
       render: (t: Transaction) => (
         <span className={t.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ fontWeight: 600, fontSize: '0.72rem' }}>
           {t.dir}
         </span>
       ),
-    },
-    {
+    }
+    const assetCol = {
       key: 'asset', label: 'Token', width: '70px',
       render: (t: Transaction) => {
         const c = TOKEN_COLORS[t.asset] || '#888'
         return <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: `${c}18`, color: c }}>{t.asset}</span>
       },
-    },
-    {
+    }
+    const qtyCol = {
       key: 'qty', label: 'Qty', numeric: true, width: '120px',
       render: (t: Transaction) => (
         <span className={t.dir === 'In' ? 'gain-pos' : 'gain-neg'}>
           {t.dir === 'In' ? '+' : '-'}{fmtNum(t.qty, t.asset === 'SOL' ? 4 : 2)}
         </span>
       ),
-    },
-    {
+    }
+    const priceCol = {
       key: 'price', label: 'Price', numeric: true, width: '90px',
       render: (t: Transaction) => (
         <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>
           {t.price ? `$${t.price.toFixed(t.asset === 'ORCA' ? 4 : 2)}` : '—'}
         </span>
       ),
-    },
-    {
+    }
+    const usdCol = {
       key: 'usd', label: 'USD', numeric: true, width: '110px',
       render: (t: Transaction) => (
         <span className={t.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ fontWeight: 500 }}>
           {t.usd ? fmtUSD(t.usd) : '—'}
         </span>
       ),
-    },
-    {
+    }
+    const txHashCol = {
       key: 'txHash', label: 'Tx', width: '100px', sortable: false,
       render: (t: Transaction) => {
         if (!t.txHash) return <span style={{ color: 'var(--muted)' }}>—</span>
@@ -239,8 +290,25 @@ export function TransactionsPageClient({
           </a>
         )
       },
-    },
-  ]
+    }
+
+    const orcaCols = tokenFilter === 'ORCA' ? [
+      {
+        key: 'stGain', label: 'ST', numeric: true, width: '90px', sortable: false,
+        render: (t: Transaction) => renderGainCell(t.stGain, t, monthStartMs, 'ST'),
+      },
+      {
+        key: 'ltGain', label: 'LT', numeric: true, width: '90px', sortable: false,
+        render: (t: Transaction) => renderGainCell(t.ltGain, t, monthStartMs, 'LT'),
+      },
+    ] : []
+
+    return [
+      dateCol, walletCol, counterpartyCol, dirCol, assetCol, qtyCol, priceCol, usdCol,
+      ...orcaCols,
+      txHashCol,
+    ]
+  }, [tokenFilter, yearFilter, monthStartMs])
 
   return (
     <div>
@@ -353,6 +421,7 @@ export function TransactionsPageClient({
               columns={columns as any}
               defaultSort={{ col: 'date', dir: 'desc' }}
               maxHeight="650px"
+              rowClassName={(row) => (row as unknown as Transaction).internal ? 'tx-row-internal' : undefined}
             />
 
             <div style={{
