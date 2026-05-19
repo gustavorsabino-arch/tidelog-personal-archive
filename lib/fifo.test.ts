@@ -145,6 +145,29 @@ test('trace: noBasis flag set when Out has no lots', () => {
   expect(out.lots).toEqual([])
 })
 
+test('trace: noBasis ignores sub-1e-2 unmatched dust (e.g. closeout-sweep tail)', () => {
+  // Wallet receives exactly 100 ORCA, then disposes 100.005 — 0.005 residue is dust.
+  const txs: Transaction[] = [
+    tx({ txHash: 't1', blockTime: 1, date: '2024-01-01T00:00:00Z', qty: 100, dir: 'In', price: 1 }),
+    tx({ txHash: 't2', blockTime: 2, date: '2024-01-02T00:00:00Z', qty: 100.005, dir: 'Out', price: 2 }),
+  ]
+  const { trace } = computeFIFOWithTrace(txs, { ORCA: 2 })
+  const out = trace.get(KEY('t2', 'wA', 'Out'))!
+  expect(out.noBasis).toBe(false)
+  expect(out.lots).toHaveLength(1)
+})
+
+test('trace: noBasis still fires for material (>1e-2) unmatched residue', () => {
+  // Wallet receives 100, disposes 105 — 5 ORCA is material, must flag.
+  const txs: Transaction[] = [
+    tx({ txHash: 't1', blockTime: 1, date: '2024-01-01T00:00:00Z', qty: 100, dir: 'In', price: 1 }),
+    tx({ txHash: 't2', blockTime: 2, date: '2024-01-02T00:00:00Z', qty: 105, dir: 'Out', price: 2 }),
+  ]
+  const { trace } = computeFIFOWithTrace(txs, { ORCA: 2 })
+  const out = trace.get(KEY('t2', 'wA', 'Out'))!
+  expect(out.noBasis).toBe(true)
+})
+
 test('trace: term boundary ST <365d, LT >365d', () => {
   const day = 86400
   const acqTime = 1700000000

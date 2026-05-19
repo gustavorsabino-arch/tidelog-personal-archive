@@ -300,7 +300,10 @@ export function computeFIFOWithTrace(
             toDispose -= consumed
             if (lot.remaining < 1e-8) queue.shift()
           }
-          noBasis = toDispose > 1e-8 || (tx.qty > 0 && traceLots.length === 0)
+          // Threshold of 1e-2 ORCA tolerates sub-cent dust residue (treasury
+          // closeout sweeps often overshoot the tracked balance by fractions
+          // of a token). Anything material still trips the flag.
+          noBasis = toDispose > 1e-2 || (tx.qty > 0 && traceLots.length === 0)
           addBal(tx.walletAddr, -tx.qty)
         }
       }

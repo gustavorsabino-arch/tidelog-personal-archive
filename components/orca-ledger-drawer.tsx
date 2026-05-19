@@ -166,7 +166,7 @@ function InRowContent({ row, onJumpTo }: { row: OrcaLedgerRow; onJumpTo: (k: str
 }
 
 function OutRowContent({ row, onJumpTo }: { row: OrcaLedgerRow; onJumpTo: (k: string) => void }) {
-  if (row.noBasis) {
+  if (row.noBasis && row.lots.length === 0) {
     return (
       <section style={{ background: 'rgba(255, 70, 70, 0.08)', border: '1px solid rgba(255, 70, 70, 0.3)', padding: 12, borderRadius: 6 }}>
         <div style={{ color: 'var(--red)', fontWeight: 600, marginBottom: 4 }}>⚠ No cost basis</div>
@@ -174,15 +174,24 @@ function OutRowContent({ row, onJumpTo }: { row: OrcaLedgerRow; onJumpTo: (k: st
       </section>
     )
   }
-  const totalQty = row.lots.reduce((s, l) => s + l.qty, 0)
+  const matchedQty = row.lots.reduce((s, l) => s + l.qty, 0)
   const totalCost = row.lots.reduce((s, l) => s + l.qty * l.costPerUnit, 0)
-  const proceeds = (row.price ?? 0) * totalQty
+  const proceeds = (row.price ?? 0) * matchedQty
+  const unmatchedQty = Math.max(0, row.qty - matchedQty)
   return (
     <section>
+      {row.noBasis && (
+        <div style={{ background: 'rgba(240, 165, 0, 0.08)', border: '1px solid rgba(240, 165, 0, 0.3)', padding: 10, borderRadius: 6, marginBottom: 12 }}>
+          <div style={{ color: '#f0a500', fontWeight: 600, fontSize: '0.78rem', marginBottom: 2 }}>⚠ Partial basis</div>
+          <div style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>
+            {fmtNum(unmatchedQty, 4)} ORCA of this disposal had no matching FIFO lot. Realized gain below reflects the matched portion only ({fmtNum(matchedQty, 4)} of {fmtNum(row.qty, 4)} ORCA).
+          </div>
+        </div>
+      )}
       <h3 style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: 8 }}>Lots consumed (FIFO)</h3>
       {row.lots.map((l, i) => <LotRow key={i} l={l} onJumpTo={onJumpTo} showJump showGain />)}
       <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: '0.78rem' }}>
-        <div>Total: <span style={{ fontFamily: 'var(--mono)' }}>{fmtNum(totalQty, 4)} ORCA</span> · Cost: <span style={{ fontFamily: 'var(--mono)' }}>{fmtUSD(totalCost)}</span></div>
+        <div>Total: <span style={{ fontFamily: 'var(--mono)' }}>{fmtNum(matchedQty, 4)} ORCA</span> · Cost: <span style={{ fontFamily: 'var(--mono)' }}>{fmtUSD(totalCost)}</span></div>
         <div>Proceeds: <span style={{ fontFamily: 'var(--mono)' }}>{fmtUSD(proceeds)}</span> · Realized: <span style={{ fontFamily: 'var(--mono)', color: row.realizedGain >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>{row.realizedGain >= 0 ? '+' : ''}{fmtUSD(row.realizedGain)} {row.realizedTerm ? `(${row.realizedTerm.toUpperCase()})` : ''}</span></div>
       </div>
     </section>
