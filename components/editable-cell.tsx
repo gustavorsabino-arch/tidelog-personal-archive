@@ -142,7 +142,7 @@ export function EditableCell({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={s.commit}
+        onClick={() => s.commit()}
         disabled={s.saving}
         title="Save (Enter)"
         aria-label="Save"
