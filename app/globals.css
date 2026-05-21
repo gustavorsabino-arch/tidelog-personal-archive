@@ -660,3 +660,13 @@ th.sortable:hover { color: var(--accent) }
   color: var(--muted);
   font-style: italic;
 }
+
+/* Editable cell hover affordance — surfaces the edit pencil and a subtle
+   outline so users know the cell is clickable. Used by components/editable-cell.tsx. */
+.editable-cell-display:hover {
+  background: var(--surface2, rgba(255, 255, 255, 0.04));
+  border-color: var(--border) !important;
+}
+.editable-cell-display:hover .editable-cell-pencil {
+  opacity: 1 !important;
+}
