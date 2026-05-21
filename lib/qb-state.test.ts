@@ -14,42 +14,35 @@ function mkTx(over: Partial<Transaction> = {}): Transaction {
 }
 
 describe('defaultDescription', () => {
-  it('formats a priced tx as "Dir Asset Qty @ Price = USD (txHashShort…)"', () => {
+  it('formats a priced tx as "Dir - Asset - Qty - $Amount - hash"', () => {
     const t = mkTx({ dir: 'In', asset: 'ORCA', qty: 10.5, price: 2, usd: 21, txHash: 'AbCdEf012345' })
-    const got = defaultDescription(t)
-    expect(got).toBe('In ORCA 10.50 @ $2.00 = $21.00 (AbCdEf01…)')
+    expect(defaultDescription(t)).toBe('In - ORCA - 10.50 - $21.00 - AbCdEf012345')
   })
 
-  it('handles null price gracefully', () => {
-    const t = mkTx({ dir: 'Out', asset: 'SOL', qty: 1.234, price: null, usd: null })
-    const got = defaultDescription(t)
-    expect(got).toContain('Out SOL')
-    expect(got).toContain('no price')
+  it('handles null usd as "(no price)"', () => {
+    const t = mkTx({ dir: 'Out', asset: 'SOL', qty: 1.234, price: null, usd: null, txHash: 'h' })
+    expect(defaultDescription(t)).toBe('Out - SOL - 1.2340 - (no price) - h')
   })
 
-  it('handles null usd while price is present', () => {
-    // Edge case: stables with null usd — treat (price != null && usd == null) the same as (price == null)
-    const t = mkTx({ dir: 'In', asset: 'USDC', qty: 100, price: 1, usd: null })
-    const got = defaultDescription(t)
-    expect(got).toContain('USDC')
-    expect(got).toContain('no price')
+  it('treats null usd the same regardless of price (stables edge case)', () => {
+    // (price != null && usd == null) — falls into the same (no price) branch.
+    const t = mkTx({ dir: 'In', asset: 'USDC', qty: 100, price: 1, usd: null, txHash: 'h' })
+    expect(defaultDescription(t)).toBe('In - USDC - 100.00 - (no price) - h')
   })
 
-  it('truncates txHash to 8 chars + ellipsis', () => {
-    const t = mkTx({ txHash: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' })
-    const got = defaultDescription(t)
-    expect(got).toMatch(/\(ABCDEFGH…\)$/)
+  it('keeps the full tx hash (not truncated)', () => {
+    const longHash = '62BVzBMmaUFLmwVshvK2EVwUrUVYNxLWKjEcJPnrkpF34Wy7TMuTukVDSeEx5aUu5KehD1YTnYSLfuyqtvAYzktu'
+    const t = mkTx({ txHash: longHash, dir: 'In', asset: 'USDC', qty: 38.61, price: 1, usd: 38.61 })
+    expect(defaultDescription(t)).toBe(`In - USDC - 38.61 - $38.61 - ${longHash}`)
   })
 
   it('formats SOL quantities with 4 decimal places', () => {
-    const t = mkTx({ dir: 'Out', asset: 'SOL', qty: 1.234, price: null, usd: null })
-    const got = defaultDescription(t)
-    expect(got).toBe('Out SOL 1.2340 (no price)')
+    const t = mkTx({ dir: 'Out', asset: 'SOL', qty: 1.234, price: 200, usd: 246.8, txHash: 'h' })
+    expect(defaultDescription(t)).toBe('Out - SOL - 1.2340 - $246.80 - h')
   })
 
   it('uses thousands separator for large USD amounts', () => {
     const t = mkTx({ dir: 'In', asset: 'ORCA', qty: 1000, price: 1.5, usd: 1500.5, txHash: 'XX123456abcdef' })
-    const got = defaultDescription(t)
-    expect(got).toBe('In ORCA 1,000.00 @ $1.50 = $1,500.50 (XX123456…)')
+    expect(defaultDescription(t)).toBe('In - ORCA - 1,000.00 - $1,500.50 - XX123456abcdef')
   })
 })
