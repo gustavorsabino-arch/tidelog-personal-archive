@@ -85,6 +85,13 @@
       "when": 1779148999999,
       "tag": "0011_transaction_gain_pk_include_asset",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1779314923186,
+      "tag": "0012_sticky_gorilla_man",
+      "breakpoints": true
     }
   ]
 }

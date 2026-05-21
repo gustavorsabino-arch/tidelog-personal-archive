@@ -10,6 +10,7 @@ import { useTransactionMonths } from '@/lib/hooks/use-transaction-months'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import { CopyButton } from '@/components/copy-button'
+import { EditableCell } from '@/components/editable-cell'
 import type { Transaction, TransactionSummary, TransactionsResponse } from '@/lib/types'
 
 type TransactionsPageClientProps = {
@@ -296,6 +297,29 @@ export function TransactionsPageClient({
         )
       },
     }
+    const descriptionCol = {
+      key: 'description', label: 'Description', width: '240px', sortable: false,
+      render: (t: Transaction) => (
+        <EditableCell
+          value={t.description ?? null}
+          defaultValue={t.descriptionDefault}
+          onSave={async (next) => {
+            if (!t.id) {
+              // Defensive — shouldn't happen because getTreasuryTransactions populates id.
+              console.error('cannot save: transaction has no id', t)
+              return
+            }
+            await apiFetch(`/api/treasury/transactions/${t.id}/qb-state`, {
+              method: 'PATCH',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ description: next }),
+            })
+            // Optimistic refresh — re-fetch the current page so the saved value shows immediately
+            fetchTransactions(offset)
+          }}
+        />
+      ),
+    }
 
     // Show ST/LT columns whenever the visible page contains any ORCA rows,
     // not just when the token filter is set to ORCA. renderGainCell handles
@@ -314,9 +338,10 @@ export function TransactionsPageClient({
     return [
       dateCol, walletCol, counterpartyCol, dirCol, assetCol, qtyCol, priceCol, usdCol,
       ...orcaCols,
+      descriptionCol,
       txHashCol,
     ]
-  }, [hasOrcaRows, yearFilter, monthStartMs])
+  }, [hasOrcaRows, yearFilter, monthStartMs, fetchTransactions, offset])
 
   return (
     <div>
