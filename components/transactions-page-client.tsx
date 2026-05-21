@@ -187,11 +187,6 @@ export function TransactionsPageClient({
     return Date.UTC(y, m - 1, 1)
   }, [monthFilter])
 
-  // ST/LT columns appear whenever the visible page contains any ORCA rows —
-  // not gated on the token filter, so mixed views show gains for the ORCA
-  // rows alongside "—" for others.
-  const hasOrcaRows = useMemo(() => filtered.some(t => t.asset === 'ORCA'), [filtered])
-
   const columns = useMemo(() => {
     const dateCol = {
       key: 'date', label: 'Date', width: yearFilter ? '140px' : '160px',
@@ -321,10 +316,10 @@ export function TransactionsPageClient({
       ),
     }
 
-    // Show ST/LT columns whenever the visible page contains any ORCA rows,
-    // not just when the token filter is set to ORCA. renderGainCell handles
-    // non-ORCA rows by showing "—" because their gain fields are null.
-    const orcaCols = hasOrcaRows ? [
+    // ST/LT columns are always shown for a stable mental model — non-ORCA rows
+    // get "—" via renderGainCell. Avoids the "where did my columns go?" confusion
+    // when pagination/filters happen to land on pages without any ORCA tx.
+    const orcaCols = [
       {
         key: 'stGain', label: 'ST', numeric: true, width: '90px', sortable: false,
         render: (t: Transaction) => renderGainCell(t.stGain, t, monthStartMs, 'ST'),
@@ -333,7 +328,7 @@ export function TransactionsPageClient({
         key: 'ltGain', label: 'LT', numeric: true, width: '90px', sortable: false,
         render: (t: Transaction) => renderGainCell(t.ltGain, t, monthStartMs, 'LT'),
       },
-    ] : []
+    ]
 
     return [
       dateCol, walletCol, counterpartyCol, dirCol, assetCol, qtyCol, priceCol, usdCol,
@@ -341,7 +336,7 @@ export function TransactionsPageClient({
       descriptionCol,
       txHashCol,
     ]
-  }, [hasOrcaRows, yearFilter, monthStartMs, fetchTransactions, offset])
+  }, [yearFilter, monthStartMs, fetchTransactions, offset])
 
   return (
     <div>
