@@ -46,6 +46,11 @@ export interface Transaction {
   id?: string
   description?: string | null      // user-saved override; null = use descriptionDefault
   descriptionDefault?: string      // computed via defaultDescription(); server populates
+  // Wave 2b — GL accounts surfaced from joins:
+  walletGlAccount?: string | null       // wallet.accountCode (read-only display)
+  counterpartyGlAccount?: string | null // counterparty_gl_map.gl_account_number
+  glAccountOverride?: string | null     // tx_qb_state.gl_account_override
+  counterpartyGlOverride?: string | null// tx_qb_state.counterparty_gl_override
 }
 
 export interface TransactionSummary {

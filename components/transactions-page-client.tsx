@@ -2,6 +2,7 @@
 
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtAddr, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
@@ -11,6 +12,7 @@ import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import { CopyButton } from '@/components/copy-button'
 import { EditableCell } from '@/components/editable-cell'
+import { EditableSelectCell, type SelectOption } from '@/components/editable-select-cell'
 import type { Transaction, TransactionSummary, TransactionsResponse } from '@/lib/types'
 
 type TransactionsPageClientProps = {
@@ -76,6 +78,21 @@ export function TransactionsPageClient({
 
   const { options: walletOptions } = useEntityWallets(entity)
   const { years: yearOptions, byYear: monthsByYear } = useTransactionMonths(entity)
+
+  // Wave 2b — QB account catalog for the Counterparty GL dropdown.
+  // SWR caches across renders and dedupes concurrent requests per entity.
+  type QbAccount = { qbAccountId: string; qbAccountNumber: string; qbAccountName: string; accountType: string | null }
+  const { data: glAccountsData } = useSWR<{ entity: string; accounts: QbAccount[] }>(
+    entity ? `/api/qb/accounts?entity=${entity}` : null,
+    apiFetch,
+  )
+  const glOptions: SelectOption[] = useMemo(() => {
+    const accounts = glAccountsData?.accounts ?? []
+    return accounts.map(a => ({
+      value: a.qbAccountNumber,
+      label: `${a.qbAccountNumber} — ${a.qbAccountName}`,
+    }))
+  }, [glAccountsData])
 
   // Offset is passed in explicitly — never read from closure — so pagination
   // and filter changes can each fire exactly one fetch with the right offset,
@@ -279,6 +296,81 @@ export function TransactionsPageClient({
         </span>
       ),
     }
+    const walletGlCol = {
+      key: 'walletGl', label: 'Wallet GL', width: '110px', sortable: false,
+      render: (t: Transaction) => (
+        <span style={{ fontSize: '0.74rem', color: t.walletGlAccount ? 'inherit' : 'var(--muted)' }}>
+          {t.walletGlAccount ?? '—'}
+        </span>
+      ),
+    }
+    const counterpartyGlCol = {
+      key: 'counterpartyGl', label: 'Counterparty GL', width: '220px', sortable: false,
+      render: (t: Transaction) => {
+        // D5: even when counterparty is null, render an editable cell — but save
+        // to glAccountOverride (per-tx) instead of counterpartyGlOverride
+        // (counterparty-keyed), and skip the counterparty_gl_map upsert.
+        const hasCounterparty = !!t.counterparty
+        const value = hasCounterparty
+          ? (t.counterpartyGlOverride ?? null)
+          : (t.glAccountOverride ?? null)
+        const defaultValue = hasCounterparty
+          ? (t.counterpartyGlAccount ?? undefined)
+          : undefined  // no memorization for null counterparty
+        return (
+          <EditableSelectCell
+            value={value}
+            defaultValue={defaultValue}
+            options={glOptions}
+            onSave={async (next) => {
+              if (!t.id) {
+                console.error('cannot save: transaction has no id', t)
+                return
+              }
+              // 1. Save the override — different target depending on whether
+              //    there's a counterparty (D5).
+              const patchBody = hasCounterparty
+                ? { counterpartyGlOverride: next }
+                : { glAccountOverride: next }
+              await apiFetch(`/api/treasury/transactions/${t.id}/qb-state`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(patchBody),
+              })
+              // 2. Map side-effect — only when the row has a counterparty (D5).
+              //    Pick → upsert (auto-memorize, D3).
+              //    Clear (∅) → delete: aggressive clear so inheriting siblings
+              //    lose the italic default. Sibling rows with their own per-tx
+              //    override are untouched. User can re-pick on any row to
+              //    re-establish the memorization.
+              if (hasCounterparty) {
+                if (next != null) {
+                  await apiFetch('/api/qb/counterparty-map', {
+                    method: 'PUT',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                      entity: t.entity,
+                      counterpartyAddress: t.counterparty,
+                      glAccountNumber: next,
+                    }),
+                  })
+                } else {
+                  const params = new URLSearchParams({
+                    entity: t.entity,
+                    counterpartyAddress: t.counterparty!,
+                  })
+                  await apiFetch(`/api/qb/counterparty-map?${params}`, {
+                    method: 'DELETE',
+                  })
+                }
+              }
+              // 3. Refresh page so other rows with the same counterparty pick up the new default
+              fetchTransactions(offset)
+            }}
+          />
+        )
+      },
+    }
     const txHashCol = {
       key: 'txHash', label: 'Tx', width: '100px', sortable: false,
       render: (t: Transaction) => {
@@ -331,12 +423,14 @@ export function TransactionsPageClient({
     ]
 
     return [
-      dateCol, walletCol, counterpartyCol, dirCol, assetCol, qtyCol, priceCol, usdCol,
+      dateCol, walletCol, counterpartyCol,
+      walletGlCol, counterpartyGlCol,
+      dirCol, assetCol, qtyCol, priceCol, usdCol,
       ...orcaCols,
       descriptionCol,
       txHashCol,
     ]
-  }, [yearFilter, monthStartMs, fetchTransactions, offset])
+  }, [yearFilter, monthStartMs, fetchTransactions, offset, glOptions])
 
   return (
     <div>

@@ -30,6 +30,9 @@ export const txQbState = app.table(
     entityId: text('entity_id').notNull().references(() => entity.id),
     // Wave 2a — user-saved override; null = use computed default at read time
     description: text('description'),
+    // Wave 2b — per-tx GL overrides
+    glAccountOverride: text('gl_account_override'),
+    counterpartyGlOverride: text('counterparty_gl_override'),
     // Audit
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     updatedBy: text('updated_by').references(() => user.id),

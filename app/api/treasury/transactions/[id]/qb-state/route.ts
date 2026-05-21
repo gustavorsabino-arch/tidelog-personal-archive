@@ -6,69 +6,108 @@ import { transaction, txQbState } from '@/lib/db/schema'
 import { logAudit } from '@/lib/audit'
 
 // PATCH /api/treasury/transactions/[id]/qb-state
-//   Body: { description: string | null }
+//   Body: any subset of { description, glAccountOverride, counterpartyGlOverride }
+//     - All fields are `string | null`
+//     - Fields NOT present in the body are left untouched (only-update-provided)
+//     - Fields present and set to `null` clear that field on the row
 //
 // Lazily creates the tx_qb_state row on first edit; subsequent edits upsert.
-// `id` is the transaction.id UUID (the defaultRandom column on app.transaction).
-// We look it up to learn the (tx_hash, wallet_address, direction, asset) composite
-// key the tx_qb_state row needs.
+// `id` is the transaction.id UUID; we look it up to learn the composite key
+// (tx_hash, wallet_address, direction, asset) the tx_qb_state row needs.
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { user, deny } = await requirePermission('qb:post', req)
   if (deny) return deny
   const { id } = await ctx.params
 
-  // Parse + validate body
   let body: unknown
-  try {
-    body = await req.json()
-  } catch {
+  try { body = await req.json() } catch {
     return NextResponse.json({ error: 'invalid json' }, { status: 400 })
   }
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'expected object' }, { status: 400 })
   }
-  const description = (body as { description?: unknown }).description
-  if (description !== null && typeof description !== 'string') {
-    return NextResponse.json({ error: 'description must be string or null' }, { status: 400 })
-  }
-  if (typeof description === 'string' && description.length > 4000) {
-    return NextResponse.json({ error: 'description too long (max 4000)' }, { status: 400 })
+  const b = body as Record<string, unknown>
+
+  type FieldSpec = { key: 'description' | 'glAccountOverride' | 'counterpartyGlOverride'; max: number }
+  const FIELDS: FieldSpec[] = [
+    { key: 'description', max: 4000 },
+    { key: 'glAccountOverride', max: 64 },
+    { key: 'counterpartyGlOverride', max: 64 },
+  ]
+
+  // Parse + validate each provided field. Distinguish "not in body" from "in body as null".
+  type Parsed = { key: FieldSpec['key']; provided: boolean; value: string | null }
+  const parsed: Parsed[] = []
+  for (const { key, max } of FIELDS) {
+    if (!(key in b)) {
+      parsed.push({ key, provided: false, value: null })
+      continue
+    }
+    const raw = b[key]
+    if (raw === null) {
+      parsed.push({ key, provided: true, value: null })
+      continue
+    }
+    if (typeof raw !== 'string') {
+      return NextResponse.json({ error: `${key} must be string or null` }, { status: 400 })
+    }
+    if (raw.length > max) {
+      return NextResponse.json({ error: `${key} too long (max ${max})` }, { status: 400 })
+    }
+    parsed.push({ key, provided: true, value: raw })
   }
 
-  // Look up the tx to learn the composite key for tx_qb_state.
+  if (!parsed.some(p => p.provided)) {
+    return NextResponse.json({ error: 'no recognized fields provided' }, { status: 400 })
+  }
+
+  // Look up the tx to get the composite key
   const txRow = await db.select().from(transaction).where(eq(transaction.id, id)).limit(1)
   if (txRow.length === 0) {
     return NextResponse.json({ error: 'transaction not found' }, { status: 404 })
   }
   const t = txRow[0]
-
   const now = new Date()
   const updatedBy = user?.id ?? null
 
+  // Build set fragment for UPDATE — only include provided fields. Always update audit columns.
+  const setMap: Record<string, unknown> = { updatedAt: now, updatedBy }
+  for (const p of parsed) {
+    if (p.provided) setMap[p.key] = p.value
+  }
+
+  // Build insert values — provided fields use the value, non-provided default to null
+  // (the row may not exist yet; insert needs every column we declared).
+  const insertValues: Record<string, unknown> = {
+    txHash: t.txHash,
+    walletAddress: t.walletAddress,
+    direction: t.direction,
+    asset: t.asset,
+    entityId: t.entityId,
+    description: null,
+    glAccountOverride: null,
+    counterpartyGlOverride: null,
+    updatedAt: now,
+    updatedBy,
+  }
+  for (const p of parsed) {
+    if (p.provided) insertValues[p.key] = p.value
+  }
+
   await db.insert(txQbState)
-    .values({
-      txHash: t.txHash,
-      walletAddress: t.walletAddress,
-      direction: t.direction,
-      asset: t.asset,
-      entityId: t.entityId,
-      description,
-      updatedBy,
-      updatedAt: now,
-    })
+    .values(insertValues as typeof txQbState.$inferInsert)
     .onConflictDoUpdate({
       target: [txQbState.txHash, txQbState.walletAddress, txQbState.direction, txQbState.asset],
-      set: { description, updatedBy, updatedAt: now },
+      set: setMap,
     })
 
-  // Fire-and-forget audit. Failure here must not block the user response.
   logAudit({
     userId: updatedBy,
     action: 'tx_qb_state.update',
     resourceType: 'transaction',
     resourceId: id,
-    metadata: { field: 'description', newLength: description === null ? null : description.length },
-  }).catch(() => { /* intentional swallow */ })
+    metadata: { fields: parsed.filter(p => p.provided).map(p => p.key) },
+  }).catch(() => { /* swallow */ })
 
   return NextResponse.json({ ok: true })
 }

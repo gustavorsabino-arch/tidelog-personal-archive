@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
-import { transaction, transactionGain, txQbState, wallet } from '@/lib/db/schema'
+import { transaction, transactionGain, txQbState, wallet, counterpartyGlMap } from '@/lib/db/schema'
 import { STABLE_TOKENS } from '@/lib/constants'
 import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import { defaultDescription } from '@/lib/qb-state'
@@ -35,7 +35,15 @@ type GainJoinRow = {
 }
 
 type QbStateJoinRow = {
+  // Presence marker — see comment on the qbState projection below.
+  txHash: string
   description: string | null
+  glAccountOverride: string | null
+  counterpartyGlOverride: string | null
+}
+
+type CounterpartyGlJoinRow = {
+  glAccountNumber: string | null
 }
 
 export function rowToTransaction(
@@ -44,6 +52,8 @@ export function rowToTransaction(
   counterpartyLabel: string | null = null,
   gain: GainJoinRow | null = null,
   qbState: QbStateJoinRow | null = null,
+  walletAccountCode: string | null = null,
+  counterpartyGl: CounterpartyGlJoinRow | null = null,
 ): Transaction {
   const qty = Number(row.qty)
   const isStable = STABLE_TOKENS.has(row.asset)
@@ -81,6 +91,10 @@ export function rowToTransaction(
     id: row.id,
     description: qbState?.description ?? null,
     descriptionDefault: defaultDescription(base),
+    walletGlAccount: walletAccountCode,
+    counterpartyGlAccount: counterpartyGl?.glAccountNumber ?? null,
+    glAccountOverride: qbState?.glAccountOverride ?? null,
+    counterpartyGlOverride: qbState?.counterpartyGlOverride ?? null,
   }
 }
 
@@ -136,6 +150,7 @@ export async function getTreasuryTransactions({
     .select({
       txn: transaction,
       walletLabel: wallet.label,
+      walletAccountCode: wallet.accountCode,
       counterpartyLabel: cpWallet.label,
       gain: {
         stGain: transactionGain.stGain,
@@ -147,7 +162,19 @@ export async function getTreasuryTransactions({
         lots: transactionGain.lots,
       },
       qbState: {
+        // txHash is a notNull presence marker. Drizzle's nested-projection from
+        // LEFT JOIN collapses the whole object to null when every projected
+        // column is nullable, which would hide a row that has e.g. only
+        // counterpartyGlOverride set. Including the notNull JOIN key gives
+        // Drizzle the "matched" signal it needs. Apply the same pattern to any
+        // new field added here in future waves.
+        txHash: txQbState.txHash,
         description: txQbState.description,
+        glAccountOverride: txQbState.glAccountOverride,
+        counterpartyGlOverride: txQbState.counterpartyGlOverride,
+      },
+      counterpartyGl: {
+        glAccountNumber: counterpartyGlMap.glAccountNumber,
       },
     })
     .from(transaction)
@@ -172,6 +199,13 @@ export async function getTreasuryTransactions({
         eq(txQbState.asset, transaction.asset),
       ),
     )
+    .leftJoin(
+      counterpartyGlMap,
+      and(
+        eq(counterpartyGlMap.entityId, transaction.entityId),
+        eq(counterpartyGlMap.counterpartyAddress, transaction.counterparty),
+      ),
+    )
     .where(where)
     .orderBy(desc(transaction.blockTime))
   const pageQuery = unbounded
@@ -194,7 +228,15 @@ export async function getTreasuryTransactions({
   ])
 
   const transactions = pageRows.map((row) =>
-    rowToTransaction(row.txn, row.walletLabel ?? '', row.counterpartyLabel ?? null, row.gain ?? null, row.qbState ?? null),
+    rowToTransaction(
+      row.txn,
+      row.walletLabel ?? '',
+      row.counterpartyLabel ?? null,
+      row.gain ?? null,
+      row.qbState ?? null,
+      row.walletAccountCode ?? null,
+      row.counterpartyGl ?? null,
+    ),
   )
 
   const inflowsUSD = Number(summaryRows[0]?.inflows ?? 0)

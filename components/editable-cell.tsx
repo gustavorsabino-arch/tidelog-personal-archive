@@ -1,5 +1,6 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
+import { useEditableCellState } from '@/lib/hooks/use-editable-cell-state'
 
 /**
  * Inline-editable text cell. Behavior:
@@ -14,10 +15,8 @@ import { useState, useEffect, useRef } from 'react'
  *  - After successful save, a brief green ✓ flash confirms the commit.
  *  - `disabled` renders read-only (used in Wave 2c for posted rows).
  *
- * Reused in:
- *  - Wave 2a: description column
- *  - Wave 2b: counterparty GL override (planned — same lifecycle, dropdown
- *    variant of the input)
+ * State/lifecycle is owned by `useEditableCellState` so EditableSelectCell
+ * (Wave 2b) can share identical commit/cancel/justSaved/error semantics.
  */
 type Props = {
   value: string | null
@@ -36,21 +35,12 @@ export function EditableCell({
   onSave,
   maxLength = 4000,
 }: Props) {
-  const [editing, setEditing] = useState(false)
-  const [text, setText] = useState(value ?? defaultValue ?? '')
-  const [saving, setSaving] = useState(false)
-  const [justSaved, setJustSaved] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const s = useEditableCellState({ value, defaultValue, onSave })
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Re-sync local state when the row's data changes from outside (e.g. parent refetched)
   useEffect(() => {
-    if (!editing) setText(value ?? defaultValue ?? '')
-  }, [value, defaultValue, editing])
-
-  useEffect(() => {
-    if (editing) inputRef.current?.focus()
-  }, [editing])
+    if (s.editing) inputRef.current?.focus()
+  }, [s.editing])
 
   if (disabled) {
     return (
@@ -60,47 +50,19 @@ export function EditableCell({
     )
   }
 
-  async function commit() {
-    setSaving(true)
-    setError(null)
-    try {
-      const trimmed = text.trim()
-      const isEmpty = trimmed === ''
-      const matchesDefault = trimmed === (defaultValue ?? '')
-      const next = isEmpty || matchesDefault ? null : trimmed
-      if (next !== value) await onSave(next)
-      // Success — flash ✓ and exit edit mode
-      setJustSaved(true)
-      setTimeout(() => setJustSaved(false), 900)
-      setEditing(false)
-    } catch (e) {
-      // Failure — stay in edit mode so user can retry or cancel; surface the
-      // error inline so they don't think the save silently succeeded.
-      setError(e instanceof Error ? e.message : 'Save failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  function cancel() {
-    setText(value ?? defaultValue ?? '')
-    setError(null)
-    setEditing(false)
-  }
-
-  if (!editing) {
+  if (!s.editing) {
     const display = value ?? defaultValue ?? placeholder
     const isDefault = value == null
     return (
       <span
         className="editable-cell-display"
-        onClick={() => !saving && setEditing(true)}
+        onClick={() => !s.saving && s.setEditing(true)}
         title={value ? 'Click to edit description' : 'Default (click to edit description)'}
         style={{
           fontSize: '0.74rem',
           color: isDefault ? 'var(--muted)' : 'inherit',
           fontStyle: isDefault ? 'italic' : 'normal',
-          cursor: saving ? 'wait' : 'pointer',
+          cursor: s.saving ? 'wait' : 'pointer',
           display: 'inline-flex',
           alignItems: 'center',
           gap: 4,
@@ -124,7 +86,7 @@ export function EditableCell({
         >
           {display || <em style={{ color: 'var(--muted)' }}>—</em>}
         </span>
-        {justSaved ? (
+        {s.justSaved ? (
           <span style={{ color: 'var(--green, #10b981)', fontSize: '0.85rem', flexShrink: 0 }} title="Saved">✓</span>
         ) : (
           <span
@@ -144,10 +106,10 @@ export function EditableCell({
 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: '100%' }}>
-      {error && (
+      {s.error && (
         <span
-          title={error}
-          aria-label={`Save failed: ${error}`}
+          title={s.error}
+          aria-label={`Save failed: ${s.error}`}
           style={{
             color: 'var(--red, #dc2626)',
             fontSize: '0.85rem',
@@ -159,20 +121,20 @@ export function EditableCell({
       <input
         ref={inputRef}
         type="text"
-        value={text}
+        value={s.text}
         maxLength={maxLength}
-        disabled={saving}
-        onChange={(e) => { setText(e.target.value); if (error) setError(null) }}
+        disabled={s.saving}
+        onChange={(e) => { s.setText(e.target.value); if (s.error) s.setError(null) }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') commit()
-          else if (e.key === 'Escape') cancel()
+          if (e.key === 'Enter') s.commit()
+          else if (e.key === 'Escape') s.cancel()
         }}
         style={{
           fontSize: '0.74rem',
           flex: 1,
           minWidth: 0,
           padding: '2px 6px',
-          border: `1px solid ${error ? 'var(--red, #dc2626)' : 'var(--accent)'}`,
+          border: `1px solid ${s.error ? 'var(--red, #dc2626)' : 'var(--accent)'}`,
           borderRadius: 3,
           background: 'var(--surface)',
         }}
@@ -180,8 +142,8 @@ export function EditableCell({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={commit}
-        disabled={saving}
+        onClick={s.commit}
+        disabled={s.saving}
         title="Save (Enter)"
         aria-label="Save"
         style={{
@@ -193,14 +155,14 @@ export function EditableCell({
           color: 'white',
           fontSize: '0.78rem',
           lineHeight: 1,
-          cursor: saving ? 'wait' : 'pointer',
+          cursor: s.saving ? 'wait' : 'pointer',
         }}
       >✓</button>
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={cancel}
-        disabled={saving}
+        onClick={s.cancel}
+        disabled={s.saving}
         title="Cancel (Esc)"
         aria-label="Cancel"
         style={{
@@ -212,7 +174,7 @@ export function EditableCell({
           color: 'var(--muted)',
           fontSize: '0.78rem',
           lineHeight: 1,
-          cursor: saving ? 'wait' : 'pointer',
+          cursor: s.saving ? 'wait' : 'pointer',
         }}
       >✗</button>
     </span>
