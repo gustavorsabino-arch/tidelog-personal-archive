@@ -40,6 +40,7 @@ export function EditableCell({
   const [text, setText] = useState(value ?? defaultValue ?? '')
   const [saving, setSaving] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Re-sync local state when the row's data changes from outside (e.g. parent refetched)
@@ -61,22 +62,29 @@ export function EditableCell({
 
   async function commit() {
     setSaving(true)
+    setError(null)
     try {
       const trimmed = text.trim()
       const isEmpty = trimmed === ''
       const matchesDefault = trimmed === (defaultValue ?? '')
       const next = isEmpty || matchesDefault ? null : trimmed
       if (next !== value) await onSave(next)
+      // Success — flash ✓ and exit edit mode
       setJustSaved(true)
       setTimeout(() => setJustSaved(false), 900)
+      setEditing(false)
+    } catch (e) {
+      // Failure — stay in edit mode so user can retry or cancel; surface the
+      // error inline so they don't think the save silently succeeded.
+      setError(e instanceof Error ? e.message : 'Save failed')
     } finally {
       setSaving(false)
-      setEditing(false)
     }
   }
 
   function cancel() {
     setText(value ?? defaultValue ?? '')
+    setError(null)
     setEditing(false)
   }
 
@@ -136,13 +144,25 @@ export function EditableCell({
 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: '100%' }}>
+      {error && (
+        <span
+          title={error}
+          aria-label={`Save failed: ${error}`}
+          style={{
+            color: 'var(--red, #dc2626)',
+            fontSize: '0.85rem',
+            flexShrink: 0,
+            cursor: 'help',
+          }}
+        >⚠</span>
+      )}
       <input
         ref={inputRef}
         type="text"
         value={text}
         maxLength={maxLength}
         disabled={saving}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => { setText(e.target.value); if (error) setError(null) }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') commit()
           else if (e.key === 'Escape') cancel()
@@ -152,7 +172,7 @@ export function EditableCell({
           flex: 1,
           minWidth: 0,
           padding: '2px 6px',
-          border: '1px solid var(--accent)',
+          border: `1px solid ${error ? 'var(--red, #dc2626)' : 'var(--accent)'}`,
           borderRadius: 3,
           background: 'var(--surface)',
         }}
