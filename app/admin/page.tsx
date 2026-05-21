@@ -30,6 +30,37 @@ type NewUserForm = {
 
 const EMPTY_NEW_USER: NewUserForm = { email: '', role: 'budget_viewer', departments: [] }
 
+type AdminWallet = {
+  address: string
+  label: string
+  chain: 'SOL' | 'ETH' | 'BTC'
+  entityId: string
+  accountCode: string | null
+  isExternal: boolean
+  overviewOnly: boolean
+  includeInOverview: boolean
+  createdAt: string
+}
+
+type AdminEntity = { id: string; name: string; isActive: boolean }
+
+type NewWalletForm = {
+  chain: 'SOL' | 'ETH' | 'BTC'
+  address: string
+  label: string
+  entityId: string
+  accountCode: string
+  isExternal: boolean
+  overviewOnly: boolean
+  includeInOverview: boolean
+  backfill: boolean
+}
+
+const EMPTY_NEW_WALLET: NewWalletForm = {
+  chain: 'SOL', address: '', label: '', entityId: '', accountCode: '',
+  isExternal: false, overviewOnly: false, includeInOverview: true, backfill: true,
+}
+
 function emptyDraft(user: AdminUser): Draft {
   return {
     role: user.role ?? '',
@@ -56,6 +87,25 @@ export default function AdminPage() {
   const [newUser, setNewUser] = useState<NewUserForm>(EMPTY_NEW_USER)
   const [creating, setCreating] = useState(false)
 
+  const [wallets, setWallets] = useState<AdminWallet[] | null>(null)
+  const [entities, setEntities] = useState<AdminEntity[]>([])
+  const [newWallet, setNewWallet] = useState<NewWalletForm>(EMPTY_NEW_WALLET)
+  const [creatingWallet, setCreatingWallet] = useState(false)
+  const [backfillingAddr, setBackfillingAddr] = useState<string | null>(null)
+
+  const refreshWallets = async () => {
+    try {
+      const res = await fetch('/api/admin/wallets', { cache: 'no-store' })
+      if (!res.ok) { setError(`Wallets: HTTP ${res.status}`); return }
+      const data = await res.json() as { wallets: AdminWallet[]; entities: AdminEntity[] }
+      setWallets(data.wallets)
+      setEntities(data.entities)
+      if (!newWallet.entityId && data.entities.length > 0) {
+        setNewWallet((p) => ({ ...p, entityId: data.entities[0].id }))
+      }
+    } catch (err) { setError((err as Error).message) }
+  }
+
   const refresh = async () => {
     setLoading(true)
     setError(null)
@@ -77,7 +127,7 @@ export default function AdminPage() {
     }
   }
 
-  useEffect(() => { refresh() }, [])
+  useEffect(() => { refresh(); refreshWallets() }, [])
 
   const sortedUsers = useMemo(() => {
     if (!users) return []
@@ -204,6 +254,46 @@ export default function AdminPage() {
     } finally {
       setCreating(false)
     }
+  }
+
+  const createWallet = async () => {
+    if (!newWallet.address.trim()) { setError('Address required'); return }
+    if (!newWallet.label.trim()) { setError('Label required'); return }
+    if (!newWallet.entityId) { setError('Entity required'); return }
+    setCreatingWallet(true); setError(null)
+    try {
+      const res = await fetch('/api/admin/wallets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(newWallet),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      setNewWallet({ ...EMPTY_NEW_WALLET, entityId: newWallet.entityId })
+      await refreshWallets()
+      const { mutate } = await import('swr')
+      const { WALLETS_KEY } = await import('@/lib/hooks/use-entity-wallets')
+      mutate(WALLETS_KEY)
+    } catch (err) { setError((err as Error).message) }
+    finally { setCreatingWallet(false) }
+  }
+
+  const backfillWallet = async (address: string) => {
+    setBackfillingAddr(address); setError(null)
+    try {
+      const res = await fetch(`/api/admin/wallets/${encodeURIComponent(address)}/backfill`, { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      await refreshWallets()
+      const { mutate } = await import('swr')
+      const { WALLETS_KEY } = await import('@/lib/hooks/use-entity-wallets')
+      mutate(WALLETS_KEY)
+    } catch (err) { setError((err as Error).message) }
+    finally { setBackfillingAddr(null) }
   }
 
   if (loading) {
@@ -513,6 +603,145 @@ export default function AdminPage() {
           })}
         </div>
       )}
+      <section className="card admin-access-settings-card" style={{ marginTop: 32 }}>
+        <div className="section-header">
+          <div className="section-title">Add wallet</div>
+          <div className="page-sub">Register a new wallet so it gets included in overview, transactions, and reporting.</div>
+        </div>
+
+        <div className="admin-access-form-grid">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span className="budget-scope-label">Chain</span>
+            <select
+              className="fsel"
+              value={newWallet.chain}
+              onChange={(e) => setNewWallet((p) => ({ ...p, chain: e.target.value as NewWalletForm['chain'] }))}
+              disabled={creatingWallet}
+            >
+              <option value="SOL">Solana</option>
+              <option value="ETH">Ethereum</option>
+              <option value="BTC">Bitcoin</option>
+            </select>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span className="budget-scope-label">Entity</span>
+            <select
+              className="fsel"
+              value={newWallet.entityId}
+              onChange={(e) => setNewWallet((p) => ({ ...p, entityId: e.target.value }))}
+              disabled={creatingWallet || entities.length === 0}
+            >
+              {entities.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="admin-access-form-grid">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6, gridColumn: '1 / -1' }}>
+            <span className="budget-scope-label">Address</span>
+            <input
+              type="text"
+              className="fsearch"
+              placeholder={newWallet.chain === 'SOL' ? 'Base58 SOL pubkey' : newWallet.chain === 'ETH' ? '0x…' : 'bc1… / 1… / 3…'}
+              value={newWallet.address}
+              onChange={(e) => setNewWallet((p) => ({ ...p, address: e.target.value.trim() }))}
+              disabled={creatingWallet}
+            />
+          </label>
+        </div>
+
+        <div className="admin-access-form-grid">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span className="budget-scope-label">Label</span>
+            <input type="text" className="fsearch" placeholder="Treasury Cold" value={newWallet.label}
+              onChange={(e) => setNewWallet((p) => ({ ...p, label: e.target.value }))} disabled={creatingWallet} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span className="budget-scope-label">Account code (optional)</span>
+            <input type="text" className="fsearch" placeholder="e.g. 1010-OPCO" value={newWallet.accountCode}
+              onChange={(e) => setNewWallet((p) => ({ ...p, accountCode: e.target.value }))} disabled={creatingWallet} />
+          </label>
+        </div>
+
+        <div className="admin-access-restricted-section active">
+          <div className="section-title">Flags</div>
+          <div className="admin-access-department-grid">
+            {(['isExternal', 'overviewOnly', 'includeInOverview'] as const).map((flag) => (
+              <label key={flag} className={`admin-access-department-pill${newWallet[flag] ? ' selected' : ''}`}>
+                <input type="checkbox" checked={newWallet[flag]}
+                  onChange={() => setNewWallet((p) => ({ ...p, [flag]: !p[flag] }))} disabled={creatingWallet} />
+                {flag}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {(newWallet.chain === 'ETH' || newWallet.chain === 'BTC') && (
+          <div className="admin-access-inline-warning" style={{ marginTop: 12 }}>
+            Balance and transaction sync for {newWallet.chain} are not implemented yet — wallet record only.
+            QB reporting via account code still works. On-chain balances will appear on overview once the chain integration ships.
+          </div>
+        )}
+
+        {newWallet.chain === 'SOL' && !newWallet.isExternal && (
+          <label className="admin-access-department-pill" style={{ marginTop: 12 }}>
+            <input type="checkbox" checked={newWallet.backfill}
+              onChange={() => setNewWallet((p) => ({ ...p, backfill: !p.backfill }))} disabled={creatingWallet} />
+            Backfill historical transactions (may take a few minutes)
+          </label>
+        )}
+
+        <div className="admin-access-form-actions">
+          <div className="admin-access-button-row">
+            <button className="btn-primary" onClick={createWallet}
+              disabled={creatingWallet || !newWallet.address.trim() || !newWallet.label.trim() || !newWallet.entityId}>
+              {creatingWallet ? 'Adding…' : 'Add wallet'}
+            </button>
+            <button className="btn-secondary" onClick={() => setNewWallet(EMPTY_NEW_WALLET)} disabled={creatingWallet}>Reset</button>
+          </div>
+        </div>
+      </section>
+
+      <section className="card" style={{ marginTop: 24 }}>
+        <div className="section-header">
+          <div className="section-title">Wallets ({wallets?.length ?? 0})</div>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Chain</th><th>Label</th><th>Address</th><th>Entity</th><th>Status</th><th>Created</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {(wallets ?? []).map((w) => {
+                const canBackfill = w.chain === 'SOL' && !w.isExternal
+                const status = w.isExternal ? 'external' : (w.chain === 'SOL' ? 'tracking' : 'balance pending')
+                return (
+                  <tr key={w.address}>
+                    <td>{w.chain}</td>
+                    <td>{w.label}</td>
+                    <td title={w.address} style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>
+                      {w.address.slice(0, 6)}…{w.address.slice(-4)}
+                    </td>
+                    <td>{entities.find((e) => e.id === w.entityId)?.name ?? w.entityId}</td>
+                    <td>{status}</td>
+                    <td>{new Date(w.createdAt).toLocaleDateString()}</td>
+                    <td>
+                      {canBackfill && (
+                        <button className="btn-secondary" onClick={() => backfillWallet(w.address)}
+                          disabled={backfillingAddr === w.address}>
+                          {backfillingAddr === w.address ? 'Backfilling…' : 'Backfill'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
   )
 }
