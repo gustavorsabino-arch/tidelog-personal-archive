@@ -1,9 +1,10 @@
 import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
-import { transaction, transactionGain, wallet } from '@/lib/db/schema'
+import { transaction, transactionGain, txQbState, wallet } from '@/lib/db/schema'
 import { STABLE_TOKENS } from '@/lib/constants'
 import { toDbEntity, toDisplayEntity } from '@/lib/entity'
+import { defaultDescription } from '@/lib/qb-state'
 import type { Transaction, TransactionsResponse } from '@/lib/types'
 
 type GetTreasuryTransactionsParams = {
@@ -33,11 +34,16 @@ type GainJoinRow = {
   lots: unknown // jsonb — LotTraceEntry[] at runtime
 }
 
+type QbStateJoinRow = {
+  description: string | null
+}
+
 export function rowToTransaction(
   row: TransactionRow,
   walletLabel: string,
   counterpartyLabel: string | null = null,
   gain: GainJoinRow | null = null,
+  qbState: QbStateJoinRow | null = null,
 ): Transaction {
   const qty = Number(row.qty)
   const isStable = STABLE_TOKENS.has(row.asset)
@@ -46,7 +52,7 @@ export function rowToTransaction(
   const price = isStable && dbPrice == null ? 1 : dbPrice
   const usd = isStable && dbUsd == null ? Math.abs(qty) : dbUsd
   const priceSource = isStable && row.priceSource == null ? 'stable' : row.priceSource
-  return {
+  const base: Transaction = {
     txHash: row.txHash,
     walletAddr: row.walletAddress,
     wallet: walletLabel || row.walletAddress,
@@ -69,6 +75,12 @@ export function rowToTransaction(
     internalPairedWalletAddr: gain?.internalPairedWalletAddr ?? null,
     noBasis: gain?.noBasis ?? null,
     lots: (gain?.lots as Transaction['lots']) ?? null,
+  }
+  return {
+    ...base,
+    id: row.id,
+    description: qbState?.description ?? null,
+    descriptionDefault: defaultDescription(base),
   }
 }
 
@@ -134,6 +146,9 @@ export async function getTreasuryTransactions({
         noBasis: transactionGain.noBasis,
         lots: transactionGain.lots,
       },
+      qbState: {
+        description: txQbState.description,
+      },
     })
     .from(transaction)
     .leftJoin(wallet, eq(wallet.address, transaction.walletAddress))
@@ -146,6 +161,15 @@ export async function getTreasuryTransactions({
         eq(transactionGain.direction, transaction.direction),
         // Asset must match — a single tx can carry both SOL and ORCA moves.
         eq(transactionGain.asset, transaction.asset),
+      ),
+    )
+    .leftJoin(
+      txQbState,
+      and(
+        eq(txQbState.txHash, transaction.txHash),
+        eq(txQbState.walletAddress, transaction.walletAddress),
+        eq(txQbState.direction, transaction.direction),
+        eq(txQbState.asset, transaction.asset),
       ),
     )
     .where(where)
@@ -170,7 +194,7 @@ export async function getTreasuryTransactions({
   ])
 
   const transactions = pageRows.map((row) =>
-    rowToTransaction(row.txn, row.walletLabel ?? '', row.counterpartyLabel ?? null, row.gain ?? null),
+    rowToTransaction(row.txn, row.walletLabel ?? '', row.counterpartyLabel ?? null, row.gain ?? null, row.qbState ?? null),
   )
 
   const inflowsUSD = Number(summaryRows[0]?.inflows ?? 0)

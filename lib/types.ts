@@ -39,6 +39,13 @@ export interface Transaction {
   internalPairedWalletAddr?: string | null
   noBasis?: boolean | null
   lots?: LotTraceEntry[] | null
+  // Wave 2 — populated by the server's tx_qb_state JOIN. id is optional because
+  // the cron's moveToTx (lib/cron/fetch-transactions.ts:27) constructs Transaction
+  // objects without it; in practice every row that flows through getTreasuryTransactions
+  // has id populated from the DB row.
+  id?: string
+  description?: string | null      // user-saved override; null = use descriptionDefault
+  descriptionDefault?: string      // computed via defaultDescription(); server populates
 }
 
 export interface TransactionSummary {
