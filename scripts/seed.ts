@@ -26,6 +26,8 @@ await db.insert(token).values([
   { symbol: 'ORCA', name: 'Orca', decimals: 6, coinId: 'coingecko:orca' },
   { symbol: 'USDC', name: 'USD Coin', decimals: 6, coinId: 'coingecko:usd-coin' },
   { symbol: 'USDT', name: 'Tether USD', decimals: 6, coinId: 'coingecko:tether' },
+  { symbol: 'ETH', name: 'Ethereum', decimals: 18, coinId: 'coingecko:ethereum' },
+  { symbol: 'BTC', name: 'Bitcoin', decimals: 8, coinId: 'coingecko:bitcoin' },
 ]).onConflictDoNothing()
 
 console.log('seed complete: entities + tokens. Register wallets via the admin UI.')
