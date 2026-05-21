@@ -213,6 +213,8 @@ type WalletResult = {
   inserted: number
   failedTxs: number
   error?: string
+  complete?: boolean
+  oldestSigReached?: string | null
 }
 
 const SIG_PAGE = 1000   // getSignaturesForAddress max page
@@ -230,8 +232,8 @@ type SigSource =
 
 async function processWallet(
   walletRow: typeof wallet.$inferSelect,
-  opts: { full?: boolean; logPrefix?: string; priceCache?: Record<string, unknown> } = {},
-): Promise<WalletResult> {
+  opts: { full?: boolean; logPrefix?: string; priceCache?: Record<string, unknown>; beforeSig?: string } = {},
+): Promise<WalletResult & { complete: boolean; oldestSigReached: string | null }> {
   const prefix = opts.logPrefix ?? `[fetch-tx ${walletRow.entityId} ${shortAddr(walletRow.address)}]`
   const startedAt = Date.now()
 
@@ -266,9 +268,11 @@ async function processWallet(
   const allSigs = new Set<string>()
   const pageCap = opts.full ? Number.MAX_SAFE_INTEGER : MAX_PAGES_PER_WALLET_INCREMENTAL
   let sigErrFiltered = 0
+  let oldestSigReached: string | null = null
+  let completedNaturally = true
 
   for (const source of sources) {
-    let before: string | undefined
+    let before: string | undefined = (opts.full && opts.beforeSig && source.kind === 'owner') ? opts.beforeSig : undefined
     let pagesWalked = 0
     for (let page = 0; page < pageCap; page++) {
       const pageOpts: Record<string, unknown> = { limit: SIG_PAGE }
@@ -303,14 +307,18 @@ async function processWallet(
       console.log(`${prefix}   source=${source.kind}(${shortAddr(source.address)}) page ${page + 1}: ${sigs.length} sigs${errSuffix}, +${pageNew} new`)
       pagesWalked++
 
+      // Track the oldest signature walked across all sources.
+      const last = sigs[sigs.length - 1]
+      if (source.kind === 'owner' && last?.signature) oldestSigReached = last.signature
+
       // Stop conditions
       if (sigs.length < SIG_PAGE) break
       if (untilBlockTimeUnix != null && pageOldest <= untilBlockTimeUnix) break
-      const last = sigs[sigs.length - 1]
       if (!last?.signature || last.signature === before) break
       before = last.signature
     }
     if (!opts.full && pagesWalked >= pageCap) {
+      completedNaturally = false
       console.warn(`${prefix}   warn: source=${source.kind}(${shortAddr(source.address)}) hit page cap (${pageCap} × ${SIG_PAGE} sigs) — wallet may be behind on this source`)
     }
   }
@@ -375,7 +383,7 @@ async function processWallet(
   const elapsedMs = Date.now() - startedAt
   const sigErrSuffix = sigErrFiltered > 0 ? ` (${sigErrFiltered} err filtered)` : ''
   console.log(`${prefix} done: ${allSigs.size} sigs${sigErrSuffix}, ${scanned} txs, ${failedTxs} failed, ${noMoves} no-moves, ${allMoves.length} moves, ${inserted} inserted in ${elapsedMs}ms`)
-  return { ok: true, signaturesScanned: scanned, moves: allMoves.length, inserted, failedTxs }
+  return { ok: true, signaturesScanned: scanned, moves: allMoves.length, inserted, failedTxs, complete: completedNaturally, oldestSigReached }
 }
 
 /**
@@ -386,7 +394,7 @@ async function processWallet(
  * drains full wallet history until Helius returns no more signatures. Intended
  * for one-shot historical backfills; don't use on the recurring cron schedule.
  */
-export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: string } = {}) {
+export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: string; beforeSig?: string } = {}) {
   const wallets = opts.walletAddr
     ? await db.select().from(wallet).where(and(eq(wallet.address, opts.walletAddr), eq(wallet.isExternal, false)))
     : await db.select().from(wallet).where(eq(wallet.isExternal, false))
@@ -409,7 +417,7 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
   }
 
   const scopeNote = opts.walletAddr ? ` scope=single-wallet(${shortAddr(opts.walletAddr)})` : ''
-  console.log(`[fetch-tx] job start: ${wallets.length} wallets, mode=${opts.full ? 'full' : 'incremental'}${scopeNote}`)
+  console.log(`[fetch-tx] job start: ${wallets.length} wallets, mode=${opts.full ? 'full' : 'incremental'}${opts.beforeSig ? ` beforeSig=${opts.beforeSig.slice(0, 8)}…` : ''}${scopeNote}`)
   const jobStartedAt = Date.now()
 
   for (let idx = 0; idx < wallets.length; idx++) {

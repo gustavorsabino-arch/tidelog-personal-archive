@@ -252,6 +252,15 @@ test('parser: ATA-fallback recovers In when userAccount is missing but tokenAcco
   expect(Math.abs(orcaIn!.qty - 50)).toBeLessThan(1e-6)
 })
 
+// 10. Structural: fetchTransactionsJob accepts beforeSig in opts.
+import type { fetchTransactionsJob } from './fetch-transactions'
+
+test('fetchTransactionsJob accepts beforeSig in opts', () => {
+  type Opts = Parameters<typeof fetchTransactionsJob>[0]
+  const opts: Opts = { full: true, walletAddr: 'x', beforeSig: 'abc' }
+  expect(opts.beforeSig).toBe('abc')
+})
+
 // 9. ATA-fallback: Helius returns userAccount: "" (empty string) on mint-style events.
 test('parser: ATA-fallback recovers In when userAccount is EMPTY STRING (mint-style event)', () => {
   const OTM = 'GjKxauMroc9MT27xXYyjLYNfy9nSS5EuHTmzhdkjCAR1'
