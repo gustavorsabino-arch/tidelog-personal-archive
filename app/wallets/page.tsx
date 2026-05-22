@@ -44,6 +44,10 @@ export default function WalletsPage() {
   const [newWallet, setNewWallet] = useState<NewWalletForm>(EMPTY_NEW_WALLET)
   const [creatingWallet, setCreatingWallet] = useState(false)
   const [backfillingAddr, setBackfillingAddr] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ type: 'success' | 'info'; text: string } | null>(null)
+  const [deletingAddr, setDeletingAddr] = useState<string | null>(null)
+  const [deletingWallet, setDeletingWallet] = useState<Wallet | null>(null)
+  const [confirmText, setConfirmText] = useState('')
   const [formOpen, setFormOpen] = useState(false)
 
   useEffect(() => {
@@ -129,21 +133,76 @@ export default function WalletsPage() {
     finally { setCreatingWallet(false) }
   }
 
-  const backfillWallet = async (address: string) => {
-    setBackfillingAddr(address); setError(null)
+  const openDeleteModal = (w: Wallet) => {
+    setDeletingWallet(w)
+    setConfirmText('')
+  }
+
+  const closeDeleteModal = () => {
+    setDeletingWallet(null)
+    setConfirmText('')
+  }
+
+  const executeDelete = async () => {
+    if (!deletingWallet) return
+    if (confirmText !== deletingWallet.label) {
+      setError(`The label you typed doesn't match. Type "${deletingWallet.label}" exactly to confirm.`)
+      return
+    }
+    const w = deletingWallet
+    setDeletingAddr(w.address); setError(null)
     try {
-      const res = await fetch(`/api/admin/wallets/${encodeURIComponent(address)}/backfill`, { method: 'POST' })
+      const res = await fetch(`/api/admin/wallets/${encodeURIComponent(w.address)}`, { method: 'DELETE' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error ?? `HTTP ${res.status}`)
       }
+      // Refresh list
+      const refreshed = await apiFetch<{ wallets: Wallet[] }>('/api/wallets')
+      setWalletRegistry(refreshed.wallets)
+      const { mutate } = await import('swr')
+      const { WALLETS_KEY } = await import('@/lib/hooks/use-entity-wallets')
+      mutate(WALLETS_KEY)
+      closeDeleteModal()
+    } catch (err) { setError((err as Error).message) }
+    finally { setDeletingAddr(null) }
+  }
+
+  const backfillWallet = async (address: string) => {
+    setBackfillingAddr(address); setError(null); setNotice(null)
+    try {
+      const res = await fetch(`/api/admin/wallets/${encodeURIComponent(address)}/backfill`, { method: 'POST' })
+      if (res.status === 504) {
+        setNotice({ type: 'info', text: 'Backfill paused — click Backfill again to resume from where it left off.' })
+        return
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      const body = await res.json() as { ok?: boolean; inserted?: number; mode?: string; elapsedMs?: number }
+      const inserted = body.inserted ?? 0
+      const mode = body.mode ?? 'full'
+      const sec = body.elapsedMs != null ? Math.max(1, Math.round(body.elapsedMs / 1000)) : null
+      setNotice({
+        type: 'success',
+        text: `Backfill complete (${mode}): ${inserted} transaction${inserted === 1 ? '' : 's'} inserted${sec ? ` in ${sec}s` : ''}.`,
+      })
       // Re-fetch the public wallets list
       const listRes = await apiFetch<{ wallets: Wallet[] }>('/api/wallets')
       setWalletRegistry(listRes.wallets)
       const { mutate } = await import('swr')
       const { WALLETS_KEY } = await import('@/lib/hooks/use-entity-wallets')
       mutate(WALLETS_KEY)
-    } catch (err) { setError((err as Error).message) }
+    } catch (err) {
+      const msg = (err as Error).message
+      // Network abort / timeout from client side (Vercel cuts the connection at 300s)
+      if (msg.includes('aborted') || msg.includes('Failed to fetch') || msg.includes('timeout')) {
+        setNotice({ type: 'info', text: 'Backfill paused — click Backfill again to resume from where it left off.' })
+      } else {
+        setError(msg)
+      }
+    }
     finally { setBackfillingAddr(null) }
   }
 
@@ -322,6 +381,32 @@ export default function WalletsPage() {
         </div>
       )}
 
+      {/* Success / info notice */}
+      {notice && (
+        <div
+          role="status"
+          onClick={() => setNotice(null)}
+          style={{
+            position: 'fixed',
+            bottom: 24,
+            right: 24,
+            maxWidth: 420,
+            zIndex: 1000,
+            cursor: 'pointer',
+            padding: '12px 16px',
+            borderRadius: 8,
+            fontSize: '0.85rem',
+            lineHeight: 1.4,
+            background: notice.type === 'success' ? 'color-mix(in srgb, var(--green, #10b981) 12%, var(--surface, #fff))' : 'color-mix(in srgb, var(--accent, #2563eb) 12%, var(--surface, #fff))',
+            border: `1px solid ${notice.type === 'success' ? 'var(--green, #10b981)' : 'var(--accent, #2563eb)'}`,
+            color: 'var(--fg, #1f2937)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+          }}
+        >
+          {notice.text}
+        </div>
+      )}
+
       {/* Table */}
       <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table>
@@ -391,6 +476,14 @@ export default function WalletsPage() {
                               {backfillingAddr === w.address ? 'Backfilling…' : 'Backfill'}
                             </button>
                           )}
+                          <button
+                            className="btn-secondary"
+                            style={{ fontSize: '0.7rem', padding: '2px 8px', marginLeft: 6, color: 'var(--red)', borderColor: 'color-mix(in srgb, var(--red) 28%, var(--border))' }}
+                            onClick={() => openDeleteModal(w)}
+                            disabled={deletingAddr === w.address}
+                          >
+                            {deletingAddr === w.address ? 'Deleting…' : 'Delete'}
+                          </button>
                         </td>
                       )}
                     </tr>
@@ -399,6 +492,86 @@ export default function WalletsPage() {
           </tbody>
         </table>
       </div>
+
+      {/* Delete confirmation modal */}
+      {deletingWallet && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => { if (e.target === e.currentTarget) closeDeleteModal() }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: 24,
+          }}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: 520, width: '100%', padding: 24, background: 'var(--bg, #fff)' }}
+          >
+            <div style={{ fontSize: '1.35rem', fontWeight: 700, marginBottom: 14, color: 'var(--red)' }}>
+              Delete wallet &ldquo;{deletingWallet.label}&rdquo;?
+            </div>
+
+            <div style={{ fontSize: '0.9rem', lineHeight: 1.6, marginBottom: 14 }}>
+              This will permanently remove:
+              <ul style={{ margin: '8px 0 8px 20px', padding: 0, fontWeight: 600 }}>
+                <li>The wallet record</li>
+                <li>All of its transactions</li>
+                <li>All of its balance snapshots</li>
+              </ul>
+              Gains for entity <strong>{deletingWallet.entity}</strong> will be recomputed without this wallet&rsquo;s contributions.
+            </div>
+
+            <div className="admin-access-inline-warning" style={{ marginBottom: 12, color: 'var(--fg, #1f2937)', lineHeight: 1.5 }}>
+              The wallet will no longer appear on Overview, Treasury Management, Transactions, or any other page.
+              The audit trail (created / backfilled / deleted events) is preserved for compliance.
+            </div>
+
+            <div style={{ marginBottom: 18, color: 'var(--red)', fontWeight: 700, fontSize: '0.95rem' }}>
+              This cannot be undone.
+            </div>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6 }}>
+              <span className="budget-scope-label">
+                Type the wallet label to confirm: <code style={{ background: 'var(--surface, #f4f4f5)', padding: '2px 6px', borderRadius: 4 }}>{deletingWallet.label}</code>
+              </span>
+              <input
+                type="text"
+                className="fsearch"
+                autoFocus
+                value={confirmText}
+                onChange={(e) => { setConfirmText(e.target.value); if (error) setError(null) }}
+                placeholder={deletingWallet.label}
+                disabled={deletingAddr === deletingWallet.address}
+              />
+            </label>
+            {error && deletingWallet && error.includes("doesn't match") && (
+              <div style={{ marginTop: 6, color: 'var(--red)', fontSize: '0.8rem' }}>
+                {error}
+              </div>
+            )}
+
+            <div className="admin-access-button-row" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                className="btn-secondary"
+                onClick={closeDeleteModal}
+                disabled={deletingAddr === deletingWallet.address}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                style={{ background: 'var(--red)', borderColor: 'var(--red)' }}
+                onClick={executeDelete}
+                disabled={deletingAddr === deletingWallet.address}
+              >
+                {deletingAddr === deletingWallet.address ? 'Deleting…' : 'Delete wallet'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
