@@ -62,10 +62,18 @@ export function composeCouncilSubtractionByAccount(
 
 /**
  * Sum Council-classed amounts per accountNumber for the given entity over
- * the given range. Uses cached GL only as an index of which transactions
- * carry a Council class; the dollar amounts come from the per-transaction
- * payload cache (which carries signed line amounts and survives entities
- * whose cached GL omits the amount column, e.g. Foundation).
+ * the given range. Uses cached GL as an index of which transactions to load,
+ * then walks each transaction's payload Line[] and sums lines where
+ * `ClassRef.name` matches the Council predicate.
+ *
+ * We deliberately do NOT pre-filter GL rows by `parsed.className` here:
+ * QB's default General Ledger response does not include the `klass_name`
+ * column, so the parser always sees `className: null` regardless of the
+ * underlying transaction's class. Filtering at this stage would silently
+ * drop every Council txn (which is exactly the bug this comment guards
+ * against). Class information lives only on the per-transaction payload's
+ * Line[] entries, which `composeCouncilSubtractionByAccount` filters
+ * line-by-line.
  */
 export async function loadCouncilSubtractionByAccount(
   entity: QboEntity,
@@ -74,18 +82,18 @@ export async function loadCouncilSubtractionByAccount(
 ): Promise<Record<string, number>> {
   const glRows = await readCachedPerAccountGeneralLedgersInRange<QboGeneralLedgerReport>(entity, start, end)
 
-  const councilParsedRows = []
+  const allParsedRows = []
   for (const { data } of glRows) {
     for (const parsed of parseQboGeneralLedgerRows(data)) {
-      if (parsed.txnId && parsed.transactionType && isExcludedBudgetQboClassName(parsed.className)) {
-        councilParsedRows.push(parsed)
+      if (parsed.txnId && parsed.transactionType) {
+        allParsedRows.push(parsed)
       }
     }
   }
 
-  if (councilParsedRows.length === 0) return {}
+  if (allParsedRows.length === 0) return {}
 
-  const txnIds = Array.from(new Set(councilParsedRows.map((row) => row.txnId).filter((id): id is string => !!id)))
+  const txnIds = Array.from(new Set(allParsedRows.map((row) => row.txnId).filter((id): id is string => !!id)))
   const preloaded = await readCachedTransactionPayloads(entity, txnIds)
   // Cached fetcher returns `unknown`; the payload-records helper narrows it
   // internally. `qb-ledger-transactions.ts` types the same callback as
@@ -95,7 +103,7 @@ export async function loadCouncilSubtractionByAccount(
 
   const records = await fetchBudgetQboTransactionPayloadRecords({
     entity,
-    parsedRows: councilParsedRows,
+    parsedRows: allParsedRows,
     fetchTransactionPayload: fetcher,
   })
 
