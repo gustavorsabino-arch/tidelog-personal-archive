@@ -249,36 +249,40 @@ export async function heliusGetAddressTransactions(
   return []
 }
 
-const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+export const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+export const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
 
 /**
- * Enumerate a wallet's known ATAs for focus tokens (ORCA/USDC/USDT).
- * Wraps `getTokenAccountsByOwner` JSON-RPC method. Filters to focus mints.
- * Returns [] on RPC error so callers can proceed without ATA enumeration.
+ * Enumerate a wallet's known ATAs for focus tokens across BOTH the legacy
+ * SPL token program and Token-2022. PYUSD and USDG (and any future newer
+ * stablecoins) are issued on Token-2022 for compliance hooks; querying only
+ * the legacy program silently drops them.
+ *
+ * Filters to focus mints (via getSym). Returns [] on RPC error so callers
+ * can proceed without ATA enumeration.
  *
  * SOL is native (no ATA), so getSym will map it but we exclude it by only
  * accepting mints that map to non-SOL focus symbols.
- *
- * Used by the cron's ATA-aware sig discovery (see fetch-transactions.ts).
  */
 export async function heliusGetTokenAccountsByOwner(
   owner: string,
 ): Promise<Array<{ ata: string; mint: string }>> {
-  const r = await heliusRpc('getTokenAccountsByOwner', [
-    owner,
-    { programId: TOKEN_PROGRAM_ID },
-    { encoding: 'jsonParsed' },
-  ])
-  if (!r || r.error || !r.result?.value) return []
-
   const out: Array<{ ata: string; mint: string }> = []
-  for (const acc of r.result.value as any[]) {
-    const ata = acc?.pubkey
-    const mint = acc?.account?.data?.parsed?.info?.mint
-    if (!ata || !mint) continue
-    const sym = getSym(mint)
-    if (!sym || sym === 'SOL') continue  // non-focus or native (no ATA)
-    out.push({ ata, mint })
+  for (const programId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+    const r = await heliusRpc('getTokenAccountsByOwner', [
+      owner,
+      { programId },
+      { encoding: 'jsonParsed' },
+    ])
+    if (!r || r.error || !r.result?.value) continue
+    for (const acc of r.result.value as any[]) {
+      const ata = acc?.pubkey
+      const mint = acc?.account?.data?.parsed?.info?.mint
+      if (!ata || !mint) continue
+      const sym = getSym(mint)
+      if (!sym || sym === 'SOL') continue  // non-focus or native (no ATA)
+      out.push({ ata, mint })
+    }
   }
   return out
 }

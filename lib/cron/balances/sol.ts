@@ -20,27 +20,39 @@ function shortAddr(addr: string): string {
   return addr.length > 12 ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : addr
 }
 
+// PYUSD and USDG live on the Token-2022 program (TokenzQd…), so we must
+// query both SPL token programs to enumerate all token holdings. Querying
+// only the legacy program (Tokenkeg…) silently drops any Token-2022 balance.
+const SPL_PROGRAMS = [
+  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',  // legacy SPL token program
+  'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',  // Token-2022 program
+] as const
+
 async function fetchWalletBalance(address: string): Promise<Record<string, number>> {
   const balances: Record<string, number> = { SOL: 0 }
 
-  const [balRes, tokRes] = await Promise.all([
+  const [balRes, ...tokResults] = await Promise.all([
     heliusRpc('getBalance', [address]),
-    heliusRpc('getTokenAccountsByOwner', [
-      address,
-      { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
-      { encoding: 'jsonParsed' },
-    ]),
+    ...SPL_PROGRAMS.map((programId) =>
+      heliusRpc('getTokenAccountsByOwner', [
+        address,
+        { programId },
+        { encoding: 'jsonParsed' },
+      ]),
+    ),
   ])
 
   balances.SOL = (balRes?.result?.value || 0) / 1e9
 
-  for (const acc of (tokRes?.result?.value || [])) {
-    const info = acc.account?.data?.parsed?.info
-    if (!info) continue
-    const sym = getSym(info.mint)
-    const amt = parseFloat(info.tokenAmount?.uiAmountString || '0')
-    if (sym && amt > 0) {
-      balances[sym] = (balances[sym] || 0) + amt
+  for (const tokRes of tokResults) {
+    for (const acc of (tokRes?.result?.value || [])) {
+      const info = acc.account?.data?.parsed?.info
+      if (!info) continue
+      const sym = getSym(info.mint)
+      const amt = parseFloat(info.tokenAmount?.uiAmountString || '0')
+      if (sym && amt > 0) {
+        balances[sym] = (balances[sym] || 0) + amt
+      }
     }
   }
 
