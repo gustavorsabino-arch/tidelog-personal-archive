@@ -249,7 +249,7 @@ export default function WalletsPage() {
             </label>
           </div>
 
-          <div className="admin-access-restricted-section active">
+          <div className="admin-access-restricted-section active" style={{ marginTop: 16 }}>
             <div className="section-title">Flags</div>
             <div className="admin-access-department-grid">
               {(['isExternal', 'overviewOnly', 'includeInOverview'] as const).map((flag) => (
