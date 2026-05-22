@@ -148,7 +148,7 @@ for (let widx = 0; widx < wallets.length; widx++) {
         price: m.price, usd: m.usd, priceSource: m.priceSource,
         counterparty: m.counterparty, category: null,
       }))
-      const { transactions: hydrated } = await hydrateTransactionPrices(txsForHydrate, { fetchMissingHistory: true })
+      const { transactions: hydrated } = await hydrateTransactionPrices(txsForHydrate, { priceCache: {}, fetchMissingHistory: true })
 
       const rows = moves.map((m, idx) => {
         const h = hydrated[idx]
