@@ -50,10 +50,7 @@ export default async function ReportsPage() {
       ) : (
         <div className="empty" style={{ padding: 32, border: '1px dashed var(--border)', borderRadius: 8 }}>
           <div className="empty-icon">∅</div>
-          <div>No report uploaded yet.</div>
-          <div className="page-sub" style={{ marginTop: 8 }}>
-            Generate locally via <code>bun /tmp/claude/treasury-breakdown.ts &gt; app/reports/treasury-breakdown.html</code> and commit.
-          </div>
+          <div>Report not available.</div>
         </div>
       )}
     </main>

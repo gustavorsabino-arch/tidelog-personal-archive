@@ -4,18 +4,1414 @@
 <meta charset="utf-8" />
 <title>Treasury — Portfolio Breakdown</title>
 <style>
-  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1f2328; background: #f6f8fa; padding: 40px; }
-  .placeholder { max-width: 720px; margin: 0 auto; padding: 32px; border: 1px solid #d0d7de; border-radius: 8px; background: #fff; }
-  h1 { margin: 0 0 12px; font-size: 20px; }
-  code { background: #f6f8fa; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c222b;
+    --border: #2a313c;
+    --text: #e6edf3;
+    --muted: #8b97a8;
+    --accent: #2775ca;
+    --accent-orca: #00a8a8;
+    --accent-sol: #9945ff;
+    --accent-eth: #627eea;
+    --accent-protocol: #f59e0b;
+    --good: #2ea043;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa;
+      --panel: #ffffff;
+      --panel-2: #f0f3f6;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --muted: #656d76;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
+  header { margin-bottom: 32px; }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .subtitle { color: var(--muted); font-size: 13px; }
+  .subtitle code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  h2 { font-size: 18px; margin: 32px 0 12px; letter-spacing: -0.01em; }
+  section { margin-bottom: 8px; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .card-title { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+  .card-value { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .card-usd { color: var(--muted); font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .card-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .tag { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 8px; background: rgba(39, 117, 202, 0.18); color: #5b9ee0; margin-left: 6px; vertical-align: 1px; }
+  .tag-sol { background: rgba(153, 69, 255, 0.18); color: var(--accent-sol); }
+  .tag-eth { background: rgba(98, 126, 234, 0.18); color: var(--accent-eth); }
+  .card.total { background: linear-gradient(135deg, var(--panel) 0%, var(--panel-2) 100%); border-color: var(--accent); }
+  .card.total .card-value { color: var(--accent); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  thead th {
+    background: var(--panel-2);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--panel-2); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  td.small { font-size: 12px; }
+  td.strong { font-weight: 600; }
+  .muted { color: var(--muted); }
+
+  tr.total-row td { background: var(--panel-2); font-weight: 600; font-size: 15px; border-top: 2px solid var(--border); }
+
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 10px;
+    letter-spacing: 0.04em;
+  }
+  .badge-db { background: rgba(39, 117, 202, 0.18); color: #5b9ee0; }
+  .badge-csv { background: rgba(217, 139, 35, 0.18); color: #d98b23; }
+  .badge-both { background: rgba(46, 160, 67, 0.18); color: #4ac265; }
+  .badge-protocol { background: rgba(245, 158, 11, 0.18); color: #f59e0b; }
+
+  .hero { margin: 0 0 24px; }
+  .hero-card {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(39, 117, 202, 0.06));
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    text-align: left;
+  }
+  .hero-title { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+  .hero-value { font-size: 44px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--text); line-height: 1.1; }
+  .hero-sub { color: var(--muted); font-size: 14px; margin-top: 10px; }
+
+  tr.wallet-header td { background: var(--panel-2); font-weight: 600; border-top: 1px solid var(--border); padding-top: 14px; }
+
+  .banner { padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+  .banner-ok { background: rgba(46, 160, 67, 0.10); border: 1px solid rgba(46, 160, 67, 0.4); color: #4ac265; }
+  .banner-warn { background: rgba(245, 158, 11, 0.10); border: 1px solid rgba(245, 158, 11, 0.4); color: #f59e0b; }
+
+  .search-wrap { margin: 0 0 12px; }
+  .search-wrap input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 13px;
+  }
+  .search-wrap input:focus { outline: none; border-color: var(--accent); }
+
+  /* Print / PDF export: force light theme, hide search, keep tables intact. */
+  @media print {
+    :root {
+      --bg: #ffffff; --panel: #ffffff; --panel-2: #f5f5f5;
+      --border: #ccc; --text: #111; --muted: #555;
+    }
+    body { background: #fff; color: #111; }
+    .container { padding: 12px 0; max-width: 100%; }
+    .search-wrap { display: none; }
+    .hero-card { box-shadow: none; background: #fafafa; }
+    .card { box-shadow: none; break-inside: avoid; }
+    section { break-inside: avoid-page; page-break-inside: avoid; }
+    table { break-inside: auto; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    thead { display: table-header-group; }  /* repeat header on each page */
+    tbody tr:hover { background: transparent; }
+    h2 { break-after: avoid; page-break-after: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+  @page { margin: 12mm; size: A4 landscape; }
+
+  .bucket-bar {
+    display: flex;
+    height: 10px;
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 16px 0 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+  }
+  .bucket-bar span { display: block; height: 100%; }
+  .bucket-bar .stables { background: var(--accent); }
+  .bucket-bar .orca { background: var(--accent-orca); }
+  .bucket-bar .sol { background: var(--accent-sol); }
+  .bucket-bar .eth { background: var(--accent-eth); }
+  .bucket-bar .other { background: var(--muted); }
+  .bucket-bar .protocol { background: var(--accent-protocol); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 </style>
 </head>
 <body>
-  <div class="placeholder">
-    <h1>No report uploaded yet</h1>
-    <p>Generate the report locally and overwrite this file:</p>
-    <p><code>bun /tmp/claude/treasury-breakdown.ts &gt; app/reports/treasury-breakdown.html</code></p>
-    <p>Then commit and deploy.</p>
-  </div>
+<div class="container">
+
+  <header>
+    <h1>Treasury — Portfolio Breakdown</h1>
+    <div class="subtitle">
+      Generated <code>2026-05-22T14:17:13.718Z</code>
+      · DB-internal Solana wallets: <strong>63</strong>
+      · CSV Solana wallets: <strong>31</strong>
+      · Unique union: <strong>89</strong>
+      <span class="muted">(DB-only 53, CSV-only 26, in both 10 — each address counted once)</span>
+      · Spot: SOL $86.86, ORCA $1.46 (DefiLlama)
+      · Coverage: spot SPL + Orca Whirlpool LP positions (lending receipts via DefiLlama; native stake / Drift / Raydium / Meteora not yet decoded)
+      · Snapshot age 6 min
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="hero-card">
+      <div class="hero-title">Total Portfolio Value (USD)</div>
+      <div class="hero-value">$39,748,158.68</div>
+      <div class="hero-sub">
+        Across <strong>89</strong> wallets · spot + Whirlpool LPs + protocol positions
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Summary</h2>
+    <div class="cards">
+      
+    <div class="card">
+      <div class="card-title">Stablecoins</div>
+      <div class="card-value">24,193,730</div>
+      <div class="card-usd">$24,188,868.37</div>
+      <div class="card-sub">60.9% of total</div>
+    </div>
+      
+    <div class="card">
+      <div class="card-title">#ORCA Tokens</div>
+      <div class="card-value">8,676,492</div>
+      <div class="card-usd">$12,634,167.13</div>
+      <div class="card-sub">31.8% of total</div>
+    </div>
+      
+    <div class="card">
+      <div class="card-title">#SOL Tokens</div>
+      <div class="card-value">1,324.46</div>
+      <div class="card-usd">$115,039.49</div>
+      <div class="card-sub">0.3% of total</div>
+    </div>
+      
+    <div class="card">
+      <div class="card-title">All other tokens</div>
+      <div class="card-value">$5,574.37</div>
+      <div class="card-sub">0.0% of total</div>
+    </div>
+      
+    <div class="card">
+      <div class="card-title">Protocol positions</div>
+      <div class="card-value">$2,804,468.75</div>
+      <div class="card-sub">3 positions · 7.1% of total</div>
+    </div>
+    </div>
+
+    <div class="bucket-bar" title="Allocation by USD value">
+      <span class="stables" style="width:60.85531802025468%"></span>
+      <span class="orca" style="width:31.78554064080401%"></span>
+      <span class="sol" style="width:0.28942093490209153%"></span>
+      <span class="eth" style="width:0.00010206109466909041%"></span>
+      <span class="other" style="width:0.014024215293281829%"></span>
+      <span class="protocol" style="width:7.055594127651268%"></span>
+    </div>
+    <div class="legend">
+      <span><span class="dot" style="background: var(--accent)"></span>Stablecoins</span>
+      <span><span class="dot" style="background: var(--accent-orca)"></span>ORCA</span>
+      <span><span class="dot" style="background: var(--accent-sol)"></span>SOL</span>
+      <span><span class="dot" style="background: var(--accent-eth)"></span>ETH</span>
+      <span><span class="dot" style="background: var(--muted)"></span>Other</span>
+      <span><span class="dot" style="background: var(--accent-protocol)"></span>Protocol positions</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Protocol positions <span class="muted">(funds deployed to lending / staking / yield protocols — sourced from On-chain treasury management)</span></h2>
+    <div class="banner banner-ok">Loaded 3 positions from On-chain treasury management.</div>
+    
+    <div class="cards" style="margin-top:12px;">
+      <div class="card"><div class="card-title">Kamino</div><div class="card-value">$1,783,166.57</div><div class="card-sub">2 positions</div></div><div class="card"><div class="card-title">Save Finance</div><div class="card-value">$1,021,302.18</div><div class="card-sub">1 position</div></div>
+    </div>
+    <table style="margin-top:16px;">
+      <thead>
+        <tr>
+          <th>Protocol</th>
+          <th>Vault / asset</th>
+          <th class="num">Balance</th>
+          <th class="num">USD</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="wallet-header"><td colspan="3">Fireblocks - Strategic Reserve - Kamino <span class="mono small muted">DMmh…oYK3</span></td><td class="num strong">$1,783,166.57</td></tr><tr>
+          <td><span class="badge badge-protocol">Kamino</span></td>
+          <td>Kamino USDC</td>
+          <td class="num">893,292.16</td>
+          <td class="num strong">$893,292.16</td>
+        </tr><tr>
+          <td><span class="badge badge-protocol">Kamino</span></td>
+          <td>Kamino PYUSD</td>
+          <td class="num">889,874.41</td>
+          <td class="num strong">$889,874.41</td>
+        </tr><tr class="wallet-header"><td colspan="3">Fireblocks - Strategic Reserve - SAVE Finance <span class="mono small muted">ChSB…Y3ah</span></td><td class="num strong">$1,021,302.18</td></tr><tr>
+          <td><span class="badge badge-protocol">Save Finance</span></td>
+          <td>Save Finance (USDC)</td>
+          <td class="num">1,021,577.13</td>
+          <td class="num strong">$1,021,302.18</td>
+        </tr>
+        <tr class="total-row"><td colspan="3">Total protocol positions</td><td class="num strong">$2,804,468.75</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Token detail <span class="muted">(qty &ge; 100 and USD &ge; $100.00; sorted by USD desc)</span></h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Token</th>
+          <th>Mint</th>
+          <th class="num">Qty</th>
+          <th class="num">Spot</th>
+          <th class="num">USD</th>
+        </tr>
+      </thead>
+      <tbody>
+        
+      <tr>
+        <td>USDC <span class="tag tag-sol">SOL</span> <span class="tag">stable</span></td>
+        <td class="mono small">EPjFWd…Dt1v</td>
+        <td class="num">15,233,618.09</td>
+        <td class="num">$1.00</td>
+        <td class="num">$15,230,580.66</td>
+      </tr>
+      <tr>
+        <td>ORCA <span class="tag tag-sol">SOL</span></td>
+        <td class="mono small">orcaEK…ktZE</td>
+        <td class="num">8,676,492.14</td>
+        <td class="num">$1.46</td>
+        <td class="num">$12,634,167.13</td>
+      </tr>
+      <tr>
+        <td>USDC <span class="tag tag-eth">ETH</span> <span class="tag">stable</span></td>
+        <td class="mono small">0xa0b8…eb48</td>
+        <td class="num">8,900,025.47</td>
+        <td class="num">$1.00</td>
+        <td class="num">$8,898,250.89</td>
+      </tr>
+      <tr>
+        <td>SOL <span class="tag tag-sol">SOL</span></td>
+        <td class="mono small">native</td>
+        <td class="num">1,324.4598</td>
+        <td class="num">$86.86</td>
+        <td class="num">$115,039.49</td>
+      </tr>
+      <tr>
+        <td>USDT <span class="tag tag-sol">SOL</span> <span class="tag">stable</span></td>
+        <td class="mono small">Es9vMF…wNYB</td>
+        <td class="num">39,566.9</td>
+        <td class="num">$1.00</td>
+        <td class="num">$39,522.09</td>
+      </tr>
+      <tr>
+        <td>PYUSD <span class="tag tag-sol">SOL</span> <span class="tag">stable</span></td>
+        <td class="mono small">2b1kV6…4GXo</td>
+        <td class="num">20,260.02</td>
+        <td class="num">$1.00</td>
+        <td class="num">$20,254.99</td>
+      </tr>
+      <tr>
+        <td>pyth <span class="tag tag-sol">SOL</span></td>
+        <td class="mono small">HZ1Jov…BCt3</td>
+        <td class="num">128,792.8</td>
+        <td class="num">$0.04</td>
+        <td class="num">$5,534.00</td>
+      </tr>
+      <tr>
+        <td>USDG <span class="tag tag-sol">SOL</span> <span class="tag">stable</span></td>
+        <td class="mono small">2u1tsz…jGWH</td>
+        <td class="num">259.76</td>
+        <td class="num">$1.00</td>
+        <td class="num">$259.74</td>
+      </tr>
+        <tr><td colspan="4" class="muted">Below threshold (251 tokens hidden)</td><td class="num muted">$80.93</td></tr>
+        <tr class="total-row"><td colspan="4">Total</td><td class="num strong">$39,748,158.68</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Per-wallet rollup <span class="muted">(sorted by total USD desc)</span></h2>
+    <div class="search-wrap">
+      <input id="wallet-search" type="search" placeholder="Filter wallets — search by label, address, or source (db / csv / both)…" />
+    </div>
+    <table id="wallet-table">
+      <thead>
+        <tr>
+          <th>Wallet</th>
+          <th>Label</th>
+          <th class="num">SOL</th>
+          <th class="num">ORCA</th>
+          <th class="num">ETH</th>
+          <th class="num">Stables USD</th>
+          <th class="num">Other USD</th>
+          <th class="num">Protocol USD</th>
+          <th class="num">Total USD</th>
+        </tr>
+      </thead>
+      <tbody>
+        
+      <tr>
+        <td class="mono small" title="BTUWJUZrZEFr6obXDHkC7wGZs5pp52bQ7a9NcNefwz3Q">BTUW…wz3Q</td>
+        <td>ORCA Buy Back</td>
+        <td class="num">1.09</td>
+        <td class="num">873,848</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$5,123,814.53</td>
+        <td class="num">$0.47</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$6,396,353.17</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="5Je5sHZL5HrF8YDiwZDbpnsRSzzbeNYAjQSx4e2U5Uxd">5Je5…5Uxd</td>
+        <td>Contributor Grant</td>
+        <td class="num">1.65</td>
+        <td class="num">4,048,207</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.55</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$5,894,890.15</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="DrhE25wu3PRGtBCtzsry6ToiGjhwBzCnYGpvv53qxh9X">DrhE…xh9X</td>
+        <td>Panama Opco - Climate Fund</td>
+        <td class="num">694.22</td>
+        <td class="num">93,025</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$4,986,499.99</td>
+        <td class="num">$0.47</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$5,182,256.05</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="0x54B3Ac176ed8c57367B7B7528600D4CFFbbE0De3">0x54…0De3</td>
+        <td>Fireblocks - Strategic Reserve - Morpho</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">0.0093</td>
+        <td class="num">$4,452,040.58</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$4,452,060.22</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="0xCbEb1802f93b3E60B952Ce30fD162259c73D84dC">0xCb…84dC</td>
+        <td>Fireblocks - Strategic Reserve - Aave</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">0.0099</td>
+        <td class="num">$4,446,210.31</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$4,446,231.24</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4LN4syXHf5NiC6pc3Wvo8t4U1jvseSKaH6V2i28TkLsa">4LN4…kLsa</td>
+        <td>Revenue - Team Protocol Fees</td>
+        <td class="num">1.89</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$3,996,804.43</td>
+        <td class="num">$0.44</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$3,996,968.63</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="B7AziovBnSBiQFCzp5VQxoCVwm8vF5bH6DWBEwdEdQGz">B7Az…dQGz</td>
+        <td>ORCA Buyback Intermediary (Wintermute)</td>
+        <td class="num">0.05</td>
+        <td class="num">1,250,000</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$199,631.87</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$2,019,808.31</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="DMmheDsXWhZLxiDaJtfuPc5HusoSC4DJJpPNopduoYK3">DMmh…oYK3</td>
+        <td>Treasury Management - Kamino</td>
+        <td class="num">0.18</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$20,253.97</td>
+        <td class="num">$0.00</td>
+        <td class="num">$1,783,166.57</td>
+        <td class="num strong">$1,803,436.09</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="8TMfengkvyghgMbmahthBPiWGrAfvcpKXUZkbkchX1cE">8TMf…X1cE</td>
+        <td>Bug Bounty</td>
+        <td class="num">0.05</td>
+        <td class="num">967,098</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1,408,231.90</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="ChSBgMVSvUtBeU7uvfxYg592Kt1hG3GWUGbcitXiY3ah">ChSB…Y3ah</td>
+        <td>Treasury Management - SAVE Finance</td>
+        <td class="num">0.19</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num">$1,021,302.18</td>
+        <td class="num strong">$1,021,318.51</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="6FmYt5Pfw2jUyKiLdYvA5sCjqf5rc2RZMXyqKxzFMQ9F">6FmY…MQ9F</td>
+        <td>Fireblocks - MM - Vamient</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">555,253</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$808,525.27</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="AJJp35YQoTXqjabSEZqEFK4QsYKbZ5vj5DkCqozbnWhr">AJJp…nWhr</td>
+        <td>Prop AMM Funds (From DAO Treasury)</td>
+        <td class="num">0.2</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$479,213.44</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$479,230.81</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="5emFjuQYMcwzZ3HFfQ9M391QzBKE1uP1tyzsHMQuc7Ep">5emF…c7Ep</td>
+        <td>Orca Council</td>
+        <td class="num">0.06</td>
+        <td class="num">267,831</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$16,496.73</td>
+        <td class="num">$0.02</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$406,500.19</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="754rCJJjHcsjMhDVkHuefjV1irgHePeq1QWBrYw7G7rJ">754r…G7rJ</td>
+        <td>Pool ops - USDT-USDC</td>
+        <td class="num">202.1</td>
+        <td class="num">245,087</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$35.07</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$374,470.02</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="Eu9Guf5vhvaGNM93RaZE6joYtfZDqNT78CMcCgMofE1S">Eu9G…fE1S</td>
+        <td>Value add - advisory ORCA</td>
+        <td class="num">0.04</td>
+        <td class="num">186,031</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$270,889.82</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="ARhc2DnhxBXNxGcAq62aVFLM7VBFAWSULz2SpywntanH">ARhc…tanH</td>
+        <td>Treasury Management - Project Treasure Hunt</td>
+        <td class="num">0.64</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$114,767.15</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$114,822.43</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="FMJiNpfc5i9SKvuYSVzSwehGiVjiT4gorLXSUpChU1bb">FMJi…U1bb</td>
+        <td>ORCA Buyback 7</td>
+        <td class="num">0.12</td>
+        <td class="num">47,579</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$42,127.60</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$111,419.86</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="CGYAxnDF1bYwmbzTtVx2pdo8xd3aviqE58WumVYRLYRH">CGYA…LYRH</td>
+        <td>Fireblocks (Engineering) - PAMM - Internal Strategies</td>
+        <td class="num">0.1</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$105,397.53</td>
+        <td class="num">$7.96</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$105,414.21</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="E7CgMQJUkd53vMgF89iRWCqGjSNtLoM4uUQDZccK97uT">E7Cg…97uT</td>
+        <td>Orca Management S.A.- ORCA Ops</td>
+        <td class="num">18.54</td>
+        <td class="num">70,365</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$104,072.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="3J35za62bBeFwUDbrF8GaWcEXEdWfKigKUFbrzPuYiwf">3J35…Yiwf</td>
+        <td>ORCA Buyback 6</td>
+        <td class="num">0.12</td>
+        <td class="num">30,980</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$40,268.97</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$85,389.90</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="43SAPBWgpBFetSuNqLKDW74CVxTD9A4apV94Fownn5bi">43SA…n5bi</td>
+        <td>ORCA Buyback 8</td>
+        <td class="num">0.12</td>
+        <td class="num">41,187</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$1,326.74</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$61,311.13</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="HgMJF5GVeG6XgjbVUTmoh6tpL83CGqvhVXB8X9ZiJ6hk">HgMJ…J6hk</td>
+        <td>Zagreus - Private Funds (Markup)</td>
+        <td class="num">0.1</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$55,796.76</td>
+        <td class="num">$0.02</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$55,805.30</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="E8q5m46W5BnnLpfUi7Av2rTE7Lzz7uj9zm1Ubwt3UCEv">E8q5…UCEv</td>
+        <td>Juku Labs - Private Funds (Markup)</td>
+        <td class="num">0.1</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$54,717.60</td>
+        <td class="num">$0.03</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$54,726.14</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="9XP3Us9tm8QLNS1zyM5jhqcypKyGuHNLbhZdfEQ8NqMi">9XP3…NqMi</td>
+        <td>Fireblocks - Rewards - Galaxy Validator Reward</td>
+        <td class="num">210.52</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$18,285.39</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4KJJC1vyPp1anCQwSNvjFJRiVSSP2GDcZkyBomvDNpw4">4KJJ…Npw4</td>
+        <td>External Zagreus Services - USDC Ops</td>
+        <td class="num">0.7</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$16,556.47</td>
+        <td class="num">$0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$16,616.90</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="6r4VmKZdGeLtLQxNsLXTShb9bN1FhGH4whDsVyRsDyYE">6r4V…DyYE</td>
+        <td>External Juku labs - USDC Ops</td>
+        <td class="num">0.36</td>
+        <td class="num">0</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$16,129.44</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$16,160.71</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="FSXJcr1E7HCEFZ9GVigpDpj9uaFGNn9Uk4zU7rHyWZhT">FSXJ…WZhT</td>
+        <td>Fireblocks - MM - Velar</td>
+        <td class="num">1</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$15,913.58</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$16,000.27</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4XrVmNt99A25er51YNiZQujH3RFRjRTvmdEf7dbnpXF1">4XrV…pXF1</td>
+        <td>External Foundation - Private Sale Monthly Ops</td>
+        <td class="num">172.37</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.04</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$14,972.06</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="72gAdA2XxZZ4nDsXHd8zoHWkjkK6DiddrL6BFAwW2ENf">72gA…2ENf</td>
+        <td>Foundation Airdrops</td>
+        <td class="num">0.02</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$5,534.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$5,536.11</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4y8H9ke4kJXqqXJRkFrqW7GqhwELAWXx8HQruidAzXYa">4y8H…zXYa</td>
+        <td>Fireblocks (Engineering) - [Live] USDC-USDT-HAT-1</td>
+        <td class="num">0.28</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$1,838.94</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1,863.03</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="BXqUyiFi7ghZ3oXddWPz9Sp8juE9jwXRzQYE5BccnaHb">BXqU…naHb</td>
+        <td>Phantom - Orca Shirt Sales</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$935.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$935.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="aacXtmneYTJugGhDw21Cp3kwmn6jnEqqFtekkvPjkdE">aacX…jkdE</td>
+        <td>Fireblocks (Engineering) - [Live] USDG-USDC-HAT-1</td>
+        <td class="num">0.18</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$819.08</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$834.46</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="fv4tMzfT7aXU7j93DBXfT6AADB1YvwpTh1rjDPv8Mso">fv4t…8Mso</td>
+        <td>Fireblocks (Engineering) - [Live] USDC-USDT-TICK-CHASING-1</td>
+        <td class="num">0.14</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$763.45</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$775.34</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="G93VTMYGNr2qzfAZcqxCLnHbP7yyhvKp4ErtWvqL9gmo">G93V…9gmo</td>
+        <td>Coinbase - Foundation</td>
+        <td class="num">1.56</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$365.16</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$500.83</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="8KQpW4X2CJ7UnebjVzjhYeB75GkLXR6jkMMW7n7GLNje">8KQp…LNje</td>
+        <td>External Orca Management S.A. - USDC Ops</td>
+        <td class="num">5.19</td>
+        <td class="num">0</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$15.02</td>
+        <td class="num">$0.04</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$466.17</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="78Muci3C96szhuBZ67pZKGaVyfyfyHjR9BBAmzYVceop">78Mu…ceop</td>
+        <td>Team - Orca Management - USDC Vault</td>
+        <td class="num">4.97</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.10</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$431.90</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="GjKxauMroc9MT27xXYyjLYNfy9nSS5EuHTmzhdkjCAR1">GjKx…CAR1</td>
+        <td>Orca Tokens Main</td>
+        <td class="num">0.11</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$99.89</td>
+        <td class="num">$0.05</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$109.32</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="2PEcXj9jMLHZexPUi1YoNYe2sosomqRghUmGuY5fURkN">2PEc…URkN</td>
+        <td>Phantom - TreasureHunt 1 - PYUSD-USDT-HAT (Testing) Funded by Treasure Hunt</td>
+        <td class="num">0.47</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$25.35</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$66.27</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="EA3pngfdYiwqDezaPoorX4SixQeYAKVgdHF81Z24UyPJ">EA3p…UyPJ</td>
+        <td>Fireblocks (Engineering) - Transaction Fuel</td>
+        <td class="num">0.75</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$64.96</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="AdrnDm5mqVdVoDXiAViPjtzCtLt6hBrf7213y2dWcmSt">Adrn…cmSt</td>
+        <td>Zagreus - Orca Ops</td>
+        <td class="num">0.73</td>
+        <td class="num">0</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$63.47</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4Jzm5Xe5C22uDEsfh6dTjeGeui7GGj3gVjLtuedHd7Wg">4Jzm…d7Wg</td>
+        <td>Phantom - TreasureHunt 3 (Testing) Funded by Treasure Hunt</td>
+        <td class="num">0.48</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$16.47</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$57.85</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="5cMFiRs2WCE9ACsb1HWrAQXo4g6Ve1FZDyfwHzdo5BVV">5cMF…5BVV</td>
+        <td>Phantom - TreasureHunt 2 - PYUSD-USDT-USDC-1-Hat (Testing) Funded by Treasure Hunt</td>
+        <td class="num">0.47</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$12.44</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$52.95</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="Fm9RxJRFkPGFmWqHZfEjmczHkaG4ZTqRmk7Zbdshjyf5">Fm9R…jyf5</td>
+        <td>Foundation - Orca Token Monthly Operations</td>
+        <td class="num">0.45</td>
+        <td class="num">1</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$39.71</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="AfFqYRFnJZqkToEdzwZtRxTNWTZsC8u3GFj8fA94P3kz">AfFq…P3kz</td>
+        <td>Team - Juku - USDC Vault</td>
+        <td class="num">0.38</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$32.76</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="HfuniF9MJAaQ74z9peU8zeKLWnjnUPpVMZwxZ3eLPLj4">Hfun…PLj4</td>
+        <td>Fireblocks (Engineering) - [Live] cbBTC-wBTC-HAT-1</td>
+        <td class="num">0.2</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$17.37</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="71qCZGiDjCMD8RiiqbjuDgkAehgN2jKQ4c54hHdYzswY">71qC…zswY</td>
+        <td>Fireblocks (Engineering) - [Live] xORCA-ORCA-2</td>
+        <td class="num">0.2</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$17.37</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="AwqCiMVWY7JJ6dBE7iy7sEkzmgYYNmGKmey4b7ZZwodt">AwqC…wodt</td>
+        <td>Treasury Management - Morpho</td>
+        <td class="num">0.2</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$17.37</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="6ftw2gANmvydw2Pnwk9EkCdAYrrRmcdfpu5ZeDhTgXZo">6ftw…gXZo</td>
+        <td>Treasury Management - Aave</td>
+        <td class="num">0.2</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$17.37</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="AwGv3W4GHN4cF8S7GQ2LSrQYpkbtmDj3nuc9ZyiVM3xc">AwGv…M3xc</td>
+        <td>Team - Foundation - USDC Vault</td>
+        <td class="num">0.2</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$17.37</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="5iYEHaCgfZJ6KbWvea6U4WcecY6tpwZcjxfThHYtnFNm">5iYE…nFNm</td>
+        <td>Team - Zagreus - USDC Vault</td>
+        <td class="num">0.19</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.06</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$16.68</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="9GnF7j52tahBNmWFvZiiyrb2tQPwywDZYrh2Rf5T6DsY">9GnF…6DsY</td>
+        <td>Foundation - Private Sale</td>
+        <td class="num">0.15</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.30</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$13.40</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="2qxLG1JcaAKBtbzxFYBE2xbQYPkYSV84FAT4jML8iBar">2qxL…iBar</td>
+        <td>FlowDesk Put Options</td>
+        <td class="num">0.1</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$8.51</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="F3kyYNB8fiy1pGBeQfkaWjKwWDixE5ezPD87pKYdLTzA">F3ky…LTzA</td>
+        <td>Fireblocks (Engineering) - [Test] xORCA-ORCA-2-Escalator</td>
+        <td class="num">0.09</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$7.42</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="8pTegn1H9PkrWsnK5kwWgRQh5i9CNm2KLsxj1wCVxfDM">8pTe…xfDM</td>
+        <td>Phantom - PAMM Perps Hot Wallet Funded by Treasure Hunt</td>
+        <td class="num">0.06</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$5.10</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="vmQBLgdyX4VxaBH7n6pczRg4d6v69KtW35sGAeuXJsv">vmQB…XJsv</td>
+        <td>Fireblocks (Engineering) - [Test] USDC-USDT-1-HAT-AC</td>
+        <td class="num">0.06</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$4.98</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="EDqUbyQMxf4npt6zkQdcrc45F523azvTe6VeazJNHWYz">EDqU…HWYz</td>
+        <td>Foundation - Orca Token Source (Pre-Operations)</td>
+        <td class="num">0.04</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$3.78</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="3bbvMW3A1ntr2TWoHxsikeECBJA4DQUegGHiodvyWdoh">3bbv…Wdoh</td>
+        <td>Intake Wallet 1</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.44</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.61</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="rrtoqwBRgBa8Pzuwk4HnqjzNJ4sbpPxR5KfGXv7xpFN">rrto…xpFN</td>
+        <td>Phantom - PAMM Hot Wallet Funded by DAO</td>
+        <td class="num">0.02</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.56</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="BBiw7tNRmNDtLbXGM1cYpGrkijgTfdyugdgKGgRkKzXZ">BBiw…KzXZ</td>
+        <td>Intake Wallet 7</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.48</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.16</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="9cq2TXgVLQHBD5dJgLHr6CdCEXoKJBbWBRpacnSnD54x">9cq2…D54x</td>
+        <td>Intake Wallet 4</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.47</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.15</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="8Wv8E572KBaYaaJH4vvjJ6Vn8kr7hXGKK7fDnCKwgT2A">8Wv8…gT2A</td>
+        <td>Intake Wallet 3</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.44</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.14</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="418Tsx45ZWMe4vWjyehj6nHnTrFEmF747mdo6bTzFfff">418T…Ffff</td>
+        <td>Intake Wallet 6</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.44</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.13</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="9MmcdtjpGBqdcHbMEdMrBkEUhPZ5S3c7tsjw78ZyYc4b">9Mmc…Yc4b</td>
+        <td>Intake Wallet 9</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.44</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.13</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="GQ9TcZGiX3swdkVdHjFjtbigHVJabg9YbL6n7U8fgSkg">GQ9T…gSkg</td>
+        <td>Intake Wallet 5</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.44</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.13</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="HpijDHBUDRFUWo7HZ1QwnXZe1j5BAVxirJzdiFA6fRzo">Hpij…fRzo</td>
+        <td>Intake Wallet 2</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.44</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$1.09</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="6QZC5MnSegtSxUNDi3oMnFSKqxnc4Z4ECMMgbPyyeBV7">6QZC…eBV7</td>
+        <td>Panama Management SA - Bounty Collection</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.88</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.88</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="FNwKaqNcUeZKHcgtyr5Q2RTGSgms13Go1uwWTuJm6f3d">FNwK…6f3d</td>
+        <td>Foundation - Pool Ops</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.75</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="AB9ozWezKUkkgujAkpMKQ8wPMAwEoYinXM727QieAwZa">AB9o…AwZa</td>
+        <td>Orca Management S.A. - PYUSD Rewards</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.67</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="CQR9w5poA8V3Cf7NNNq32e7SLea74N7e1RkytifYRno3">CQR9…Rno3</td>
+        <td>Panama Op Co - Partner Rewards Airdrop</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.11</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.62</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="EXVqjV7VDmpYFHBAwuCXD9M4ENs2zM8j6L2bg8WpH211">EXVq…H211</td>
+        <td>Zagreus - ORCA Withholdings</td>
+        <td class="num">0.01</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.51</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4SeDRs3yV5Ld27emtXi8aNvAeR7u8Ha9ttJ3GMK6az6y">4SeD…az6y</td>
+        <td>Fireblocks - Eclipse Funds</td>
+        <td class="num">0</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.22</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="msmkUDYviNHNx3eA6Goiu82xYEq8S8xzjZm3yiFB4KY">msmk…B4KY</td>
+        <td>Juku labs - ORCA Ops</td>
+        <td class="num">0</td>
+        <td class="num">0</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.21</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="5cLaEt3soCDjSQrkD5VHY5iL4ntQ5HEYS8PSnbbRkHQt">5cLa…kHQt</td>
+        <td>Foundation Fundraise: Solana</td>
+        <td class="num">0</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.18</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="CJJJ5hSFcrjpfsgbUFoo39qutzmxMaWGxXQcSNr9uPjt">CJJJ…uPjt</td>
+        <td>Eclipse Backpack Crypto Wallet - Eclipse</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="7HCqB4fcKYFz7TKzxvmAJN6DiU5XRUrHE2hgVfMoAGSy">7HCq…AGSy</td>
+        <td>Intake Wallet 10</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4UY6S4amJVH2QwcoPG44psv429XD1HcVYL1FixnuxefD">4UY6…xefD</td>
+        <td>Liquidity Fund - Coinbase Prime</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="FKdazx1CmLo7xj8AtPCWyGkqPJ49RJzyqywAq4HhyBG4">FKda…yBG4</td>
+        <td>New - Juku - ORCA Vault</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="QpQGPXdjWLbsFqPgpKYRbUMY5RqVSzi7aTf1DV5PYWJ">QpQG…PYWJ</td>
+        <td>New - Zagreus - ORCA Vault</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="G2v2mb14GjeGV3boux12NnsGYi5m4o9QjfzEfY4qRSYH">G2v2…RSYH</td>
+        <td>ORCA Buyback 1 Phantom Wallet</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4V6tiyD8E8sWVXu7FapmsFTm1CeRcdFcuYg2PC4JgwRJ">4V6t…gwRJ</td>
+        <td>ORCA Buyback 2</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="7gPQyAe4SZ9yjrDDR8HQyozVpq5EF9GA5B43rD1cpNQu">7gPQ…pNQu</td>
+        <td>ORCA Buyback 3</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="FHmejdSK1edTtUKcEpUgmvLfQRf8HR8EdpAo8MtGf8K9">FHme…f8K9</td>
+        <td>ORCA Buyback 4</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="HebdVCZKtxeKQ8bywd27VBQiJcjX11itPRcGczrD7147">Hebd…7147</td>
+        <td>ORCA Buyback 5</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="8dRygeDidyJ8ebD5mV8NAs48PDWELQ466bvTrWoXZMda">8dRy…ZMda</td>
+        <td>ORCA Buyback (Intermediary - Wintermute)</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="4Sz8UuJ2Vuic4uhx9LgvfnX6Y17yQxzPmuDKTjMgZY7q">4Sz8…ZY7q</td>
+        <td>Fireblocks (Engineering) - TreasureHunt</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="2qbZU1snfdQM1Gqg4AMcNMw32mTa9ao6PNaseS4TLFio">2qbZ…LFio</td>
+        <td>Fireblocks (Engineering) - Treasure Hunt Funds - Engineering</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="0x8B3C8C394F502E44E36cc97211D9f0D22DC8BfC3">0x8B…BfC3</td>
+        <td>Fireblocks - Strategic Reserve - Project Treasure Hunt</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="0x35c1A1Fa54105FE5738908dCd25dCe5De43dBfae">0x35…Bfae</td>
+        <td>Fireblocks (Engineering) - [Test] USDC-USDT-1-HAT-AC</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+      <tr>
+        <td class="mono small" title="0x59f48d0188D76C48FF68AB792d19bAEf19957Af7">0x59…7Af7</td>
+        <td>Fireblocks (Engineering) - PAMM - Internal Strategies</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num">$0.00</td>
+        <td class="num">$0.00</td>
+        <td class="num"><span class="muted">—</span></td>
+        <td class="num strong">$0.00</td>
+      </tr>
+        <tr class="total-row" id="wallet-total-row">
+          <td colspan="2">Total</td>
+          <td class="num">1,324.46</td>
+          <td class="num">8,676,492</td>
+          <td class="num">0.0191</td>
+          <td class="num">$24,188,868.37</td>
+          <td class="num">$5,574.37</td>
+          <td class="num">$2,804,468.75</td>
+          <td class="num strong">$39,748,158.68</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Untracked-mint table hidden by request. To restore, re-insert: ${untrackedSection} -->
+
+</div>
+<script>
+  (function () {
+    var input = document.getElementById('wallet-search')
+    var table = document.getElementById('wallet-table')
+    if (!input || !table) return
+    var rows = table.querySelectorAll('tbody tr')
+    input.addEventListener('input', function () {
+      var q = input.value.trim().toLowerCase()
+      rows.forEach(function (row) {
+        if (row.id === 'wallet-total-row') return  // never hide the totals row
+        var txt = row.textContent.toLowerCase()
+        row.style.display = !q || txt.indexOf(q) !== -1 ? '' : 'none'
+      })
+    })
+  })()
+</script>
 </body>
 </html>
