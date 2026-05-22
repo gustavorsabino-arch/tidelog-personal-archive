@@ -9,12 +9,14 @@ import {
   parseQboProfitAndLossReport,
   type QboProfitAndLossReport,
 } from './actuals.ts'
+import { applyCouncilSubtraction, loadCouncilSubtractionByAccount } from './qb-class-exclusion.ts'
 import { loadBudgetQbMappingState } from './qb-mapping-db.ts'
 import type {
   BudgetEntityScope,
   BudgetLineAmounts,
   BudgetActualLineSet,
   BudgetOverviewActualsState,
+  BudgetQbMappingRow,
   BudgetRevenueMonthlyBreakdown,
   BudgetRevenueMonthEntry,
   BudgetMonthKey,
@@ -129,32 +131,54 @@ export async function fetchBudgetRevenueLineSet(
   }
 }
 
+export type BudgetOverviewEntityReports = {
+  reports: readonly QboProfitAndLossReport[]
+  councilSubtraction: Readonly<Record<string, number>>
+}
+
+/**
+ * Pure composer: aggregates per-entity P&L reports into per-account totals,
+ * subtracts the matching Council amounts, and maps the result to budget
+ * lines. Exposed for testing — production callers go through
+ * `fetchBudgetOverviewActuals` which loads the inputs from the cache.
+ */
+export function composeBudgetOverviewMappedLines(
+  perEntity: readonly BudgetOverviewEntityReports[],
+  mappingRows: readonly BudgetQbMappingRow[],
+): BudgetLineAmounts {
+  const totals: BudgetLineAmounts = {}
+
+  for (const { reports, councilSubtraction } of perEntity) {
+    const aggregatedTotals: Record<string, number> = {}
+    for (const report of reports) {
+      const monthly = parseQboProfitAndLossReport(report)
+      for (const [acct, amount] of Object.entries(monthly)) {
+        aggregatedTotals[acct] = (aggregatedTotals[acct] ?? 0) + amount
+      }
+    }
+    const adjustedTotals = applyCouncilSubtraction(aggregatedTotals, councilSubtraction)
+    const mappedLines = mapQboAccountTotalsToBudgetLines(adjustedTotals, mappingRows)
+    addBudgetLineAmounts(totals, mappedLines)
+  }
+
+  return totals
+}
+
 export async function fetchBudgetOverviewActuals(view: BudgetViewState): Promise<BudgetOverviewActualsState> {
   const mapping = await loadBudgetQbMappingState(view.year, true)
   const entities = getBudgetQboEntities(view.entity)
   const ranges = getBudgetOverviewActualDateRanges(view)
 
   async function getMappedLines(start: string, end: string): Promise<BudgetLineAmounts> {
-    const totals: BudgetLineAmounts = {}
+    const perEntity = await Promise.all(entities.map(async (entity) => {
+      const [reports, councilSubtraction] = await Promise.all([
+        readCachedReportsInRange<QboProfitAndLossReport>(entity, 'profit_and_loss', start, end),
+        loadCouncilSubtractionByAccount(entity, start, end),
+      ])
+      return { reports, councilSubtraction }
+    }))
 
-    const perEntityReports = await Promise.all(
-      entities.map((entity) => readCachedReportsInRange<QboProfitAndLossReport>(entity, 'profit_and_loss', start, end)),
-    )
-
-    for (const reports of perEntityReports) {
-      // Aggregate monthly PnL cache rows within the requested range.
-      const aggregatedTotals: Record<string, number> = {}
-      for (const report of reports) {
-        const monthly = parseQboProfitAndLossReport(report)
-        for (const [acct, amount] of Object.entries(monthly)) {
-          aggregatedTotals[acct] = (aggregatedTotals[acct] ?? 0) + amount
-        }
-      }
-      const mappedLines = mapQboAccountTotalsToBudgetLines(aggregatedTotals, mapping.rows)
-      addBudgetLineAmounts(totals, mappedLines)
-    }
-
-    return totals
+    return composeBudgetOverviewMappedLines(perEntity, mapping.rows)
   }
 
   const [period, ytd, annual] = await Promise.all([

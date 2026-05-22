@@ -18,6 +18,11 @@ import {
 } from './actuals.ts'
 import { parseQboGeneralLedgerRows } from './qb-general-ledger.ts'
 import { normalizeBudgetQboClassName } from './qb-class.ts'
+import {
+  applyCouncilSubtraction,
+  filterExcludedClassEntries,
+  loadCouncilSubtractionByAccount,
+} from './qb-class-exclusion.ts'
 import { loadBudgetQbMappingState } from './qb-mapping-db.ts'
 import type { BudgetHeadcountActualEntry, BudgetHeadcountActualsState, BudgetQbMappingRow, BudgetViewState } from './types.ts'
 
@@ -86,10 +91,12 @@ export async function fetchBudgetHeadcountActuals(view: BudgetViewState): Promis
   const range = view.mode === 'ytd' ? ranges.ytd : ranges.period
 
   const perEntity = await Promise.all(entities.map(async (entity) => {
-    const [totals, catalog] = await Promise.all([
+    const [rawTotals, catalog, councilSubtraction] = await Promise.all([
       readAggregatedPnlTotals(entity, range.start, range.end),
       readCachedAccountCatalogByNumber(entity),
+      loadCouncilSubtractionByAccount(entity, range.start, range.end),
     ])
+    const totals = applyCouncilSubtraction(rawTotals, councilSubtraction)
     return { entity, totals, catalog }
   }))
 
@@ -146,7 +153,7 @@ export async function fetchBudgetHeadcountActuals(view: BudgetViewState): Promis
     const glTotals = aggregateGeneralLedgerRowsByClass(enrichedRows)
     let assigned = 0
 
-    for (const [rawClass, amount] of Object.entries(glTotals.classified)) {
+    for (const [rawClass, amount] of Object.entries(filterExcludedClassEntries(glTotals.classified))) {
       const department = normalizeBudgetQboClassName(rawClass)
       if (department) {
         if (task.lineKey === 'salary') byDepartment[department].salaryActualUsd += amount

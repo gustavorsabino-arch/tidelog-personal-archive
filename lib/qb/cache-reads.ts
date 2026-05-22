@@ -256,6 +256,27 @@ export async function readCachedGeneralLedgerByAccount<T>(
   return out
 }
 
+/**
+ * Returns every cached per-account GL row in the range, paired with the
+ * accountNumber from filter_params. Same data as
+ * `readCachedGeneralLedgerByAccount` but as a flat list — convenient when
+ * the caller wants to walk every (accountNumber, report) pair (e.g.
+ * computing class-based exclusions across the whole P&L). Implemented as
+ * an adapter over the Map version so the SQL stays in one place.
+ */
+export async function readCachedPerAccountGeneralLedgersInRange<T>(
+  entity: QboEntity,
+  periodStart: string,
+  periodEnd: string,
+): Promise<Array<{ accountNumber: string; data: T }>> {
+  const map = await readCachedGeneralLedgerByAccount<T>(entity, periodStart, periodEnd)
+  const out: Array<{ accountNumber: string; data: T }> = []
+  for (const [accountNumber, reports] of map) {
+    for (const data of reports) out.push({ accountNumber, data })
+  }
+  return out
+}
+
 export type CachedAccount = {
   qbAccountId: string
   qbAccountNumber: string | null
