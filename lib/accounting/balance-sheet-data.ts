@@ -8,6 +8,7 @@ export type BalanceSheetData = {
   entity: string
   asOf: string
   bsAsOf: string | null
+  bsFetchedAt: string | null
   fetchedAt: string
   bs: BsTree | null
   bsError: string | null
@@ -21,16 +22,17 @@ export async function getBalanceSheetData(entity: QboEntity, asOf: string): Prom
   const [qbResult, onchainResult] = await Promise.allSettled([
     (async () => {
       const exact = await readCachedBalanceSheet<QboBalanceSheetReport>(entity, asOf)
-      if (exact) return { bs: parseBsReport(exact), bsAsOf: asOf }
+      if (exact) return { bs: parseBsReport(exact.data), bsAsOf: asOf, bsFetchedAt: exact.fetchedAt }
       const fallback = await readLatestCachedBalanceSheetOnOrBefore<QboBalanceSheetReport>(entity, asOf)
       if (!fallback) throw new Error(`No cached balance sheet on or before ${asOf}`)
-      return { bs: parseBsReport(fallback.data), bsAsOf: fallback.asOfDate }
+      return { bs: parseBsReport(fallback.data), bsAsOf: fallback.asOfDate, bsFetchedAt: fallback.fetchedAt }
     })(),
     getEntityOnchainSummary(entityId),
   ])
 
   const bs = qbResult.status === 'fulfilled' ? qbResult.value.bs : null
   const bsAsOf = qbResult.status === 'fulfilled' ? qbResult.value.bsAsOf : null
+  const bsFetchedAt = qbResult.status === 'fulfilled' ? qbResult.value.bsFetchedAt.toISOString() : null
   const bsError = qbResult.status === 'rejected'
     ? (qbResult.reason instanceof Error ? qbResult.reason.message : 'Cached balance sheet unavailable')
     : null
@@ -39,6 +41,7 @@ export async function getBalanceSheetData(entity: QboEntity, asOf: string): Prom
     entity,
     asOf,
     bsAsOf,
+    bsFetchedAt,
     fetchedAt: new Date().toISOString(),
     bs,
     bsError,
