@@ -1,20 +1,4 @@
-import { test, expect, mock } from 'bun:test'
-
-// Stub modules that require DB / external config so parseTransaction
-// can be imported without a live database.
-mock.module('@/lib/db', () => ({ db: {} }))
-mock.module('@/lib/db/schema', () => ({ wallet: {}, transaction: {} }))
-mock.module('@/lib/helius', () => ({
-  heliusRpc: async () => ({ result: [] }),
-  heliusEnhanced: async () => [],
-  heliusGetAddressTransactions: async () => [],
-  heliusGetTokenAccountsByOwner: async () => [],
-}))
-mock.module('@/lib/transaction-pricing', () => ({
-  hydrateTransactionPrices: async (txs: unknown[]) => ({ transactions: txs }),
-  primeLatestPrices: async () => {},
-}))
-
+import { test, expect } from 'bun:test'
 import { parseTransaction } from './fetch-transactions'
 
 const ORCA = 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE'
