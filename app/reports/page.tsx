@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { readFileSync, statSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { getServerUser } from '@/lib/auth/get-user'
 
@@ -21,7 +21,12 @@ export default async function ReportsPage() {
   let lastUpdated: string | null = null
   if (existsSync(HTML_PATH)) {
     html = readFileSync(HTML_PATH, 'utf8')
-    lastUpdated = statSync(HTML_PATH).mtime.toISOString()
+    // The report embeds its own generation timestamp inside the HTML header
+    // (`Generated <code>ISO_DATE</code>`). We prefer that over filesystem
+    // mtime, which Vercel resets to a fixed 2018 epoch when extracting the
+    // deployment bundle.
+    const m = html.match(/Generated\s*<code>([^<]+)<\/code>/i)
+    if (m && !Number.isNaN(Date.parse(m[1]))) lastUpdated = m[1]
   }
 
   return (
