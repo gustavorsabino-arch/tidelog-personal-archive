@@ -70,5 +70,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ address
 
   const elapsedMs = Date.now() - startedAt
   console.info(`[admin-wallets][BACKFILL] done duration=${elapsedMs}ms`)
-  return NextResponse.json({ ok: true, ...result })
+  return NextResponse.json(result)
 }
