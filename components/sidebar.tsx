@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { href: '/pnl', label: 'P&L', color: '#06D6A0', section: 'Views', pageKey: 'pnl' },
   { href: '/budget', label: 'Budget', color: '#D4A017', section: 'Views', pageKey: 'budget' },
   { href: '/wallets', label: 'Wallets', color: '#888888', section: 'Config', pageKey: 'wallets' },
+  { href: '/reports', label: 'Reports', color: '#D4A017', section: 'Config', pageKey: 'reports' },
   { href: '/admin', label: 'Access Control', color: '#d93025', section: 'Config', pageKey: 'admin' },
 ]
 
