@@ -12,6 +12,19 @@ type QboTokenResponse = {
 
 const QBO_MAX_RETRIES = 3
 
+export class QboHttpError extends Error {
+  readonly status: number
+  readonly intuitTid: string | null
+  readonly responseText: string
+  constructor(status: number, message: string, intuitTid: string | null, responseText: string) {
+    super(message)
+    this.name = 'QboHttpError'
+    this.status = status
+    this.intuitTid = intuitTid
+    this.responseText = responseText
+  }
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -201,9 +214,15 @@ export async function fetchQboJson<T>(
 
   if (!response?.ok) {
     const errorText = await response?.text().catch(() => '') ?? ''
-    const intuitTid = response?.headers.get('intuit_tid')
+    const intuitTid = response?.headers.get('intuit_tid') ?? null
     const tidSuffix = intuitTid ? ` [intuit_tid=${intuitTid}]` : ''
-    throw new Error(`QuickBooks request failed for ${entity} (${response?.status ?? 'unknown'})${tidSuffix}: ${errorText}`)
+    const status = response?.status ?? 0
+    throw new QboHttpError(
+      status,
+      `QuickBooks request failed for ${entity} (${status || 'unknown'})${tidSuffix}: ${errorText}`,
+      intuitTid,
+      errorText,
+    )
   }
 
   return response.json() as Promise<T>

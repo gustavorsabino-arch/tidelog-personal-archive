@@ -250,6 +250,17 @@ export type CachedTransactionPayload<T = unknown> = {
   fetchedAt: Date
 }
 
+/**
+ * A failure-marker row stored in qb_transaction_cache when QB returns a
+ * permanent 4xx for a txn payload fetch. Consumers must treat these as
+ * "not in cache" so the GL row is still rendered (without payload enrichment)
+ * and the cron's negative cache stops re-attempting the request every hour.
+ */
+function isFailureMarker(payload: unknown): boolean {
+  return typeof payload === 'object' && payload !== null
+    && (payload as { _failed?: unknown })._failed === true
+}
+
 export async function readCachedTransactionPayloads<T = unknown>(
   entity: QboEntity,
   txnIds: readonly string[],
@@ -264,6 +275,7 @@ export async function readCachedTransactionPayloads<T = unknown>(
 
   const map = new Map<string, CachedTransactionPayload<T>>()
   for (const row of rows) {
+    if (isFailureMarker(row.payload)) continue
     map.set(row.txnId, {
       txnId: row.txnId,
       resourceType: row.resourceType,
