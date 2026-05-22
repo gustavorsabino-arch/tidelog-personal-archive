@@ -2,8 +2,8 @@
 import { useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
-import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS } from '@/lib/constants'
-import { fmtNum, fmtUSD } from '@/lib/format'
+import { ENTITIES, ENTITY_COLORS, STABLE_TOKENS, TOKEN_COLORS } from '@/lib/constants'
+import { fmtDate, fmtNum, fmtUSD } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
 import type { BsAccount, BsSection, BsTree } from '@/lib/qb/balance-sheet'
 import type { OnchainSummary } from '@/lib/accounting/onchain-summary'
@@ -11,11 +11,27 @@ import type { OnchainSummary } from '@/lib/accounting/onchain-summary'
 type BsResponse = {
   entity: string
   asOf: string
+  bsAsOf: string | null
+  bsFetchedAt: string | null
   fetchedAt: string
   bs: BsTree | null
   bsError: string | null
   onchain: OnchainSummary | null
   onchainError: string | null
+}
+
+function fmtRelative(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return '—'
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.round(hrs / 24)
+  return `${days}d ago`
 }
 
 function todayUtc(): string {
@@ -115,7 +131,25 @@ export default function AccountingPage() {
             max={todayUtc()}
           />
         </label>
-        {loading ? <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Loading…</span> : null}
+        {data?.bsAsOf && data.bsAsOf !== asOf ? (
+          <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>
+            Snapshot: {fmtDate(data.bsAsOf)}
+          </span>
+        ) : null}
+        {data?.bsFetchedAt ? (
+          <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>
+            QB fetched {fmtRelative(data.bsFetchedAt)}
+          </span>
+        ) : null}
+        <button
+          onClick={() => mutate()}
+          disabled={loading}
+          className="fsel"
+          style={{ fontSize: '0.75rem', cursor: loading ? 'default' : 'pointer' }}
+          title="Re-read cached snapshot"
+        >
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
 
       {loading && !data ? (
@@ -181,6 +215,16 @@ export default function AccountingPage() {
         </div>
       ) : null}
 
+      {data?.onchainError ? (
+        <div style={{
+          marginTop: 12, padding: '8px 12px', borderRadius: 'var(--radius)',
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          color: 'var(--red)', fontSize: '0.75rem',
+        }}>
+          On-chain summary unavailable: {data.onchainError}
+        </div>
+      ) : null}
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
         {/* On-chain per-token */}
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
@@ -211,20 +255,31 @@ export default function AccountingPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.onchain.byToken.map((t) => (
-                  <tr key={t.token}>
-                    <td style={{ padding: '6px 10px' }}>
-                      <span style={{
-                        display: 'inline-block', width: 8, height: 8, borderRadius: 4,
-                        background: TOKEN_COLORS[t.token] ?? TOKEN_COLORS.default, marginRight: 8,
-                      }} />
-                      {t.token}
-                    </td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtNum(t.amount, 4)}</td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--muted)' }}>{fmtUSD(t.priceUsd, 4)}</td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtUSD(t.usd, 0)}</td>
-                  </tr>
-                ))}
+                {data.onchain.byToken.map((t) => {
+                  const missingPrice = t.priceUsd === 0 && !STABLE_TOKENS.has(t.token) && t.amount > 0
+                  return (
+                    <tr key={t.token}>
+                      <td style={{ padding: '6px 10px' }}>
+                        <span style={{
+                          display: 'inline-block', width: 8, height: 8, borderRadius: 4,
+                          background: TOKEN_COLORS[t.token] ?? TOKEN_COLORS.default, marginRight: 8,
+                        }} />
+                        {t.token}
+                      </td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtNum(t.amount, 4)}</td>
+                      <td
+                        style={{
+                          padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)',
+                          color: missingPrice ? 'var(--red)' : 'var(--muted)',
+                        }}
+                        title={missingPrice ? 'No price available — USD treated as 0' : undefined}
+                      >
+                        {missingPrice ? 'no price' : fmtUSD(t.priceUsd, 4)}
+                      </td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtUSD(t.usd, 0)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           ) : (

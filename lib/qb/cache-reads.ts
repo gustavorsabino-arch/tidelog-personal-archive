@@ -53,8 +53,21 @@ export async function readCachedProfitAndLoss<T>(
 export async function readCachedBalanceSheet<T>(
   entity: QboEntity,
   asOfDate: string,
-): Promise<T | null> {
-  return readReport<T>(entity, 'balance_sheet', asOfDate, asOfDate)
+): Promise<{ data: T; fetchedAt: Date } | null> {
+  const [row] = await db.select({
+    data: qbReportCache.data,
+    fetchedAt: qbReportCache.fetchedAt,
+  })
+    .from(qbReportCache)
+    .where(and(
+      eq(qbReportCache.entityId, entityToId(entity)),
+      eq(qbReportCache.reportType, 'balance_sheet'),
+      eq(qbReportCache.periodStart, asOfDate),
+      eq(qbReportCache.periodEnd, asOfDate),
+    ))
+    .orderBy(desc(qbReportCache.fetchedAt))
+    .limit(1)
+  return row ? { data: row.data as T, fetchedAt: row.fetchedAt } : null
 }
 
 /**
@@ -66,10 +79,11 @@ export async function readCachedBalanceSheet<T>(
 export async function readLatestCachedBalanceSheetOnOrBefore<T>(
   entity: QboEntity,
   asOfDate: string,
-): Promise<{ data: T; asOfDate: string } | null> {
+): Promise<{ data: T; asOfDate: string; fetchedAt: Date } | null> {
   const [row] = await db.select({
     data: qbReportCache.data,
     periodEnd: qbReportCache.periodEnd,
+    fetchedAt: qbReportCache.fetchedAt,
   })
     .from(qbReportCache)
     .where(and(
@@ -79,7 +93,7 @@ export async function readLatestCachedBalanceSheetOnOrBefore<T>(
     ))
     .orderBy(desc(qbReportCache.periodEnd), desc(qbReportCache.fetchedAt))
     .limit(1)
-  return row ? { data: row.data as T, asOfDate: row.periodEnd } : null
+  return row ? { data: row.data as T, asOfDate: row.periodEnd, fetchedAt: row.fetchedAt } : null
 }
 
 /**
