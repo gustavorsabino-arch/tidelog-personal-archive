@@ -54,12 +54,19 @@ async function requestQboTokens(body: URLSearchParams): Promise<QboTokenResponse
   return tokenRes.json() as Promise<QboTokenResponse>
 }
 
-async function requestQboJson<T>(connection: QboConnection, path: string): Promise<Response> {
+async function requestQboJson<T>(
+  connection: QboConnection,
+  path: string,
+  init?: { method?: 'GET' | 'POST'; body?: string },
+): Promise<Response> {
   return fetch(`${QBO_BASE_URL}${path}`, {
+    method: init?.method ?? 'GET',
     headers: {
       Authorization: `Bearer ${connection.accessToken}`,
       Accept: 'application/json',
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
     },
+    body: init?.body,
     cache: 'no-store',
   })
 }
@@ -168,12 +175,16 @@ export async function ensureQboConnection(entity: QboEntity): Promise<QboConnect
   return current
 }
 
-export async function fetchQboJson<T>(entity: QboEntity, path: string): Promise<T> {
+export async function fetchQboJson<T>(
+  entity: QboEntity,
+  path: string,
+  init?: { method?: 'GET' | 'POST'; body?: string },
+): Promise<T> {
   let connection = await ensureQboConnection(entity)
   let response: Response | null = null
 
   for (let attempt = 0; attempt <= QBO_MAX_RETRIES; attempt += 1) {
-    response = await requestQboJson<T>(connection, path)
+    response = await requestQboJson<T>(connection, path, init)
 
     if (response.status === 401 && attempt < QBO_MAX_RETRIES) {
       connection = await refreshQboConnection(entity)

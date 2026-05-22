@@ -13,7 +13,23 @@ import { DataTable } from '@/components/data-table'
 import { CopyButton } from '@/components/copy-button'
 import { EditableCell } from '@/components/editable-cell'
 import { EditableSelectCell, type SelectOption } from '@/components/editable-select-cell'
+import { PostToQbModal } from '@/components/post-to-qb-modal'
+import { QbBulkDrilldownPanel } from '@/components/qb-bulk-drilldown-panel'
+import { useSharedAccess } from '@/lib/access-context'
+import { hasPermission } from '@/lib/auth/permissions'
+import { isQboEntity, type QboEntity } from '@/lib/qb/config'
+import { qbJeUrl, isBulkDocNumber } from '@/lib/qb/links'
 import type { Transaction, TransactionSummary, TransactionsResponse } from '@/lib/types'
+
+// Status filter values map directly to t.qbPostingStatus (with the addition of
+// 'all' for no filter and 'unposted' which also covers null). Keep this in
+// sync with the dropdown options below.
+type QbStatusFilter = '' | 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed'
+
+// Client-side mirror of the server-enforced cap (D13). Disables the post
+// button with a helper note when the user has selected more than this many
+// rows — server-side check at /api/qb/post-batch is the source of truth.
+const MAX_POST_BATCH = 50
 
 type TransactionsPageClientProps = {
   initialEntity: string
@@ -63,6 +79,17 @@ export function TransactionsPageClient({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Wave 2c — bulk-selection state. Holds the `id` of each currently-selected
+  // transaction. We use a Set so toggle/has are O(1) and the column's per-row
+  // render doesn't have to scan an array on every render.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [postModalOpen, setPostModalOpen] = useState(false)
+
+  // qb:post permission gates the post button + the material-edit confirm path.
+  // Pulled from the SSR-seeded AccessProvider, so no client round-trip.
+  const { access } = useSharedAccess()
+  const canPost = hasPermission(access?.role, 'qb:post')
+
   // Server-side filters
   const [tokenFilter, setTokenFilter] = useState('')
   const [dirFilter, setDirFilter] = useState('')
@@ -70,8 +97,25 @@ export function TransactionsPageClient({
   const [yearFilter, setYearFilter] = useState('')
   const [monthFilter, setMonthFilter] = useState('')
   const [walletFilter, setWalletFilter] = useState('')
+  // Wave 2c — client-side QB status filter over already-fetched rows.
+  const [qbStatusFilter, setQbStatusFilter] = useState<QbStatusFilter>('')
   // Client-side search over the current page only
   const [search, setSearch] = useState('')
+
+  // Per-row action state for Re-post / Void hover buttons. Keyed by tx.id so
+  // multiple rows can spin independently. A row with a non-null entry is
+  // currently in-flight.
+  const [rowBusy, setRowBusy] = useState<Record<string, 'repost' | 'void' | undefined>>({})
+  const [rowError, setRowError] = useState<string | null>(null)
+
+  // Drill-down panel for bulk JEs. Holds the post we want to inspect; null = closed.
+  type DrilldownTarget = {
+    postId: string
+    docNumber: string
+    qbJournalEntryId: string | null
+    postingStatus: NonNullable<Transaction['qbPostingStatus']> | null
+  }
+  const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
 
   // Pagination — offset into the server-side sorted result set
   const [offset, setOffset] = useState(0)
@@ -137,6 +181,10 @@ export function TransactionsPageClient({
     if (!atInitialState) hasInteracted.current = true
     if (!hasInteracted.current && atInitialState) return
     setOffset(0)
+    // Selection is tied to the *currently visible* dataset; once filters or
+    // entity change, the selected ids may not even be on the page anymore and
+    // they're certainly not what the user meant to post. Always clear.
+    setSelectedIds(new Set())
     if (entity) fetchTransactions(0)
   }, [entity, initialEntity, tokenFilter, dirFilter, yearFilter, monthFilter, walletFilter, fetchTransactions])
 
@@ -144,8 +192,26 @@ export function TransactionsPageClient({
   // directly avoids the effect-driven double-fetch race entirely.
   const goToOffset = (off: number) => {
     setOffset(off)
+    // Same reasoning as the filter-change effect: leaving stale selections
+    // across page transitions invites posting txs the user can't see.
+    setSelectedIds(new Set())
     fetchTransactions(off)
   }
+
+  // Selection helpers — keep the Set immutable across updates so React re-runs
+  // dependent memos (column render, post-button disabled state) cleanly.
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set())
+  }, [])
 
   // Drop the selected wallet/year/month if they fall out of the available
   // options (entity switch, wallet deletion, etc.). Avoids a stuck filter that
@@ -173,19 +239,197 @@ export function TransactionsPageClient({
     }
   }, [monthFilter, monthsByYear])
 
-  // Client-side search narrows the current page only. All other filters go
-  // through the server and operate across the whole dataset.
-  const filtered = useMemo(() => {
-    if (!search) return transactions
-    const s = search.toLowerCase()
-    return transactions.filter((t) => {
-      if ((t.txHash || '').toLowerCase().includes(s)) return true
-      if ((t.wallet || '').toLowerCase().includes(s)) return true
-      if ((t.walletAddr || '').toLowerCase().includes(s)) return true
-      if ((t.asset || '').toLowerCase().includes(s)) return true
+  // Counts per postId so we can detect bulk JEs even when a docNumber happens
+  // to NOT start with BULK- (defense in depth — D6 says bulk uses BULK- prefix,
+  // but if multiple txs share the same qb_post row that's the authoritative
+  // signal). Built off the raw `transactions` (unfiltered) so a status filter
+  // doesn't accidentally turn a bulk into a singleton.
+  const postIdCount = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const t of transactions) {
+      if (!t.qbPostId) continue
+      m.set(t.qbPostId, (m.get(t.qbPostId) ?? 0) + 1)
+    }
+    return m
+  }, [transactions])
+
+  const isBulkPost = useCallback(
+    (t: Transaction): boolean => {
+      if (isBulkDocNumber(t.qbDocNumber)) return true
+      if (t.qbPostId && (postIdCount.get(t.qbPostId) ?? 0) > 1) return true
       return false
+    },
+    [postIdCount],
+  )
+
+  // Client-side filters narrow the current page only. All server filters
+  // (token / dir / wallet / date) operate across the whole dataset.
+  const filtered = useMemo(() => {
+    return transactions.filter((t) => {
+      if (qbStatusFilter) {
+        // Treat null / undefined as 'unposted' so the filter is consistent
+        // with the column rendering.
+        const status = t.qbPostingStatus ?? 'unposted'
+        if (status !== qbStatusFilter) return false
+      }
+      if (search) {
+        const s = search.toLowerCase()
+        const hit =
+          (t.txHash || '').toLowerCase().includes(s) ||
+          (t.wallet || '').toLowerCase().includes(s) ||
+          (t.walletAddr || '').toLowerCase().includes(s) ||
+          (t.asset || '').toLowerCase().includes(s)
+        if (!hit) return false
+      }
+      return true
     })
-  }, [transactions, search])
+  }, [transactions, search, qbStatusFilter])
+
+  // Per-row Re-post handler. For posted / posted_modified rows: void the
+  // current QB JE then re-post. For voided rows: skip the void (already done)
+  // and just re-post — creates a NEW qb_post row (D14).
+  const handleRepostRow = useCallback(async (t: Transaction) => {
+    if (!t.id || !t.qbPostId) return
+    if (!isQboEntity(t.entity)) {
+      setRowError(`Cannot post: ${t.entity} is not a QuickBooks entity.`)
+      return
+    }
+    const ok = window.confirm(
+      'Re-post this row? The current QuickBooks entry will be voided and a new one created.',
+    )
+    if (!ok) return
+
+    const id = t.id
+    setRowBusy((prev) => ({ ...prev, [id]: 'repost' }))
+    setRowError(null)
+    try {
+      // Skip the void leg when the entry is already voided — calling void on
+      // a voided entry would error or no-op depending on QB's behavior.
+      if (t.qbPostingStatus !== 'voided') {
+        await apiFetch('/api/qb/post-void', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ postId: t.qbPostId }),
+        })
+      }
+      await apiFetch('/api/qb/post-batch', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ entity: t.entity, txIds: [t.id] }),
+      })
+      fetchTransactions(offset)
+    } catch (e: unknown) {
+      setRowError(e instanceof Error ? e.message : 'Re-post failed')
+    } finally {
+      setRowBusy((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+    }
+  }, [fetchTransactions, offset])
+
+  // Per-row Void handler. Confirms first, then POSTs the void endpoint. The
+  // row's qbPostingStatus flips to 'voided' but qb_post.qb_journal_entry_id
+  // is kept so "View in QB" still works (D14).
+  const handleVoidRow = useCallback(async (t: Transaction) => {
+    if (!t.id || !t.qbPostId) return
+    const ok = window.confirm(
+      'Void this QuickBooks entry? It will remain in QB with $0 amounts and a Voided flag. The row in tidelog returns to unposted state but keeps the link to the voided QB entry for audit.',
+    )
+    if (!ok) return
+
+    const id = t.id
+    setRowBusy((prev) => ({ ...prev, [id]: 'void' }))
+    setRowError(null)
+    try {
+      await apiFetch('/api/qb/post-void', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ postId: t.qbPostId }),
+      })
+      fetchTransactions(offset)
+    } catch (e: unknown) {
+      setRowError(e instanceof Error ? e.message : 'Void failed')
+    } finally {
+      setRowBusy((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+    }
+  }, [fetchTransactions, offset])
+
+  // DocNumber click → either open the drill-down panel (bulk) or deep-link
+  // to QB in a new tab (individual).
+  const handleDocNumberClick = useCallback((t: Transaction) => {
+    if (!t.qbPostId || !t.qbDocNumber) return
+    if (isBulkPost(t)) {
+      setDrilldown({
+        postId: t.qbPostId,
+        docNumber: t.qbDocNumber,
+        qbJournalEntryId: t.qbJournalEntryId ?? null,
+        postingStatus: t.qbPostingStatus ?? null,
+      })
+      return
+    }
+    // Individual JE → external link. Fall back to a no-op when we have no
+    // qbJournalEntryId (failed post never populated it).
+    const url = qbJeUrl(t.qbJournalEntryId, isQboEntity(t.entity) ? t.entity : undefined)
+    if (url) window.open(url, '_blank', 'noopener,noreferrer')
+  }, [isBulkPost])
+
+  // Members of the currently-open bulk drill-down. Computed off the page's
+  // transactions; if the bulk has more members than fit on a page the panel
+  // shows what we have plus the "members truncated" note.
+  const drilldownMembers = useMemo(() => {
+    if (!drilldown) return []
+    return transactions.filter((t) => t.qbPostId === drilldown.postId)
+  }, [drilldown, transactions])
+
+  // Ids of visible rows that have a usable id (cron-only rows without id can't
+  // be posted) drive the "select all on this page" header checkbox. Each rule:
+  //   - all visible selected → header is checked
+  //   - some visible selected → header is indeterminate
+  //   - none selected → header is unchecked
+  const visibleSelectableIds = useMemo(
+    () => filtered.map(t => t.id).filter((id): id is string => !!id),
+    [filtered],
+  )
+  const visibleSelectedCount = useMemo(
+    () => visibleSelectableIds.filter(id => selectedIds.has(id)).length,
+    [visibleSelectableIds, selectedIds],
+  )
+  const allVisibleSelected =
+    visibleSelectableIds.length > 0 && visibleSelectedCount === visibleSelectableIds.length
+  const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected
+
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (allVisibleSelected) {
+        // Deselect only the visible rows — preserves any cross-filter selections
+        // (rare, since we clear on filter change, but be defensive).
+        for (const id of visibleSelectableIds) next.delete(id)
+      } else {
+        for (const id of visibleSelectableIds) next.add(id)
+      }
+      return next
+    })
+  }, [allVisibleSelected, visibleSelectableIds])
+
+  // Entity used for posting must be a QboEntity. The page already constrains
+  // `entity` to the ENTITIES constant (which matches QBO_ENTITIES), but the
+  // type is `string` here, so narrow defensively before opening the modal.
+  const postEntity: QboEntity | null = useMemo(
+    () => (isQboEntity(entity) ? entity : null),
+    [entity],
+  )
+
+  // Snapshot the selected ids at modal-open time so the modal works against a
+  // stable list — clearing selection mid-post (e.g. user accidentally clicks a
+  // row) doesn't corrupt the in-flight request.
+  const selectedIdsArray = useMemo(() => Array.from(selectedIds), [selectedIds])
 
   const totalIn = summary.inflowsUSD
   const totalOut = summary.outflowsUSD
@@ -205,6 +449,50 @@ export function TransactionsPageClient({
   }, [monthFilter])
 
   const columns = useMemo(() => {
+    // Selection column lives first so it gets the sticky-first treatment from
+    // DataTable. Header hosts a tri-state "select all on page" checkbox driven
+    // by `someVisibleSelected` / `allVisibleSelected`. Width is intentionally
+    // tight; pointer-cursor invites clicks even outside the box itself.
+    const selectCol = {
+      key: '__select',
+      label: (
+        <input
+          type="checkbox"
+          aria-label="Select all on this page"
+          // Avoid bubbling — the th has a sort onClick handler.
+          onClick={(e) => e.stopPropagation()}
+          ref={(el) => {
+            // `indeterminate` isn't a DOM attribute — must be set via ref.
+            if (el) el.indeterminate = someVisibleSelected
+          }}
+          checked={allVisibleSelected}
+          onChange={toggleSelectAllVisible}
+          disabled={visibleSelectableIds.length === 0}
+          style={{ cursor: visibleSelectableIds.length === 0 ? 'not-allowed' : 'pointer' }}
+        />
+      ),
+      width: '36px',
+      sortable: false,
+      render: (t: Transaction) => {
+        if (!t.id) {
+          // Cron-built rows without an id can't be acted on; render a placeholder
+          // so the column still aligns with the header.
+          return <span style={{ color: 'var(--muted)' }}>—</span>
+        }
+        const id = t.id
+        const checked = selectedIds.has(id)
+        return (
+          <input
+            type="checkbox"
+            aria-label={`Select transaction ${id.slice(0, 8)}`}
+            checked={checked}
+            onChange={() => toggleSelect(id)}
+            onClick={(e) => e.stopPropagation()}
+            style={{ cursor: 'pointer' }}
+          />
+        )
+      },
+    }
     const dateCol = {
       key: 'date', label: 'Date', width: yearFilter ? '140px' : '160px',
       render: (t: Transaction) => {
@@ -327,6 +615,22 @@ export function TransactionsPageClient({
                 console.error('cannot save: transaction has no id', t)
                 return
               }
+              // T11/T9 — material-edit confirm. GL changes on a posted row will
+              // flip the linked qb_post.posting_status to 'posted_modified'
+              // server-side (per T9). Prompt the user before that side effect.
+              // Description edits explicitly DO NOT prompt (two-tier rule D3).
+              if (t.qbPostingStatus === 'posted') {
+                const ok = window.confirm(
+                  'This row is posted to QuickBooks. Changing the Counterparty GL '
+                  + 'will mark the journal entry stale and require re-posting. Continue?',
+                )
+                if (!ok) {
+                  // Throwing here keeps the cell in edit mode so the user can pick
+                  // a different value (or hit Esc/Cancel). Returning silently would
+                  // close the cell with no save, which feels broken.
+                  throw new Error('Save cancelled')
+                }
+              }
               // 1. Save the override — different target depending on whether
               //    there's a counterparty (D5).
               const patchBody = hasCounterparty
@@ -384,6 +688,144 @@ export function TransactionsPageClient({
         )
       },
     }
+    // Wave 2c — QB Status column. Renders the qb_post linkage and exposes
+    // hover actions for Re-post / Void. Click on the DocNumber routes through
+    // handleDocNumberClick to either open the bulk drill-down or deep-link
+    // to QB.
+    const qbStatusCol = {
+      key: 'qbStatus', label: 'QB Status', width: '200px', sortable: false,
+      render: (t: Transaction) => {
+        const status = t.qbPostingStatus ?? null
+        const docNumber = t.qbDocNumber ?? null
+        const busy = t.id ? rowBusy[t.id] : undefined
+
+        // Unposted / null → subtle em-dash so the column doesn't look broken.
+        if (!status || status === 'unposted' || !docNumber) {
+          return <span style={{ color: 'var(--muted)' }}>—</span>
+        }
+
+        const isBulk = isBulkPost(t)
+        const docClickable = !!t.qbPostId && (isBulk || !!t.qbJournalEntryId)
+
+        // Pick the visual treatment per status. Strikethrough lives on the
+        // docNumber span (not the surrounding row) so the action buttons stay
+        // legible.
+        const styleForStatus = (() => {
+          switch (status) {
+            case 'posted':
+              return { color: 'var(--green, #10b981)', icon: '✓', label: '' }
+            case 'posted_modified':
+              return { color: 'var(--warn, #d97706)', icon: '⚠', label: '(modified)' }
+            case 'voided':
+              return { color: 'var(--muted)', icon: '⌀', label: '(voided)', strike: true }
+            case 'failed':
+              return { color: 'var(--red, #dc2626)', icon: '✗', label: '' }
+            default:
+              return { color: 'var(--muted)', icon: '·', label: '' }
+          }
+        })()
+
+        const docEl = (
+          <span style={{
+            fontFamily: 'var(--mono)',
+            fontSize: '0.7rem',
+            fontWeight: 600,
+            textDecoration: styleForStatus.strike ? 'line-through' : 'none',
+          }}>
+            {docNumber}
+          </span>
+        )
+
+        return (
+          <span
+            className="qb-status-cell"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              color: styleForStatus.color,
+              fontSize: '0.7rem',
+              position: 'relative',
+            }}
+          >
+            <span aria-hidden="true">{styleForStatus.icon}</span>
+            {docClickable ? (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); handleDocNumberClick(t) }}
+                title={isBulk ? 'View bulk JE members' : 'Open in QuickBooks'}
+                style={{
+                  background: 'none', border: 'none', padding: 0,
+                  color: 'inherit', cursor: 'pointer',
+                  textDecoration: styleForStatus.strike ? 'line-through' : 'underline',
+                  textUnderlineOffset: 2,
+                  font: 'inherit',
+                }}
+              >
+                {docNumber}
+              </button>
+            ) : (
+              docEl
+            )}
+            {styleForStatus.label && (
+              <span style={{ fontSize: '0.65rem', color: 'var(--muted)' }}>
+                {styleForStatus.label}
+              </span>
+            )}
+
+            {/* Hover actions — Re-post / Void. Rendered for all rows with a post_id;
+                CSS hover toggles visibility (.qb-status-cell:hover .qb-row-actions).
+                Inline style fallback in case the CSS class isn't loaded yet. */}
+            {canPost && t.id && t.qbPostId && (
+              <span
+                className="qb-row-actions"
+                style={{ display: 'inline-flex', gap: 4, marginLeft: 4 }}
+              >
+                {(status === 'posted' || status === 'posted_modified' || status === 'voided') && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleRepostRow(t) }}
+                    disabled={!!busy}
+                    title="Re-post — voids the current QB entry and creates a new one"
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--border)',
+                      borderRadius: 3,
+                      padding: '1px 6px',
+                      fontSize: '0.62rem',
+                      color: 'var(--text)',
+                      cursor: busy ? 'wait' : 'pointer',
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    {busy === 'repost' ? '…' : 'Re-post'}
+                  </button>
+                )}
+                {(status === 'posted' || status === 'posted_modified') && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleVoidRow(t) }}
+                    disabled={!!busy}
+                    title="Void — marks the QB entry as voided ($0) without deleting"
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--border)',
+                      borderRadius: 3,
+                      padding: '1px 6px',
+                      fontSize: '0.62rem',
+                      color: 'var(--text)',
+                      cursor: busy ? 'wait' : 'pointer',
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    {busy === 'void' ? '…' : 'Void'}
+                  </button>
+                )}
+              </span>
+            )}
+          </span>
+        )
+      },
+    }
+
     const descriptionCol = {
       key: 'description', label: 'Description', width: '240px', sortable: false,
       render: (t: Transaction) => (
@@ -423,14 +865,26 @@ export function TransactionsPageClient({
     ]
 
     return [
+      selectCol,
       dateCol, walletCol, counterpartyCol,
-      walletGlCol, counterpartyGlCol,
+      // QB-domain cluster — keep WalletGL/CounterpartyGL/QBStatus adjacent
+      // so the user sees posting status in their natural reading zone without
+      // scrolling past the wide ST/LT/Description columns.
+      walletGlCol, counterpartyGlCol, qbStatusCol,
       dirCol, assetCol, qtyCol, priceCol, usdCol,
       ...orcaCols,
       descriptionCol,
       txHashCol,
     ]
-  }, [yearFilter, monthStartMs, fetchTransactions, offset, glOptions])
+  }, [
+    yearFilter, monthStartMs, fetchTransactions, offset, glOptions,
+    // Selection column re-renders when selection or visible-row state changes.
+    selectedIds, allVisibleSelected, someVisibleSelected, visibleSelectableIds,
+    toggleSelect, toggleSelectAllVisible,
+    // QB status column reacts to per-row busy state, permission, and the
+    // bulk-detection map.
+    canPost, rowBusy, isBulkPost, handleRepostRow, handleVoidRow, handleDocNumberClick,
+  ])
 
   return (
     <div>
@@ -498,6 +952,67 @@ export function TransactionsPageClient({
                   : `${rangeStart.toLocaleString()}–${rangeEnd.toLocaleString()} of ${total.toLocaleString()}`}
               </span>
               <div className="section-filters">
+                {/* Bulk-post button — only rendered when the user has something
+                    selected. Disabled (with helper text) when the selection
+                    exceeds the server-side cap of 50. Also disabled if the user
+                    lacks qb:post; we don't hide it in that case so admins on
+                    the same page can see it's a real feature. */}
+                {selectedIds.size > 0 && (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    {selectedIds.size > MAX_POST_BATCH ? (
+                      <>
+                        <button
+                          className="fsel"
+                          disabled
+                          style={{ opacity: 0.5, cursor: 'not-allowed' }}
+                        >
+                          Post in batches of {MAX_POST_BATCH}
+                        </button>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>
+                          Selection exceeds {MAX_POST_BATCH} — deselect some rows to enable posting.
+                        </span>
+                      </>
+                    ) : (
+                      <button
+                        className="fsel"
+                        disabled={!canPost || !postEntity}
+                        title={!canPost ? 'Your role does not have qb:post permission' : ''}
+                        onClick={() => setPostModalOpen(true)}
+                        style={{
+                          background: canPost && postEntity ? 'var(--accent)' : undefined,
+                          color: canPost && postEntity ? '#fff' : undefined,
+                          borderColor: canPost && postEntity ? 'var(--accent)' : undefined,
+                          cursor: canPost && postEntity ? 'pointer' : 'not-allowed',
+                          opacity: canPost && postEntity ? 1 : 0.5,
+                          fontWeight: 600,
+                        }}
+                      >
+                        Post {selectedIds.size} selected to QB
+                      </button>
+                    )}
+                    <button
+                      className="fsel"
+                      onClick={clearSelection}
+                      style={{ fontSize: '0.7rem' }}
+                      title="Clear selection"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+                <select
+                  className="fsel"
+                  value={qbStatusFilter}
+                  onChange={e => setQbStatusFilter(e.target.value as QbStatusFilter)}
+                  title="Filter by QuickBooks posting status (current page)"
+                >
+                  <option value="">All QB statuses</option>
+                  <option value="unposted">Unposted</option>
+                  <option value="posted">Posted</option>
+                  <option value="posted_modified">Modified</option>
+                  <option value="voided">Voided</option>
+                  <option value="failed">Failed</option>
+                </select>
                 <select className="fsel" value={tokenFilter} onChange={e => setTokenFilter(e.target.value)}>
                   <option value="">All tokens</option>
                   <option value="SOL">SOL</option>
@@ -543,7 +1058,21 @@ export function TransactionsPageClient({
               columns={columns as any}
               defaultSort={{ col: 'date', dir: 'desc' }}
               maxHeight="650px"
-              rowClassName={(row) => (row as unknown as Transaction).internal ? 'tx-row-internal' : undefined}
+              rowClassName={(row) => {
+                const t = row as unknown as Transaction
+                const classes: string[] = []
+                if (t.internal) classes.push('tx-row-internal')
+                // Wave 2c — subtle row tint per posting status so the user can
+                // glance the table and spot posted/modified/voided/failed rows
+                // without having to scan the QB Status column.
+                switch (t.qbPostingStatus) {
+                  case 'posted':          classes.push('tx-row-posted'); break
+                  case 'posted_modified': classes.push('tx-row-modified'); break
+                  case 'voided':          classes.push('tx-row-voided'); break
+                  case 'failed':          classes.push('tx-row-failed'); break
+                }
+                return classes.length ? classes.join(' ') : undefined
+              }}
             />
 
             <div style={{
@@ -574,6 +1103,84 @@ export function TransactionsPageClient({
             </div>
           </div>
         </>
+      )}
+
+      {/* Post-to-QB modal. Mounted lazily — only when a valid entity is selected
+          and the modal is open. Snapshot the selected ids at mount time so a
+          rapid click on the table doesn't change the request payload mid-flight. */}
+      {postEntity && postModalOpen && (
+        <PostToQbModal
+          entity={postEntity}
+          selectedTxIds={selectedIdsArray}
+          open={postModalOpen}
+          onClose={() => setPostModalOpen(false)}
+          onSuccess={() => {
+            // Refresh the table so newly-posted rows show their badges
+            // (T12 surfaces the qbPostingStatus column). Selection is left as
+            // the user explicitly clicks Close — they may want to read the
+            // success/failure summary first.
+            fetchTransactions(offset)
+            clearSelection()
+          }}
+        />
+      )}
+
+      {/* Per-row Re-post/Void error banner. Floats above the table at the
+          bottom-right so it doesn't fight the page header for attention. */}
+      {rowError && (
+        <div
+          role="alert"
+          style={{
+            position: 'fixed', bottom: 16, right: 16, zIndex: 200,
+            padding: '10px 12px',
+            background: 'color-mix(in srgb, var(--red, #dc2626) 12%, var(--surface))',
+            border: '1px solid var(--red, #dc2626)',
+            borderRadius: 6,
+            color: 'var(--text)',
+            fontSize: '0.74rem',
+            maxWidth: 360,
+            display: 'flex', gap: 8, alignItems: 'flex-start',
+          }}
+        >
+          <span style={{ color: 'var(--red, #dc2626)', fontWeight: 600 }}>✗</span>
+          <span style={{ flex: 1, minWidth: 0 }}>{rowError}</span>
+          <button
+            type="button"
+            onClick={() => setRowError(null)}
+            aria-label="Dismiss"
+            style={{
+              background: 'transparent', border: 'none', color: 'var(--muted)',
+              cursor: 'pointer', padding: 0, fontSize: '1rem', lineHeight: 1,
+            }}
+          >×</button>
+        </div>
+      )}
+
+      {/* Bulk-JE drill-down side-panel. Members are filtered from the current
+          page's already-loaded rows — no extra API call (Wave 2c scope). */}
+      {drilldown && postEntity && (
+        <QbBulkDrilldownPanel
+          open={!!drilldown}
+          entity={postEntity}
+          postId={drilldown.postId}
+          docNumber={drilldown.docNumber}
+          qbJournalEntryId={drilldown.qbJournalEntryId}
+          postingStatus={drilldown.postingStatus}
+          members={drilldownMembers}
+          // Heuristic: if the page is full AND the loaded member count equals
+          // the page size, there's a good chance there are more members on
+          // other pages. Conservative — false negatives are fine (we just
+          // don't show the note), false positives are also fine (the note
+          // says "members on this page" which is always true).
+          membersPossiblyTruncated={
+            transactions.length >= pageSize && drilldownMembers.length === transactions.length
+          }
+          canPost={canPost}
+          onClose={() => setDrilldown(null)}
+          onMutated={() => {
+            fetchTransactions(offset)
+          }}
+        />
       )}
     </div>
   )

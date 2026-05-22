@@ -1,0 +1,40 @@
+export interface Transaction {
+  txHash: string
+  walletAddr: string
+  wallet: string
+  entity: string
+  blockTime: number
+  date: string
+  asset: string
+  qty: number
+  dir: 'In' | 'Out'
+  price: number | null
+  usd: number | null
+  priceSource: string | null
+  counterparty: string | null
+  category: string | null
+  // ---- enrichment (populated server-side via JOINs; undefined when the producer didn't compute them,
+  //      null when joined but no match). Marked optional (`?`) so existing producers like
+  //      lib/cron/fetch-transactions.ts:27 (moveToTx) and inline test fixtures keep compiling without edits.
+  counterpartyLabel?: string | null
+  stGain?: number | null
+  ltGain?: number | null
+  realizedTerm?: 'ST' | 'LT' | 'mixed' | null
+  internal?: boolean | null
+  internalPairedWalletAddr?: string | null
+  noBasis?: boolean | null
+  lots?: LotTraceEntry[] | null
+  // Wave 2 — populated by the server's tx_qb_state JOIN. id is optional because
+  // the cron's moveToTx (lib/cron/fetch-transactions.ts:27) constructs Transaction
+  // objects without it; in practice every row that flows through getTreasuryTransactions
+  // has id populated from the DB row.
+  id?: string
+  description?: string | null      // user-saved override; null = use descriptionDefault
+  descriptionDefault?: string      // computed via defaultDescription(); server populates
+  // Wave 2b — GL accounts surfaced from joins:
+  walletGlAccount?: string | null       // wallet.accountCode (read-only display)
+  counterpartyGlAccount?: string | null // counterparty_gl_map.gl_account_number
+  glAccountOverride?: string | null     // tx_qb_state.gl_account_override
+  counterpartyGlOverride?: string | null// tx_qb_state.counterparty_gl_override
+}
+

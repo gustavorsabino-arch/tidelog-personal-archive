@@ -42,3 +42,50 @@ export type QboOAuthStatePayload = {
   ts: number
   email?: string
 }
+
+// ── QuickBooks Online API v3 — typed responses & journal entry payloads ──────
+
+export type QbVendor = {
+  Id: string
+  DisplayName: string
+}
+
+export type QbJournalEntryLineDetail = {
+  PostingType: 'Debit' | 'Credit'
+  AccountRef: { value: string; name?: string }
+  Entity?: { Type: 'Vendor'; EntityRef: { value: string } }
+  ClassRef?: { value: string; name?: string }
+}
+
+export type QbJournalEntryLine = {
+  Id?: string
+  DetailType: 'JournalEntryLineDetail'
+  Amount: number
+  Description?: string
+  JournalEntryLineDetail: QbJournalEntryLineDetail
+}
+
+export type QbJournalEntry = {
+  Id?: string
+  DocNumber: string
+  TxnDate: string // YYYY-MM-DD
+  PrivateNote: string // idempotency UUID — D11
+  Line: QbJournalEntryLine[]
+}
+
+// Generic wrapper around `SELECT … FROM <Entity>` query responses.
+// Caller specifies the entity key (e.g. `Vendor`, `JournalEntry`) and row type.
+export type QbQueryResponse<K extends string, T> = {
+  QueryResponse?: Partial<Record<K, T[]>> & {
+    startPosition?: number
+    maxResults?: number
+    totalCount?: number
+  }
+  time?: string
+}
+
+// Response wrapper for create/update JE POSTs.
+export type QbJournalEntryResponse = {
+  JournalEntry: QbJournalEntry & { Id: string; SyncToken?: string }
+  time?: string
+}

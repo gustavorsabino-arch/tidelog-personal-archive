@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { db } from '@/lib/db'
-import { transaction, txQbState } from '@/lib/db/schema'
+import { transaction, txQbState, qbPost } from '@/lib/db/schema'
 import { logAudit } from '@/lib/audit'
 
 // PATCH /api/treasury/transactions/[id]/qb-state
@@ -108,6 +108,61 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     resourceId: id,
     metadata: { fields: parsed.filter(p => p.provided).map(p => p.key) },
   }).catch(() => { /* swallow */ })
+
+  // Two-tier dirty marker (D3): material edits on a posted row flip status
+  // to 'posted_modified'; description-only edits on a posted row are
+  // silent (audit-only). Rows not yet linked to a qb_post (postId null)
+  // are completely unaffected — the original PATCH semantics are preserved.
+  const editedFields = parsed.filter(p => p.provided).map(p => p.key)
+  const isMaterialEdit = editedFields.some(
+    f => f === 'glAccountOverride' || f === 'counterpartyGlOverride',
+  )
+  const isDescriptionOnly = editedFields.length > 0 && !isMaterialEdit
+
+  if (isMaterialEdit || isDescriptionOnly) {
+    const [row] = await db
+      .select({ postId: txQbState.postId, postingStatus: qbPost.postingStatus })
+      .from(txQbState)
+      .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
+      .where(
+        and(
+          eq(txQbState.txHash, t.txHash),
+          eq(txQbState.walletAddress, t.walletAddress),
+          eq(txQbState.direction, t.direction),
+          eq(txQbState.asset, t.asset),
+        ),
+      )
+      .limit(1)
+
+    if (row?.postId && row.postingStatus === 'posted') {
+      if (isMaterialEdit) {
+        // Idempotent: the postingStatus = 'posted' guard means a row already
+        // in 'posted_modified' (or any non-posted state) is left untouched.
+        await db
+          .update(qbPost)
+          .set({ postingStatus: 'posted_modified' })
+          .where(and(eq(qbPost.id, row.postId), eq(qbPost.postingStatus, 'posted')))
+
+        logAudit({
+          userId: updatedBy,
+          action: 'qb_post.marked_modified',
+          resourceType: 'qb_post',
+          resourceId: row.postId,
+          metadata: { editedFields, txId: id },
+        }).catch(() => { /* swallow */ })
+      } else {
+        // description-only — silent (no status flip), audit only
+        const descField = parsed.find(p => p.key === 'description')
+        logAudit({
+          userId: updatedBy,
+          action: 'qb_post.description_edited',
+          resourceType: 'qb_post',
+          resourceId: row.postId,
+          metadata: { txId: id, newDescription: descField?.value ?? null },
+        }).catch(() => { /* swallow */ })
+      }
+    }
+  }
 
   return NextResponse.json({ ok: true })
 }
