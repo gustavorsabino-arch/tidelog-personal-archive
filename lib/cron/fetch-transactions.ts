@@ -272,6 +272,12 @@ async function processWallet(
   let completedNaturally = true
 
   for (const source of sources) {
+    // `beforeSig` only applies to the owner source — ATA sources have separate signature
+    // universes on Helius, so an owner-cursor sig isn't a valid `before` cursor for them.
+    // Consequence: ATA sources walk from the tip on every backfill, re-fetching their full
+    // history each time (DB UPSERT skips dupes). For wallets with large ATA histories this
+    // is wasteful. A per-source progress table would fix it — see
+    // backlog/backfill-progress-tracking.md on worktree-backlog.
     let before: string | undefined = (opts.full && opts.beforeSig && source.kind === 'owner') ? opts.beforeSig : undefined
     let pagesWalked = 0
     for (let page = 0; page < pageCap; page++) {

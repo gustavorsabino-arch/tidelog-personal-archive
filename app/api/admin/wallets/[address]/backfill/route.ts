@@ -55,8 +55,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ address
   try {
     result = await fetchTransactionsJob({ full: true, walletAddr: address, beforeSig })
   } catch (err) {
-    console.error(`[admin-wallets][BACKFILL] job failed message=${(err as Error).message}`)
-    return NextResponse.json({ ok: false, error: (err as Error).message, code: 'admin.backfill_failed' }, { status: 500 })
+    const errMsg = (err as Error).message
+    console.error(`[admin-wallets][BACKFILL] job failed message=${errMsg}`)
+    // Audit the failure so the trail isn't an orphaned 'triggered' with no outcome.
+    await logAudit({
+      userId: user.id === 'dev-user' ? null : user.id,
+      action: 'wallet.backfill.failed',
+      resourceType: 'wallet',
+      resourceId: address,
+      metadata: { mode, beforeSig: beforeSig ?? null, error: errMsg, byEmail: user.email },
+    })
+    return NextResponse.json({ ok: false, error: errMsg, code: 'admin.backfill_failed' }, { status: 500 })
   }
 
   const elapsedMs = Date.now() - startedAt

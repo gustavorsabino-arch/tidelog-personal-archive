@@ -100,8 +100,17 @@ export async function POST(req: Request) {
     try {
       backfillResult = await fetchTransactionsJob({ full: true, walletAddr: address })
     } catch (err) {
-      console.error(`[admin-wallets][POST] backfill failed message=${(err as Error).message}`)
-      backfillResult = { ok: false, error: (err as Error).message }
+      const errMsg = (err as Error).message
+      console.error(`[admin-wallets][POST] backfill failed message=${errMsg}`)
+      // Audit the failure so the trail isn't an orphaned 'triggered' with no outcome.
+      await logAudit({
+        userId: user.id === 'dev-user' ? null : user.id,
+        action: 'wallet.backfill.failed',
+        resourceType: 'wallet',
+        resourceId: address,
+        metadata: { mode: 'full', beforeSig: null, error: errMsg, byEmail: user.email },
+      })
+      backfillResult = { ok: false, error: errMsg }
     }
   } else {
     const reason = input.chain !== 'SOL' ? 'not-sol' : (input.isExternal ? 'external' : 'opt-out')

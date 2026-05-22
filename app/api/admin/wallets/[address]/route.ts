@@ -30,9 +30,16 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ addre
   let txCount = 0
   let snapCount = 0
   try {
-    txCount = (await db.delete(transaction).where(eq(transaction.walletAddress, address)).returning({ txHash: transaction.txHash })).length
-    snapCount = (await db.delete(balanceSnapshot).where(eq(balanceSnapshot.walletAddress, address)).returning({ date: balanceSnapshot.date })).length
-    await db.delete(wallet).where(eq(wallet.address, address))
+    // Atomic cascade: if the wallet delete fails after txs/snapshots are gone,
+    // the transaction rolls back so we don't leave orphaned data.
+    const counts = await db.transaction(async (tx) => {
+      const txs = await tx.delete(transaction).where(eq(transaction.walletAddress, address)).returning({ txHash: transaction.txHash })
+      const snaps = await tx.delete(balanceSnapshot).where(eq(balanceSnapshot.walletAddress, address)).returning({ date: balanceSnapshot.date })
+      await tx.delete(wallet).where(eq(wallet.address, address))
+      return { txCount: txs.length, snapCount: snaps.length }
+    })
+    txCount = counts.txCount
+    snapCount = counts.snapCount
   } catch (err) {
     console.error(`[admin-wallets][DELETE] cascade failed message=${(err as Error).message}`)
     return NextResponse.json({ ok: false, error: (err as Error).message, code: 'admin.delete_failed' }, { status: 500 })
