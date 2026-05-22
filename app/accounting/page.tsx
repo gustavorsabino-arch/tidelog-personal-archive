@@ -90,14 +90,6 @@ export default function AccountingPage() {
   const glTotal = data?.bs?.totals.assets ?? 0
   const onchainTotal = data?.onchain?.totalUsd ?? 0
   const hasOnchain = (data?.onchain?.byToken?.length ?? 0) > 0
-  const diff = onchainTotal - glTotal
-  const diffColor = !hasOnchain
-    ? 'var(--muted)'
-    : Math.abs(diff) < 1
-    ? 'var(--green)'
-    : diff > 0
-    ? 'var(--green)'
-    : 'var(--red)'
 
   const rows = useMemo(() => data?.bs?.sections ?? [], [data])
 
@@ -153,8 +145,8 @@ export default function AccountingPage() {
       </div>
 
       {loading && !data ? (
-        <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-          {[0, 1, 2].map((i) => (
+        <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+          {[0, 1].map((i) => (
             <div key={i} className="card">
               <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
               <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
@@ -163,7 +155,7 @@ export default function AccountingPage() {
           ))}
         </div>
       ) : (
-      <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+      <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
         <div className="card">
           <div className="card-label">GL Total (Assets)</div>
           <div className="card-value">{fmtUSD(glTotal, 0)}</div>
@@ -184,25 +176,6 @@ export default function AccountingPage() {
             {hasOnchain
               ? `${data?.onchain?.walletCount ?? 0} wallets · snapshot ${data?.onchain?.snapshotDate ?? '—'}`
               : 'Run fetch-balances cron'}
-          </div>
-        </div>
-        <div className="card">
-          <div className="card-label">Difference</div>
-          <div className="card-value" style={{ color: diffColor }}>
-            {hasOnchain && data?.bs
-              ? Math.abs(diff) < 1
-                ? '✓ Match'
-                : `${diff > 0 ? '+' : ''}${fmtUSD(diff, 0)}`
-              : '—'}
-          </div>
-          <div className="card-sub">
-            {!data?.bs
-              ? 'Needs QB connection'
-              : !hasOnchain
-              ? 'Needs on-chain snapshot'
-              : Math.abs(diff) < 1
-              ? 'Fully reconciled'
-              : 'Needs investigation'}
           </div>
         </div>
       </div>
