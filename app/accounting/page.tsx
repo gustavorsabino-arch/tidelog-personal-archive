@@ -42,7 +42,7 @@ function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) 
   if (node.kind === 'account') {
     return (
       <tr>
-        <td style={{ paddingTop: 6, paddingRight: 10, paddingBottom: 6, paddingLeft: depth * 16 + 10 }}>
+        <td style={{ paddingTop: 6, paddingRight: 10, paddingBottom: 6, paddingLeft: depth * 16 + 10, wordBreak: 'break-word' }}>
           {node.glCode ? (
             <span style={{
               fontFamily: 'var(--mono)', fontSize: '0.7rem', background: 'var(--surface2)',
@@ -51,7 +51,7 @@ function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) 
           ) : null}
           <span>{node.glCode ? node.label.replace(/^\d{4,}\s*·?\s*/, '') : node.label}</span>
         </td>
-        <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtUSD(node.amount)}</td>
+        <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}>{fmtUSD(node.amount)}</td>
       </tr>
     )
   }
@@ -59,14 +59,20 @@ function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) 
   return (
     <>
       <tr>
-        <td colSpan={2} style={{
+        <td style={{
           paddingTop: 8, paddingRight: 10, paddingBottom: 8, paddingLeft: depth * 16 + 10,
           fontWeight: 600, fontSize: '0.85rem',
           borderTop: '1px solid var(--border)',
+          wordBreak: 'break-word',
         }}>
           {node.title}
-          <span style={{ float: 'right', fontFamily: 'var(--mono)' }}>{fmtUSD(node.total)}</span>
         </td>
+        <td style={{
+          paddingTop: 8, paddingRight: 10, paddingBottom: 8,
+          fontWeight: 600, fontSize: '0.85rem',
+          textAlign: 'right', fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
+          borderTop: '1px solid var(--border)',
+        }}>{fmtUSD(node.total)}</td>
       </tr>
       {node.children.map((child, i) => (
         <BsRow key={i} node={child} depth={depth + 1} />
@@ -145,7 +151,7 @@ export default function AccountingPage() {
       </div>
 
       {loading && !data ? (
-        <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+        <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
           {[0, 1].map((i) => (
             <div key={i} className="card">
               <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
@@ -155,7 +161,7 @@ export default function AccountingPage() {
           ))}
         </div>
       ) : (
-      <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+      <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
         <div className="card">
           <div className="card-label">GL Total (Assets)</div>
           <div className="card-value">{fmtUSD(glTotal, 0)}</div>
@@ -198,7 +204,7 @@ export default function AccountingPage() {
         </div>
       ) : null}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, marginTop: 16 }}>
         {/* On-chain per-token */}
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: '0.85rem', fontWeight: 600 }}>
@@ -268,24 +274,36 @@ export default function AccountingPage() {
             QuickBooks General Ledger
           </div>
           {loading && !data ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-              <tbody>
-                {[0, 1, 2, 3, 4].map((i) => (
-                  <tr key={i}>
-                    <td style={{ padding: '6px 10px' }}><Skeleton width={160} height={12} /></td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={90} height={12} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 320, borderCollapse: 'collapse', fontSize: '0.8rem', tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col />
+                  <col style={{ width: 140 }} />
+                </colgroup>
+                <tbody>
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <tr key={i}>
+                      <td style={{ padding: '6px 10px' }}><Skeleton width={160} height={12} /></td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={90} height={12} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : data?.bs && rows.length > 0 ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-              <tbody>
-                {rows.map((section, i) => (
-                  <BsRow key={i} node={section} depth={0} />
-                ))}
-              </tbody>
-            </table>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 320, borderCollapse: 'collapse', fontSize: '0.8rem', tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col />
+                  <col style={{ width: 140 }} />
+                </colgroup>
+                <tbody>
+                  {rows.map((section, i) => (
+                    <BsRow key={i} node={section} depth={0} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <div className="empty" style={{ padding: 24 }}>
               <div style={{ fontSize: '0.75rem' }}>
