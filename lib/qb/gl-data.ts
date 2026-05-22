@@ -7,8 +7,12 @@ import {
   parseQboGeneralLedgerRows,
   type ParsedQboGeneralLedgerRow,
 } from '@/lib/budget/qb-general-ledger'
-import { readCachedGeneralLedgerForAccount } from '@/lib/qb/cache-reads'
+import {
+  readCachedAccountCatalogByNumber,
+  readCachedGeneralLedgerForAccount,
+} from '@/lib/qb/cache-reads'
 import { QBO_ENTITIES, type QboEntity } from '@/lib/qb/config'
+import { enrichGlRowsWithClass } from '@/lib/qb/gl-class-enrich'
 import {
   combineGlResults,
   GlNotCachedError,
@@ -36,14 +40,27 @@ async function loadEntity(
   periodStart: string,
   periodEnd: string,
 ): Promise<ParsedQboGeneralLedgerRow[]> {
-  const reports = await readCachedGeneralLedgerForAccount<QboGeneralLedgerReport>(
-    entity, accountNumber, periodStart, periodEnd,
-  )
+  // Fetch GL + account catalog in parallel — the catalog gives us the QB
+  // internal account id, which is the key we use to match payload lines
+  // (AccountRef.value) when enriching className from qb_transaction_cache.
+  const [reports, catalog] = await Promise.all([
+    readCachedGeneralLedgerForAccount<QboGeneralLedgerReport>(
+      entity, accountNumber, periodStart, periodEnd,
+    ),
+    readCachedAccountCatalogByNumber(entity),
+  ])
   if (reports.length === 0) {
     throw new GlNotCachedError(entity, accountNumber)
   }
   const merged = mergeGeneralLedgerReports(reports)
-  return parseQboGeneralLedgerRows(merged)
+  const rows = parseQboGeneralLedgerRows(merged)
+
+  // Catalog miss is the legitimate "skip enrichment" path — no qbAccountId
+  // means we can't safely match payload lines by id, so return raw rows.
+  // Same behavior as pre-fix; drawer just won't show the class column.
+  const qbAccountId = catalog.get(accountNumber)?.qbAccountId
+  if (!qbAccountId) return rows
+  return enrichGlRowsWithClass(rows, entity, qbAccountId)
 }
 
 export async function getGlForAccount(

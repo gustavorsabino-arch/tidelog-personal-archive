@@ -593,23 +593,47 @@ export async function fetchQbReportsJob(
     // Build specs after the catalog refresh so GL specs can resolve account
     // numbers → QB internal IDs from the freshly-populated qb_account_catalog.
     const specs = await buildSpecsForEntity(entityId, now)
-    console.log(`[qb-reports] ${entityId}: ${specs.length} specs to process`)
 
-    for (const spec of specs) {
+    // Level 1: batch-load every cached row for this entity into an in-memory
+    // Map. Replaces the previous per-spec query (one DB roundtrip per spec)
+    // with a single bulk query. With ~13K specs per entity, this collapses
+    // ~13K queries into 1. Reuses the existing `cacheKey` helper so the
+    // ordering of filterParams keys doesn't cause false misses.
+    const cachedRows = await db.select().from(qbReportCache).where(
+      eq(qbReportCache.entityId, entityId),
+    )
+    type CachedRow = (typeof cachedRows)[number]
+    const cacheMap = new Map<string, CachedRow>(
+      cachedRows.map((row) => [
+        cacheKey(row.reportType, row.periodStart, row.periodEnd, row.filterParams),
+        row,
+      ]),
+    )
+
+    // Level 2: skip enumeration of closed-month specs that are already cached.
+    // Current-month and moving-window specs always pass through (they may be
+    // stale). Force-range specs always pass through (force re-fetches them).
+    // Missing closed-month specs (e.g., new accounts, post-partial-crash
+    // recovery) also pass through and get processed normally.
+    const filteredSpecs = specs.filter((spec) => {
+      if (!spec.isClosed) return true
+      if (forceFromDate !== null && spec.periodStart >= forceFromDate) return true
+      return !cacheMap.has(cacheKey(spec.reportType, spec.periodStart, spec.periodEnd, spec.filterParams))
+    })
+
+    console.log(
+      `[qb-reports] ${entityId}: ${specs.length} specs total, ${filteredSpecs.length} to process`
+      + ` (${specs.length - filteredSpecs.length} closed+cached skipped)`,
+    )
+
+    for (const spec of filteredSpecs) {
       await abortCheck()
       const inForceRange = forceFromDate !== null && spec.periodStart >= forceFromDate
 
-      // Load every row for this (entity, type, period) — many may exist with
-      // different filter_params (one per mapped account for GL). We then
-      // pick the match with equal filter_params below.
-      const existing = await db.select().from(qbReportCache).where(and(
-        eq(qbReportCache.entityId, entityId),
-        eq(qbReportCache.reportType, spec.reportType),
-        eq(qbReportCache.periodStart, spec.periodStart),
-        eq(qbReportCache.periodEnd, spec.periodEnd),
-      ))
-
-      const existingMatch = existing.find((row) => JSON.stringify(row.filterParams) === JSON.stringify(spec.filterParams))
+      // In-memory cache lookup — replaces the per-spec DB query.
+      const existingMatch = cacheMap.get(
+        cacheKey(spec.reportType, spec.periodStart, spec.periodEnd, spec.filterParams),
+      )
 
       let data: unknown | null = null
       let shouldFetch = false

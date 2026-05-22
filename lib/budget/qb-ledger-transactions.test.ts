@@ -3,7 +3,23 @@ import test from 'node:test'
 
 import { loadBudgetActualLedgerTransactions } from './qb-ledger-transactions.ts'
 
+// Standard 8-column GL response shape. The metadata-driven parser identifies
+// fields by ColKey, so every test fixture must declare Columns. Rows shorter
+// than 8 ColData entries simply return undefined for the trailing columns —
+// which is what these fixtures rely on to trigger the payload-fallback path.
+const STANDARD_GL_COLUMNS = [
+  { ColTitle: 'Date', MetaData: [{ Name: 'ColKey', Value: 'tx_date' }] },
+  { ColTitle: 'Transaction Type', MetaData: [{ Name: 'ColKey', Value: 'txn_type' }] },
+  { ColTitle: 'Num', MetaData: [{ Name: 'ColKey', Value: 'doc_num' }] },
+  { ColTitle: 'Name', MetaData: [{ Name: 'ColKey', Value: 'name' }] },
+  { ColTitle: 'Class', MetaData: [{ Name: 'ColKey', Value: 'klass_name' }] },
+  { ColTitle: 'Memo/Description', MetaData: [{ Name: 'ColKey', Value: 'memo' }] },
+  { ColTitle: 'Amount', MetaData: [{ Name: 'ColKey', Value: 'subt_nat_amount' }] },
+  { ColTitle: 'Balance', MetaData: [{ Name: 'ColKey', Value: 'rbal_nat_amount' }] },
+]
+
 const BROKEN_GL_REPORT = {
+  Columns: { Column: STANDARD_GL_COLUMNS },
   Rows: {
     Row: [
       {
@@ -22,6 +38,7 @@ const BROKEN_GL_REPORT = {
 }
 
 const PARTIAL_GL_REPORT = {
+  Columns: { Column: STANDARD_GL_COLUMNS },
   Rows: {
     Row: [
       {
@@ -53,6 +70,7 @@ const PARTIAL_GL_REPORT = {
 }
 
 const SAME_TXN_PARTIAL_GL_REPORT = {
+  Columns: { Column: STANDARD_GL_COLUMNS },
   Rows: {
     Row: [
       {

@@ -240,22 +240,6 @@ const REPORT_PATHS: Record<QbReportType, string> = {
  * Fetch a QuickBooks report for the given entity + parameters.
  * Returns the raw QB response JSON; cron upserts this into qb_report_cache.
  */
-// Use home-currency columns (subt_amount / rbal_amount), not native-currency
-// (subt_nat_amount / rbal_nat_amount). The `_nat_` variants are only populated
-// for multi-currency-enabled realms; QB silently drops them for single-currency
-// realms, leaving the response without an amount column. The non-`_nat_`
-// variants are populated for every realm.
-const GL_REQUIRED_COLUMNS = [
-  'tx_date',
-  'txn_type',
-  'doc_num',
-  'name',
-  'klass_name',
-  'memo',
-  'subt_amount',
-  'rbal_amount',
-].join(',')
-
 export async function qbFetchReport(
   entity: QboEntity,
   reportType: QbReportType,
@@ -266,11 +250,15 @@ export async function qbFetchReport(
     accounting_method: 'Accrual',
     minorversion: '65',
   }
-  // GL parser assumes a specific column layout; enforce it unless the caller
-  // overrides explicitly.
-  if (reportType === 'general_ledger') {
-    defaults.columns = GL_REQUIRED_COLUMNS
-  }
+  // We intentionally do NOT pass a `columns` parameter for GL. QB's `columns=`
+  // query uses a different vocabulary than the response metadata: column
+  // names that appear in QB's own response `Columns` array (e.g.
+  // `subt_nat_home_amount`) are silently dropped when sent as a request,
+  // because the request-side accepts different keywords we couldn't
+  // empirically determine. Letting QB return its default column set works
+  // for every realm, and the parser (`lib/budget/qb-general-ledger.ts`)
+  // identifies fields by the response-side `ColKey` metadata rather than by
+  // position, so it handles whatever QB chooses to return.
   // Strip our internal `accountNumber` helper from the request — it's a cache
   // key, not a QB param, and QB ignores unknown params but it's noisy.
   const { accountNumber: _unused, ...qbParams } = params as { accountNumber?: string }

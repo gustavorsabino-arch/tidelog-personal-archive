@@ -1077,6 +1077,7 @@ export default function BudgetPage() {
         ) : (
           <BudgetReportTable
             report={overviewReport}
+            loadingActuals={activeActualsLoading && !activeActualsLoaded}
             onBudgetCellClick={openBudgetBreakdown}
             onActualCellClick={(row, column) => void openActualDrill(row, column, overviewReport)}
             onRevenueRowClick={() => void openRevenueMonthlyModal()}

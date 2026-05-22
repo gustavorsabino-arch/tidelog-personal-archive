@@ -10,7 +10,43 @@ import {
   summarizeBudgetActualDrillAccounts,
 } from './actual-drill-model.ts'
 
+// Standard 8-column GL response shape used by most QB realms. The parser
+// identifies fields by ColKey metadata, so every test fixture needs this
+// (or its variant) — without it the parser returns zero rows.
+const STANDARD_GL_COLUMNS = [
+  { ColTitle: 'Date', MetaData: [{ Name: 'ColKey', Value: 'tx_date' }] },
+  { ColTitle: 'Transaction Type', MetaData: [{ Name: 'ColKey', Value: 'txn_type' }] },
+  { ColTitle: 'Num', MetaData: [{ Name: 'ColKey', Value: 'doc_num' }] },
+  { ColTitle: 'Name', MetaData: [{ Name: 'ColKey', Value: 'name' }] },
+  { ColTitle: 'Class', MetaData: [{ Name: 'ColKey', Value: 'klass_name' }] },
+  { ColTitle: 'Memo/Description', MetaData: [{ Name: 'ColKey', Value: 'memo' }] },
+  { ColTitle: 'Amount', MetaData: [{ Name: 'ColKey', Value: 'subt_nat_amount' }] },
+  { ColTitle: 'Balance', MetaData: [{ Name: 'ColKey', Value: 'rbal_nat_amount' }] },
+]
+
+const NINE_COLUMN_GL_COLUMNS = [
+  { ColTitle: 'Date', MetaData: [{ Name: 'ColKey', Value: 'tx_date' }] },
+  { ColTitle: 'Transaction Type', MetaData: [{ Name: 'ColKey', Value: 'txn_type' }] },
+  { ColTitle: 'Num', MetaData: [{ Name: 'ColKey', Value: 'doc_num' }] },
+  { ColTitle: 'Name', MetaData: [{ Name: 'ColKey', Value: 'name' }] },
+  { ColTitle: 'Class', MetaData: [{ Name: 'ColKey', Value: 'klass_name' }] },
+  { ColTitle: 'Memo/Description', MetaData: [{ Name: 'ColKey', Value: 'memo' }] },
+  { ColTitle: 'Split', MetaData: [{ Name: 'ColKey', Value: 'split_acc' }] },
+  { ColTitle: 'Amount', MetaData: [{ Name: 'ColKey', Value: 'subt_nat_amount' }] },
+  { ColTitle: 'Balance', MetaData: [{ Name: 'ColKey', Value: 'rbal_nat_amount' }] },
+]
+
+const SHORT_GL_COLUMNS = [
+  { ColTitle: 'Date', MetaData: [{ Name: 'ColKey', Value: 'tx_date' }] },
+  { ColTitle: 'Transaction Type', MetaData: [{ Name: 'ColKey', Value: 'txn_type' }] },
+  { ColTitle: 'Num', MetaData: [{ Name: 'ColKey', Value: 'doc_num' }] },
+  { ColTitle: 'Name', MetaData: [{ Name: 'ColKey', Value: 'name' }] },
+  { ColTitle: 'Class', MetaData: [{ Name: 'ColKey', Value: 'klass_name' }] },
+  { ColTitle: 'Amount', MetaData: [{ Name: 'ColKey', Value: 'subt_nat_amount' }] },
+]
+
 const SAMPLE_REPORT = {
+  Columns: { Column: STANDARD_GL_COLUMNS },
   Rows: {
     Row: [
       {
@@ -51,6 +87,7 @@ const SAMPLE_REPORT = {
 }
 
 const NINE_COLUMN_REPORT = {
+  Columns: { Column: NINE_COLUMN_GL_COLUMNS },
   Rows: {
     Row: [
       {
@@ -72,6 +109,7 @@ const NINE_COLUMN_REPORT = {
 }
 
 const SHORT_ROW_REPORT = {
+  Columns: { Column: SHORT_GL_COLUMNS },
   Rows: {
     Row: [
       {
@@ -138,6 +176,7 @@ test('parses short GL rows when the amount is the last available column', () => 
 
 test('skips zero-amount GL rows in drill output', () => {
   const report = {
+    Columns: { Column: STANDARD_GL_COLUMNS },
     Rows: {
       Row: [
         {
@@ -427,6 +466,7 @@ test('parses distinct participant names for multiple Rippling lines from the sam
 
 test('prefers participant names parsed from Rippling descriptions for direct GL rows too', () => {
   const report = {
+    Columns: { Column: STANDARD_GL_COLUMNS },
     Rows: {
       Row: [
         {

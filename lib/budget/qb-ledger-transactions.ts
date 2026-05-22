@@ -1,11 +1,13 @@
+import type { CachedTransactionPayload } from '../qb/cache-reads.ts'
 import { getQboRealmId, type QboEntity } from '../qb/config.ts'
+import { enrichGlRowsWithClass } from '../qb/gl-class-enrich.ts'
 
 import {
+  buildBudgetActualDrillTransactionsFromLedgerRows,
   buildBudgetActualDrillTransactionsFromTransactionPayloads,
-  parseBudgetActualDrillTransactions,
 } from './actual-drill-model.ts'
 import type { QboGeneralLedgerReport } from './actuals.ts'
-import { parseQboGeneralLedgerRows } from './qb-general-ledger.ts'
+import { parseQboGeneralLedgerRows, type ParsedQboGeneralLedgerRow } from './qb-general-ledger.ts'
 import {
   fetchBudgetQboTransactionPayloadRecords,
   type BudgetQboTransactionPayloadCache,
@@ -23,6 +25,15 @@ type LoadBudgetActualLedgerTransactionsOptions = {
   // Required so no code path here can trigger a live QuickBooks call. Wire in
   // a cache-backed fetcher (see lib/qb/cache-reads.ts#buildCachedTransactionPayloadFetcher).
   fetchTransactionPayload: (entity: QboEntity, path: string) => Promise<any>
+  // Optional preloaded transaction payload map keyed by txnId. When provided,
+  // class enrichment uses it directly instead of issuing a fresh DB query per
+  // account-task. Critical for performance on department-actuals fan-out:
+  // see lib/budget/qb-department-actuals.ts which preloads once per entity.
+  preloadedPayloadMap?: ReadonlyMap<string, CachedTransactionPayload>
+  // Optional already-parsed rows for `report`. When the caller has already
+  // parsed (e.g. department-actuals does so once to collect txnIds for the
+  // payload preload), passing them here avoids parsing the same JSON twice.
+  preParsedRows?: readonly ParsedQboGeneralLedgerRow[]
 }
 
 export type BudgetActualLedgerTransactionsResult = {
@@ -69,8 +80,26 @@ export async function loadBudgetActualLedgerTransactions(
   options: LoadBudgetActualLedgerTransactionsOptions,
 ): Promise<BudgetActualLedgerTransactionsResult> {
   const realmId = getQboRealmId(options.entity)
-  const parsedRows = parseQboGeneralLedgerRows(options.report)
-  const directTransactions = parseBudgetActualDrillTransactions(options.report, {
+  // Reuse pre-parsed rows when the caller has them. Otherwise parse here.
+  // (Department-actuals parses once to collect txnIds for the payload
+  // preload; without this hint we'd parse the same JSON twice.)
+  const parsedRows = options.preParsedRows ?? parseQboGeneralLedgerRows(options.report)
+
+  // Enrich the parsed rows with class data from cached transaction payloads
+  // before building drill transactions. QB's default GL response doesn't
+  // include klass_name, so without this every row's `className` is null,
+  // which collapses every dollar into the unclassified bucket and leaves
+  // department views blank.
+  //
+  // Fail-open: a cache read failure (e.g. running in a test without a DB)
+  // returns the parsed rows unchanged, preserving today's behavior.
+  const enrichedRows = options.accountId
+    ? await enrichGlRowsWithClass(parsedRows, options.entity, options.accountId, {
+        payloadMap: options.preloadedPayloadMap,
+      })
+    : parsedRows
+
+  const directTransactions = buildBudgetActualDrillTransactionsFromLedgerRows(enrichedRows, {
     entity: options.entity,
     realmId,
     accountNumber: options.accountNumber,

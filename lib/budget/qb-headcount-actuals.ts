@@ -6,14 +6,17 @@ import {
 } from '@/lib/qb/cache-reads'
 import { BUDGET_QBO_ENTITIES, type QboEntity } from '@/lib/qb/config'
 
+import { enrichGlRowsWithClass } from '@/lib/qb/gl-class-enrich'
+
 import {
+  aggregateGeneralLedgerRowsByClass,
   getBudgetOverviewActualDateRanges,
   mergeGeneralLedgerReports,
-  parseQboGeneralLedgerByClass,
   parseQboProfitAndLossReport,
   type QboGeneralLedgerReport,
   type QboProfitAndLossReport,
 } from './actuals.ts'
+import { parseQboGeneralLedgerRows } from './qb-general-ledger.ts'
 import { normalizeBudgetQboClassName } from './qb-class.ts'
 import { loadBudgetQbMappingState } from './qb-mapping-db.ts'
 import type { BudgetHeadcountActualEntry, BudgetHeadcountActualsState, BudgetQbMappingRow, BudgetViewState } from './types.ts'
@@ -129,7 +132,18 @@ export async function fetchBudgetHeadcountActuals(view: BudgetViewState): Promis
       continue
     }
 
-    const glTotals = parseQboGeneralLedgerByClass(perAccountReport)
+    // Parse GL rows, then enrich each row's className by looking up the
+    // transaction in qb_transaction_cache and matching the line by
+    // (AccountRef.value, Amount). QB's default GL response doesn't include
+    // klass_name, so without this enrichment most amounts would fall into
+    // the unclassified bucket — losing department-level attribution for
+    // every realm that doesn't expose class via columns=.
+    const qbAccountId = catalogByEntity.get(task.entity)?.get(task.accountNumber)?.qbAccountId
+    const rawRows = parseQboGeneralLedgerRows(perAccountReport)
+    const enrichedRows = qbAccountId
+      ? await enrichGlRowsWithClass(rawRows, task.entity, qbAccountId)
+      : rawRows
+    const glTotals = aggregateGeneralLedgerRowsByClass(enrichedRows)
     let assigned = 0
 
     for (const [rawClass, amount] of Object.entries(glTotals.classified)) {

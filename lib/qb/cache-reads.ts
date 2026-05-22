@@ -187,6 +187,13 @@ export async function readCachedReportsInRangeWithPeriod<T>(
  * the given range. The cron writes one row per (entity, account, month) with
  * filterParams = { account, accountNumber }; we filter by accountNumber so
  * callers don't need the QB internal ID.
+ *
+ * Perf note: this issues ONE query for the entity+range (the SQL can't filter
+ * on filterParams.accountNumber server-side because it's a JSONB key) and
+ * filters in memory. If you need to look up many accounts in the same range
+ * (e.g. department actuals fan-out across ~40 accounts), call
+ * `readCachedGeneralLedgerByAccount` instead — same one query, but returns a
+ * Map keyed by account, so you don't re-fetch the same data N times.
  */
 export async function readCachedGeneralLedgerForAccount<T>(
   entity: QboEntity,
@@ -209,6 +216,44 @@ export async function readCachedGeneralLedgerForAccount<T>(
   return rows
     .filter((row) => (row.filterParams as { accountNumber?: string } | null)?.accountNumber === accountNumber)
     .map((row) => row.data as T)
+}
+
+/**
+ * Return ALL cached per-account GL reports for the entity in the given range,
+ * partitioned by accountNumber. One DB query, then partition in memory.
+ *
+ * Replaces calling `readCachedGeneralLedgerForAccount` in a loop, which
+ * fetches the same full result set once per account — hundreds of MB of
+ * redundant transfer for typical department fan-out. Use this when the
+ * caller needs lookups for multiple accounts in the same range.
+ */
+export async function readCachedGeneralLedgerByAccount<T>(
+  entity: QboEntity,
+  periodStart: string,
+  periodEnd: string,
+): Promise<Map<string, T[]>> {
+  const rows = await db.select({
+    data: qbReportCache.data,
+    filterParams: qbReportCache.filterParams,
+  })
+    .from(qbReportCache)
+    .where(and(
+      eq(qbReportCache.entityId, entityToId(entity)),
+      eq(qbReportCache.reportType, 'general_ledger'),
+      gte(qbReportCache.periodStart, periodStart),
+      lte(qbReportCache.periodEnd, periodEnd),
+    ))
+    .orderBy(asc(qbReportCache.periodStart))
+
+  const out = new Map<string, T[]>()
+  for (const row of rows) {
+    const accountNumber = (row.filterParams as { accountNumber?: string } | null)?.accountNumber
+    if (!accountNumber) continue
+    const list = out.get(accountNumber)
+    if (list) list.push(row.data as T)
+    else out.set(accountNumber, [row.data as T])
+  }
+  return out
 }
 
 export type CachedAccount = {
