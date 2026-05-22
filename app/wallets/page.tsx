@@ -42,7 +42,6 @@ export default function WalletsPage() {
   // Wave 2c — only admin:manage_data roles can flip is_bulk_treasury. Other
   // viewers see the column read-only (disabled checkbox) so they can still
   // tell which wallets are bulk-mode.
-  const { access } = useSharedAccess()
   const canEdit = hasPermission(access?.role, 'admin:manage_data')
   // Per-address busy state during the optimistic flip → PATCH round-trip.
   const [bulkBusy, setBulkBusy] = useState<Record<string, boolean>>({})
