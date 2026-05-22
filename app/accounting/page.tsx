@@ -42,14 +42,20 @@ function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) 
   if (node.kind === 'account') {
     return (
       <tr>
-        <td style={{ paddingTop: 6, paddingRight: 10, paddingBottom: 6, paddingLeft: depth * 16 + 10, wordBreak: 'break-word' }}>
+        <td
+          title={node.label}
+          style={{
+            paddingTop: 6, paddingRight: 10, paddingBottom: 6, paddingLeft: depth * 16 + 10,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 0,
+          }}
+        >
           {node.glCode ? (
             <span style={{
               fontFamily: 'var(--mono)', fontSize: '0.7rem', background: 'var(--surface2)',
               color: 'var(--accent)', padding: '1px 6px', borderRadius: 4, marginRight: 8,
             }}>{node.glCode}</span>
           ) : null}
-          <span>{node.glCode ? node.label.replace(/^\d{4,}\s*·?\s*/, '') : node.label}</span>
+          {node.glCode ? node.label.replace(/^\d{4,}\s*·?\s*/, '') : node.label}
         </td>
         <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}>{fmtUSD(node.amount)}</td>
       </tr>
@@ -59,12 +65,15 @@ function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) 
   return (
     <>
       <tr>
-        <td style={{
-          paddingTop: 8, paddingRight: 10, paddingBottom: 8, paddingLeft: depth * 16 + 10,
-          fontWeight: 600, fontSize: '0.85rem',
-          borderTop: '1px solid var(--border)',
-          wordBreak: 'break-word',
-        }}>
+        <td
+          title={node.title}
+          style={{
+            paddingTop: 8, paddingRight: 10, paddingBottom: 8, paddingLeft: depth * 16 + 10,
+            fontWeight: 600, fontSize: '0.85rem',
+            borderTop: '1px solid var(--border)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 0,
+          }}
+        >
           {node.title}
         </td>
         <td style={{
