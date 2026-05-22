@@ -45,7 +45,7 @@ export async function getEntityOnchainSummary(entityId: string): Promise<Onchain
       token: balanceSnapshot.token,
       amount: balanceSnapshot.amount,
       date: balanceSnapshot.date,
-      rn: sql<number>`row_number() over (partition by ${balanceSnapshot.walletAddress}, ${balanceSnapshot.token} order by ${balanceSnapshot.date} desc)`.as('rn'),
+      rn: sql<number>`(row_number() over (partition by ${balanceSnapshot.walletAddress}, ${balanceSnapshot.token} order by ${balanceSnapshot.date} desc))::int`.as('rn'),
     })
     .from(balanceSnapshot)
     .where(inArray(balanceSnapshot.walletAddress, addresses))
