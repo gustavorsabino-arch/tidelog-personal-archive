@@ -3,6 +3,10 @@ import {
   getBudgetScopeYtdMonthIndices,
   monthIndexToPeriodKey,
 } from './scope.ts'
+import {
+  parseQboGeneralLedgerRows,
+  type ParsedQboGeneralLedgerRow,
+} from './qb-general-ledger.ts'
 import type {
   BudgetDepartmentActualsState,
   BudgetActualLineSet,
@@ -28,6 +32,13 @@ export type QboProfitAndLossReport = {
 }
 
 export type QboGeneralLedgerReport = {
+  Columns?: {
+    Column?: Array<{
+      ColTitle?: string
+      ColType?: string
+      MetaData?: Array<{ Name?: string; Value?: string }>
+    }>
+  }
   Rows?: { Row?: QboReportRow[] }
 }
 
@@ -73,11 +84,17 @@ export function splitGeneralLedgerByAccount(
 export function mergeGeneralLedgerReports(
   reports: readonly QboGeneralLedgerReport[],
 ): QboGeneralLedgerReport {
+  // Preserve `Columns` from the first non-empty report. All reports for the
+  // same realm/account share the same column structure, so taking the first
+  // one is correct. Without this, the metadata-driven parser
+  // (`parseQboGeneralLedgerRows`) can't identify any field by ColKey and
+  // returns zero rows.
+  const columns = reports.find((r) => r?.Columns?.Column?.length)?.Columns
   const rows: QboReportRow[] = []
   for (const report of reports) {
     for (const row of report?.Rows?.Row ?? []) rows.push(row)
   }
-  return { Rows: { Row: rows } }
+  return columns ? { Columns: columns, Rows: { Row: rows } } : { Rows: { Row: rows } }
 }
 
 export type QboGeneralLedgerByClassTotals = {
@@ -123,36 +140,39 @@ export function parseQboProfitAndLossReport(report: QboProfitAndLossReport): Qbo
   return result
 }
 
-export function parseQboGeneralLedgerByClass(report: QboGeneralLedgerReport): QboGeneralLedgerByClassTotals {
+/**
+ * Pure bucket aggregator. Splits a list of already-parsed (and optionally
+ * enriched) GL rows into classified totals + an unclassified bucket. Pulled
+ * out so the enrichment path in qb-headcount-actuals.ts can reuse the same
+ * accounting after enrichGlRowsWithClass fills in the class column.
+ */
+export function aggregateGeneralLedgerRowsByClass(
+  rows: readonly ParsedQboGeneralLedgerRow[],
+): QboGeneralLedgerByClassTotals {
   const classified: Record<string, number> = {}
   let unclassified = 0
 
-  function walk(rows: QboReportRow[] | undefined) {
-    if (!rows) return
-
-    for (const row of rows) {
-      if (row.type === 'Data' && row.ColData) {
-        const columns = row.ColData
-        const className = columns[4]?.value?.trim() ?? ''
-        const amount = Number.parseFloat(columns[6]?.value || '0') || 0
-
-        if (amount !== 0) {
-          if (className) {
-            classified[className] = (classified[className] ?? 0) + amount
-          } else {
-            unclassified += amount
-          }
-        }
-      }
-
-      if (row.Rows?.Row) {
-        walk(row.Rows.Row)
-      }
+  for (const row of rows) {
+    const amount = row.amountUsd ?? 0
+    if (amount === 0) continue
+    if (row.className) {
+      classified[row.className] = (classified[row.className] ?? 0) + amount
+    } else {
+      unclassified += amount
     }
   }
 
-  walk(report?.Rows?.Row)
   return { classified, unclassified }
+}
+
+export function parseQboGeneralLedgerByClass(report: QboGeneralLedgerReport): QboGeneralLedgerByClassTotals {
+  // Delegate to the metadata-driven parser so we don't duplicate column-
+  // position assumptions across two functions. The shape of QB's GL response
+  // varies by realm (multi-currency, class tracking, etc.); the underlying
+  // `parseQboGeneralLedgerRows` looks up each field by ColKey rather than by
+  // hardcoded index, so both this aggregation and the drill-down drawer see
+  // a consistent interpretation.
+  return aggregateGeneralLedgerRowsByClass(parseQboGeneralLedgerRows(report))
 }
 
 export function mapQboAccountTotalsToBudgetLines(

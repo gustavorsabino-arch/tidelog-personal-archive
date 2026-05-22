@@ -74,6 +74,21 @@ test('maps QBO accounts into canonical budget line totals', () => {
 
 test('parses QBO General Ledger rows into classified and unclassified totals', () => {
   const parsed = parseQboGeneralLedgerByClass({
+    // The parser identifies fields by ColKey metadata rather than by position.
+    // Realistic QB responses always include this `Columns` array; tests must
+    // provide it so the metadata-driven lookup can resolve each field.
+    Columns: {
+      Column: [
+        { ColTitle: 'Date', MetaData: [{ Name: 'ColKey', Value: 'tx_date' }] },
+        { ColTitle: 'Transaction Type', MetaData: [{ Name: 'ColKey', Value: 'txn_type' }] },
+        { ColTitle: 'Num', MetaData: [{ Name: 'ColKey', Value: 'doc_num' }] },
+        { ColTitle: 'Name', MetaData: [{ Name: 'ColKey', Value: 'name' }] },
+        { ColTitle: 'Class', MetaData: [{ Name: 'ColKey', Value: 'klass_name' }] },
+        { ColTitle: 'Memo/Description', MetaData: [{ Name: 'ColKey', Value: 'memo' }] },
+        { ColTitle: 'Amount', MetaData: [{ Name: 'ColKey', Value: 'subt_nat_amount' }] },
+        { ColTitle: 'Balance', MetaData: [{ Name: 'ColKey', Value: 'rbal_nat_amount' }] },
+      ],
+    },
     Rows: {
       Row: [
         {

@@ -2,10 +2,15 @@
 
 import { fmtUSD } from '@/lib/format'
 import { canOpenBudgetActualDrill, canOpenBudgetPlanBreakdown } from '@/lib/budget/drill'
+import { Skeleton } from '@/components/skeleton'
 import type { BudgetReportColumnKey, BudgetReportRow, BudgetReportTableModel } from '@/lib/budget/types'
 
 type BudgetReportTableProps = {
   report: BudgetReportTableModel
+  // True while the actuals network request is in flight. When true, actual
+  // and variance cells render a skeleton instead of "—" so users can tell
+  // "data is loading" apart from "data is genuinely empty".
+  loadingActuals?: boolean
   onBudgetCellClick?: (row: BudgetReportRow, column: BudgetReportColumnKey) => void
   onActualCellClick?: (row: BudgetReportRow, column: BudgetReportColumnKey) => void
   onRevenueRowClick?: () => void
@@ -59,7 +64,19 @@ function renderCellButton(
   )
 }
 
-export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick, onRevenueRowClick }: BudgetReportTableProps) {
+function ActualLoadingCell() {
+  return <Skeleton width={56} height={10} />
+}
+
+function VarianceLoadingCell() {
+  return (
+    <span className="budget-variance-chip budget-variance-zero" aria-label="Loading">
+      <Skeleton width={44} height={10} style={{ background: 'rgba(0,0,0,0.06)' }} />
+    </span>
+  )
+}
+
+export function BudgetReportTable({ report, loadingActuals, onBudgetCellClick, onActualCellClick, onRevenueRowClick }: BudgetReportTableProps) {
   return (
     <div className="section">
       <div className="section-header">
@@ -162,7 +179,7 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     )}
                   </td>
                   <td className="num" style={{ color: row.tone === 'revenue' ? '#04a776' : 'var(--muted)' }}>
-                    {renderCellButton(
+                    {loadingActuals ? <ActualLoadingCell /> : renderCellButton(
                       formatActualCell(row.cells.period.actualUsd),
                       periodActualClickable || revenueRowClickable,
                       periodActualHandler,
@@ -170,7 +187,9 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     )}
                   </td>
                   <td className="num">
-                    <span className={`budget-variance-chip budget-variance-${periodTone}`}>{formatVarianceCell(row.cells.period.varianceUsd)}</span>
+                    {loadingActuals ? <VarianceLoadingCell /> : (
+                      <span className={`budget-variance-chip budget-variance-${periodTone}`}>{formatVarianceCell(row.cells.period.varianceUsd)}</span>
+                    )}
                   </td>
                   <td className="budget-table-divider" />
                   <td className="num">
@@ -181,7 +200,7 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     )}
                   </td>
                   <td className="num" style={{ color: row.tone === 'revenue' ? '#04a776' : 'var(--muted)' }}>
-                    {renderCellButton(
+                    {loadingActuals ? <ActualLoadingCell /> : renderCellButton(
                       formatActualCell(row.cells.ytd.actualUsd),
                       ytdActualClickable || revenueRowClickable,
                       ytdActualHandler,
@@ -189,7 +208,9 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     )}
                   </td>
                   <td className="num">
-                    <span className={`budget-variance-chip budget-variance-${ytdTone}`}>{formatVarianceCell(row.cells.ytd.varianceUsd)}</span>
+                    {loadingActuals ? <VarianceLoadingCell /> : (
+                      <span className={`budget-variance-chip budget-variance-${ytdTone}`}>{formatVarianceCell(row.cells.ytd.varianceUsd)}</span>
+                    )}
                   </td>
                   <td className="budget-table-divider" />
                   <td className="num">
@@ -200,7 +221,7 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     )}
                   </td>
                   <td className="num" style={{ color: row.tone === 'revenue' ? '#04a776' : 'var(--muted)' }}>
-                    {renderCellButton(
+                    {loadingActuals ? <ActualLoadingCell /> : renderCellButton(
                       formatActualCell(row.cells.annual.actualUsd),
                       revenueRowClickable,
                       annualActualHandler,
@@ -208,7 +229,9 @@ export function BudgetReportTable({ report, onBudgetCellClick, onActualCellClick
                     )}
                   </td>
                   <td className="num">
-                    <span className={`budget-variance-chip budget-variance-${annualTone}`}>{formatVarianceCell(row.cells.annual.varianceUsd)}</span>
+                    {loadingActuals ? <VarianceLoadingCell /> : (
+                      <span className={`budget-variance-chip budget-variance-${annualTone}`}>{formatVarianceCell(row.cells.annual.varianceUsd)}</span>
+                    )}
                   </td>
                 </tr>
               )
