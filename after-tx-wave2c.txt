@@ -1,0 +1,114 @@
+export interface Transaction {
+  txHash: string
+  walletAddr: string
+  wallet: string
+  entity: string
+  blockTime: number
+  date: string
+  asset: string
+  qty: number
+  dir: 'In' | 'Out'
+  price: number | null
+  usd: number | null
+  priceSource: string | null
+  counterparty: string | null
+  category: string | null
+  // ---- enrichment (populated server-side via JOINs; undefined when the producer didn't compute them,
+  //      null when joined but no match). Marked optional (`?`) so existing producers like
+  //      lib/cron/fetch-transactions.ts:27 (moveToTx) and inline test fixtures keep compiling without edits.
+  counterpartyLabel?: string | null
+  stGain?: number | null
+  ltGain?: number | null
+  realizedTerm?: 'ST' | 'LT' | 'mixed' | null
+  internal?: boolean | null
+  internalPairedWalletAddr?: string | null
+  noBasis?: boolean | null
+  lots?: LotTraceEntry[] | null
+  // Wave 2 — populated by the server's tx_qb_state JOIN. id is optional because
+  // the cron's moveToTx (lib/cron/fetch-transactions.ts:27) constructs Transaction
+  // objects without it; in practice every row that flows through getTreasuryTransactions
+  // has id populated from the DB row.
+  id?: string
+  description?: string | null      // user-saved override; null = use descriptionDefault
+  descriptionDefault?: string      // computed via defaultDescription(); server populates
+  // Wave 2b — GL accounts surfaced from joins:
+  walletGlAccount?: string | null       // wallet.accountCode (read-only display)
+  counterpartyGlAccount?: string | null // counterparty_gl_map.gl_account_number
+  glAccountOverride?: string | null     // tx_qb_state.gl_account_override
+  counterpartyGlOverride?: string | null// tx_qb_state.counterparty_gl_override
+  // Wave 2c — qb_post fields surfaced via tx_qb_state.post_id → qb_post LEFT JOIN.
+  // qbPostId is the FK value itself; null/undefined = unposted. The other three
+  // are projected from the qbPost row and are null when no post exists.
+  qbPostId?: string | null
+  qbPostingStatus?: 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed' | null
+  qbDocNumber?: string | null
+  qbJournalEntryId?: string | null
+}
+
+export interface TransactionSummary {
+  inflowsUSD: number
+  outflowsUSD: number
+  netUSD: number
+}
+
+export interface TransactionsResponse {
+  transactions: Transaction[]
+  total: number
+  limit: number
+  offset: number
+  summary: TransactionSummary
+}
+
+export interface Prices {
+  SOL?: number
+  ORCA?: number
+  USDC?: number
+  USDT?: number
+  [key: string]: number | undefined
+}
+
+export interface BalanceSnapshot {
+  date: string
+  fetchedAt: string
+  prices: Prices
+  balances: Record<string, Record<string, number>>
+}
+
+export interface TreasuryOverviewWallet extends Wallet {
+  balances: Record<string, number>
+  tokenUsd: Record<string, number>
+  totalUSD: number
+}
+
+export interface TreasuryOverviewEntityTotal {
+  tokens: Record<string, number>
+  tokenUsd: Record<string, number>
+  totalUSD: number
+  walletCount: number
+}
+
+export interface TreasuryOverviewTokenTotal {
+  amount: number
+  usd: number
+  walletCount: number
+}
+
+export interface TreasuryOverviewDrilldownRow {
+  walletAddr: string
+  walletLabel: string
+  entity: string
+  totalUSD: number
+  tokenAmounts: Record<string, number>
+  tokenUsd: Record<string, number>
+}
+
+export interface TreasuryOverviewDrilldown {
+  key: string
+  title: string
+  accentColor: string
+  walletCount: number
+  subtotalUSD: number
+  portfolioPct: number
+  rowTokens: string[]
+  showEntityColumn: boolean
+  rows: TreasuryOverviewDrilldownRow[]

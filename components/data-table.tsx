@@ -1,9 +1,12 @@
 'use client'
 import { useState, useMemo } from 'react'
 
+// `label` accepts ReactNode so column headers can host interactive widgets
+// (e.g. a "select all on page" checkbox). String labels keep working as before;
+// the only caller-visible change is that headers may now contain JSX.
 type Column<T> = {
   key: string
-  label: string
+  label: React.ReactNode
   render: (row: T) => React.ReactNode
   sortable?: boolean
   numeric?: boolean

@@ -6,6 +6,8 @@ import { getWalletTypeLabel } from '@/lib/overview'
 import { apiFetch } from '@/lib/api'
 import { Skeleton } from '@/components/skeleton'
 import { CopyButton } from '@/components/copy-button'
+import { useSharedAccess } from '@/lib/access-context'
+import { hasPermission } from '@/lib/auth/permissions'
 import type { Wallet } from '@/lib/types'
 
 export default function WalletsPage() {
@@ -15,6 +17,13 @@ export default function WalletsPage() {
   const [entityFilter, setEntityFilter] = useState('')
   const [search, setSearch] = useState('')
   const [showExternal, setShowExternal] = useState(false)
+  // Wave 2c — only admin:manage_data roles can flip is_bulk_treasury. Other
+  // viewers see the column read-only (disabled checkbox) so they can still
+  // tell which wallets are bulk-mode.
+  const { access } = useSharedAccess()
+  const canEdit = hasPermission(access?.role, 'admin:manage_data')
+  // Per-address busy state during the optimistic flip → PATCH round-trip.
+  const [bulkBusy, setBulkBusy] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -53,6 +62,32 @@ export default function WalletsPage() {
     preEntityFiltered.forEach((w) => { map[w.entity] = (map[w.entity] || 0) + 1 })
     return map
   }, [preEntityFiltered])
+
+  // Optimistic toggle: flip in local state, fire the PATCH, revert on failure.
+  // Avoids a full refetch — the rest of the page state is unaffected.
+  async function toggleBulkTreasury(address: string, next: boolean) {
+    if (!canEdit) return
+    setBulkBusy(s => ({ ...s, [address]: true }))
+    setWalletRegistry(rs => rs.map(w => w.address === address ? { ...w, isBulkTreasury: next } : w))
+    try {
+      await apiFetch(`/api/wallets/${address}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ isBulkTreasury: next }),
+      })
+    } catch (err) {
+      // Revert on failure and surface to error banner
+      setWalletRegistry(rs => rs.map(w => w.address === address ? { ...w, isBulkTreasury: !next } : w))
+      setError(err instanceof Error ? err.message : 'Failed to update wallet')
+    } finally {
+      setBulkBusy(s => {
+        const { [address]: _, ...rest } = s
+        return rest
+      })
+    }
+  }
+
+  const BULK_TOOLTIP = 'When enabled, transactions on this wallet are aggregated by token + month into a single QuickBooks journal entry instead of posted individually.'
 
   return (
     <div>
@@ -96,6 +131,7 @@ export default function WalletsPage() {
               <th>Chain</th>
               <th>Account Code</th>
               <th>Type</th>
+              <th title={BULK_TOOLTIP}>Bulk Treasury</th>
             </tr>
           </thead>
           <tbody>
@@ -108,6 +144,7 @@ export default function WalletsPage() {
                     <td><Skeleton width={56} height={14} /></td>
                     <td><Skeleton width={64} height={10} /></td>
                     <td><Skeleton width={72} height={10} /></td>
+                    <td><Skeleton width={20} height={14} /></td>
                   </tr>
                 ))
               : filtered.map((w) => {
@@ -138,6 +175,18 @@ export default function WalletsPage() {
                       </td>
                       <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
                         {getWalletTypeLabel(w)}
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={!!w.isBulkTreasury}
+                          disabled={!canEdit || !!bulkBusy[w.address]}
+                          onChange={(e) => toggleBulkTreasury(w.address, e.target.checked)}
+                          title={!canEdit
+                            ? 'Your role does not have admin:manage_data permission'
+                            : BULK_TOOLTIP}
+                          style={{ cursor: canEdit ? 'pointer' : 'not-allowed' }}
+                        />
                       </td>
                     </tr>
                   )

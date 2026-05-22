@@ -20,6 +20,7 @@ export async function GET(req: Request) {
     isExternal: w.isExternal,
     overviewOnly: w.overviewOnly,
     includeInOverview: w.includeInOverview,
+    isBulkTreasury: w.isBulkTreasury,
   }))
 
   return NextResponse.json({ wallets })

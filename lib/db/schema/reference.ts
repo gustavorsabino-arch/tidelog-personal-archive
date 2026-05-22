@@ -20,6 +20,9 @@ export const wallet = app.table('wallet', {
   isExternal: boolean('is_external').notNull().default(false),
   overviewOnly: boolean('overview_only').notNull().default(false),
   includeInOverview: boolean('include_in_overview').notNull().default(true),
+  // Wave 2c — when true, txs on this wallet aggregate by (token, month) into
+  // a single bulk QB journal entry instead of one JE per tx.
+  isBulkTreasury: boolean('is_bulk_treasury').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

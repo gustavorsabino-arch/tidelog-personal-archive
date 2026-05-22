@@ -9,6 +9,9 @@ export interface Wallet {
   isExternal: boolean
   overviewOnly?: boolean
   includeInOverview?: boolean
+  // Wave 2c — when true, transactions on this wallet are grouped by
+  // (token, month) into a single bulk QB journal entry on post.
+  isBulkTreasury?: boolean
   balances?: Record<string, number>
   totalUSD?: number
 }
@@ -51,6 +54,13 @@ export interface Transaction {
   counterpartyGlAccount?: string | null // counterparty_gl_map.gl_account_number
   glAccountOverride?: string | null     // tx_qb_state.gl_account_override
   counterpartyGlOverride?: string | null// tx_qb_state.counterparty_gl_override
+  // Wave 2c — qb_post fields surfaced via tx_qb_state.post_id → qb_post LEFT JOIN.
+  // qbPostId is the FK value itself; null/undefined = unposted. The other three
+  // are projected from the qbPost row and are null when no post exists.
+  qbPostId?: string | null
+  qbPostingStatus?: 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed' | null
+  qbDocNumber?: string | null
+  qbJournalEntryId?: string | null
 }
 
 export interface TransactionSummary {

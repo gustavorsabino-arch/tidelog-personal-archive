@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
-import { transaction, transactionGain, txQbState, wallet, counterpartyGlMap } from '@/lib/db/schema'
+import { transaction, transactionGain, txQbState, wallet, counterpartyGlMap, qbPost } from '@/lib/db/schema'
 import { STABLE_TOKENS } from '@/lib/constants'
 import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import { defaultDescription } from '@/lib/qb-state'
@@ -46,6 +46,16 @@ type CounterpartyGlJoinRow = {
   glAccountNumber: string | null
 }
 
+type QbPostJoinRow = {
+  // Presence marker — qbPost.id is notNull on the qb_post table. Without it,
+  // the nested projection collapses to null when only nullable columns (e.g.
+  // qbJournalEntryId, postingError) are projected. Same pattern as qbState.
+  postId: string
+  postingStatus: 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed'
+  docNumber: string
+  qbJournalEntryId: string | null
+}
+
 export function rowToTransaction(
   row: TransactionRow,
   walletLabel: string,
@@ -54,6 +64,7 @@ export function rowToTransaction(
   qbState: QbStateJoinRow | null = null,
   walletAccountCode: string | null = null,
   counterpartyGl: CounterpartyGlJoinRow | null = null,
+  qbPostRow: QbPostJoinRow | null = null,
 ): Transaction {
   const qty = Number(row.qty)
   const isStable = STABLE_TOKENS.has(row.asset)
@@ -95,6 +106,16 @@ export function rowToTransaction(
     counterpartyGlAccount: counterpartyGl?.glAccountNumber ?? null,
     glAccountOverride: qbState?.glAccountOverride ?? null,
     counterpartyGlOverride: qbState?.counterpartyGlOverride ?? null,
+    // Wave 2c — qb_post fields. qbPostRow is null when no qb_post row is linked
+    // via tx_qb_state.post_id (the common case — most rows are unposted). Each
+    // field surfaces as null in that case so the client sees an explicit value
+    // rather than `undefined`. Note: the projection's `_present` marker (postId
+    // duplicated as the notNull JOIN key) is NOT read here — postId itself IS
+    // the FK value, so it's load-bearing and stays.
+    qbPostId: qbPostRow?.postId ?? null,
+    qbPostingStatus: qbPostRow?.postingStatus ?? null,
+    qbDocNumber: qbPostRow?.docNumber ?? null,
+    qbJournalEntryId: qbPostRow?.qbJournalEntryId ?? null,
   }
 }
 
@@ -153,6 +174,14 @@ export async function getTreasuryTransactions({
       walletAccountCode: wallet.accountCode,
       counterpartyLabel: cpWallet.label,
       gain: {
+        // D10 — Drizzle nested-projection collapse marker. Without a notNull
+        // column in the projection, the whole `gain` object collapses to null
+        // when every projected gain field happens to be null (e.g., genesis or
+        // stable-token txs where stGain/ltGain/realizedTerm/internal are all
+        // null). transactionGain.txHash IS notNull (PK component), so it acts
+        // as the "row matched" presence signal. The `_present` key is read
+        // only as a marker — `rowToTransaction` ignores it.
+        _present: transactionGain.txHash,
         stGain: transactionGain.stGain,
         ltGain: transactionGain.ltGain,
         realizedTerm: transactionGain.realizedTerm,
@@ -174,7 +203,21 @@ export async function getTreasuryTransactions({
         counterpartyGlOverride: txQbState.counterpartyGlOverride,
       },
       counterpartyGl: {
+        // D10 marker — counterpartyGlMap.entityId is notNull on the table.
+        // counterparty_gl_map only has glAccountNumber as a nullable-relevant
+        // projected column today, but a future column addition could trigger
+        // the same collapse bug. Preemptively guard.
+        _present: counterpartyGlMap.entityId,
         glAccountNumber: counterpartyGlMap.glAccountNumber,
+      },
+      qbPost: {
+        // D10 marker — qbPost.id is the table PK (notNull). It also doubles as
+        // the FK value we want to surface (qbPostId), so it's not a throwaway
+        // marker like the others — it gets read in rowToTransaction as `postId`.
+        postId: qbPost.id,
+        postingStatus: qbPost.postingStatus,
+        docNumber: qbPost.docNumber,
+        qbJournalEntryId: qbPost.qbJournalEntryId,
       },
     })
     .from(transaction)
@@ -206,6 +249,10 @@ export async function getTreasuryTransactions({
         eq(counterpartyGlMap.counterpartyAddress, transaction.counterparty),
       ),
     )
+    // Two-hop reach to qb_post: tx_qb_state holds the post_id FK. We already
+    // LEFT JOIN tx_qb_state above on the tx's PK columns, so chaining here
+    // gives us posting metadata for the row (or null if no qb_post linked).
+    .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
     .where(where)
     .orderBy(desc(transaction.blockTime))
   const pageQuery = unbounded
@@ -236,6 +283,7 @@ export async function getTreasuryTransactions({
       row.qbState ?? null,
       row.walletAccountCode ?? null,
       row.counterpartyGl ?? null,
+      row.qbPost ?? null,
     ),
   )
 

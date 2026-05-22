@@ -661,6 +661,15 @@ th.sortable:hover { color: var(--accent) }
   font-style: italic;
 }
 
+/* Wave 2c — subtle row tints by QB posting status. Designed to be glance-able
+   but not overwhelming when many rows are posted. Tints stack with hover
+   (DataTable's row hover styles still apply on top). */
+.tx-row-posted td       { background: rgba(16, 185, 129, 0.06); }
+.tx-row-modified td     { background: rgba(217, 119, 6, 0.10); }
+.tx-row-voided td       { background: rgba(107, 114, 128, 0.06); }
+.tx-row-voided td       { color: var(--muted); }
+.tx-row-failed td       { background: rgba(220, 38, 38, 0.08); }
+
 /* Editable cell hover affordance — surfaces the edit pencil and a subtle
    outline so users know the cell is clickable. Used by components/editable-cell.tsx. */
 .editable-cell-display:hover {
@@ -669,4 +678,19 @@ th.sortable:hover { color: var(--accent) }
 }
 .editable-cell-display:hover .editable-cell-pencil {
   opacity: 1 !important;
+}
+
+/* Wave 2c — QB row hover actions (Re-post / Void). Hidden by default; revealed
+   when the user hovers the row OR the status cell itself. Keyboard users get
+   them on focus-within so the buttons remain reachable without a mouse. */
+.qb-row-actions {
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+tr:hover .qb-row-actions,
+.qb-status-cell:hover .qb-row-actions,
+.qb-status-cell:focus-within .qb-row-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
