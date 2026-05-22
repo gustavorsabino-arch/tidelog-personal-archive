@@ -6,14 +6,23 @@ import { wallet } from '@/lib/db/schema'
 import { logAudit } from '@/lib/audit'
 
 // PATCH /api/wallets/[address]
-//   Body: { isBulkTreasury?: boolean }
-//   Updates wallet config flags. Currently only `isBulkTreasury` (Wave 2c)
-//   is editable via this endpoint; other wallet fields (label, accountCode,
-//   etc.) remain managed via the seed/migration path.
+//   Body: { isBulkTreasury?: boolean; label?: string; accountCode?: string | null }
+//   Updates wallet config fields. All fields are live-joined at read time
+//   (no historical impact on existing transaction / balance_snapshot rows),
+//   so edits are non-destructive and take effect on next page load.
 //
-// Permission: admin:manage_data (matches other admin data-mutation endpoints
-// like /api/admin/qb/force-refresh — wallet config edits affect QB posting
-// behavior, so they belong to the same permission tier).
+//   Editable fields:
+//     - isBulkTreasury — QB posting aggregation flag (Wave 2c)
+//     - label          — display label, 1-80 chars
+//     - accountCode    — GL mapping for balance-sheet reconciliation; nullable
+//
+//   Fields that are NOT editable (would require cascade work — see backlog):
+//     - entityId       — transaction rows store entity_id at write time
+//     - chain          — parser is chain-specific
+//     - address        — primary key
+//     - isExternal / overviewOnly / includeInOverview — safe-to-edit but not exposed here yet
+//
+// Permission: admin:manage_data.
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ address: string }> }) {
   const { user, deny } = await requirePermission('admin:manage_data', req)
   if (deny) return deny
@@ -35,6 +44,24 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ address: 
       return NextResponse.json({ error: 'isBulkTreasury must be boolean' }, { status: 400 })
     }
     setMap.isBulkTreasury = b.isBulkTreasury
+  }
+
+  if ('label' in b) {
+    if (typeof b.label !== 'string' || b.label.trim().length === 0 || b.label.length > 80) {
+      return NextResponse.json({ error: 'label must be a non-empty string up to 80 chars' }, { status: 400 })
+    }
+    setMap.label = b.label
+  }
+
+  if ('accountCode' in b) {
+    if (b.accountCode !== null && typeof b.accountCode !== 'string') {
+      return NextResponse.json({ error: 'accountCode must be a string or null' }, { status: 400 })
+    }
+    if (typeof b.accountCode === 'string' && b.accountCode.length > 80) {
+      return NextResponse.json({ error: 'accountCode must be 80 chars or fewer' }, { status: 400 })
+    }
+    // Treat empty string as null so the column doesn't accumulate '' entries.
+    setMap.accountCode = b.accountCode === '' ? null : b.accountCode
   }
 
   if (Object.keys(setMap).length === 0) {
@@ -59,6 +86,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ address: 
       fields: Object.keys(setMap).filter(k => k !== 'updatedAt'),
       ...('isBulkTreasury' in setMap
         ? { isBulkTreasury: setMap.isBulkTreasury, previousIsBulkTreasury: existing.isBulkTreasury }
+        : {}),
+      ...('label' in setMap
+        ? { label: setMap.label, previousLabel: existing.label }
+        : {}),
+      ...('accountCode' in setMap
+        ? { accountCode: setMap.accountCode, previousAccountCode: existing.accountCode }
         : {}),
     },
   }).catch(() => { /* swallow */ })

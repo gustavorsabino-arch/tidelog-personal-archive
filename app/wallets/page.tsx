@@ -55,6 +55,10 @@ export default function WalletsPage() {
   const [deletingAddr, setDeletingAddr] = useState<string | null>(null)
   const [deletingWallet, setDeletingWallet] = useState<Wallet | null>(null)
   const [confirmText, setConfirmText] = useState('')
+  const [editingWallet, setEditingWallet] = useState<Wallet | null>(null)
+  const [editForm, setEditForm] = useState<{ label: string; accountCode: string }>({ label: '', accountCode: '' })
+  const [editError, setEditError] = useState<string | null>(null)
+  const [savingEdit, setSavingEdit] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
 
   useEffect(() => {
@@ -173,6 +177,61 @@ export default function WalletsPage() {
       closeDeleteModal()
     } catch (err) { setError((err as Error).message) }
     finally { setDeletingAddr(null) }
+  }
+
+  const openEditModal = (w: Wallet) => {
+    setEditingWallet(w)
+    setEditForm({ label: w.label, accountCode: w.accountCode ?? '' })
+    setEditError(null)
+    setError(null)
+  }
+
+  const closeEditModal = () => {
+    setEditingWallet(null)
+    setEditError(null)
+    setSavingEdit(false)
+  }
+
+  const saveEdit = async () => {
+    if (!editingWallet) return
+    const trimmedLabel = editForm.label.trim()
+    if (!trimmedLabel) { setEditError('Label is required.'); return }
+    if (trimmedLabel.length > 80) { setEditError('Label must be 80 characters or fewer.'); return }
+
+    // Build patch body — only include fields that actually changed, to keep
+    // the audit trail clean (no-op edits don't show up).
+    const patch: Record<string, unknown> = {}
+    if (trimmedLabel !== editingWallet.label) patch.label = trimmedLabel
+    const newAccountCode = editForm.accountCode.trim() === '' ? null : editForm.accountCode.trim()
+    const oldAccountCode = editingWallet.accountCode ?? null
+    if (newAccountCode !== oldAccountCode) patch.accountCode = newAccountCode
+
+    if (Object.keys(patch).length === 0) {
+      closeEditModal()
+      return
+    }
+
+    setSavingEdit(true); setEditError(null)
+    try {
+      const res = await fetch(`/api/wallets/${encodeURIComponent(editingWallet.address)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      const refreshed = await apiFetch<{ wallets: Wallet[] }>('/api/wallets')
+      setWalletRegistry(refreshed.wallets)
+      const { mutate } = await import('swr')
+      const { WALLETS_KEY } = await import('@/lib/hooks/use-entity-wallets')
+      mutate(WALLETS_KEY)
+      closeEditModal()
+    } catch (err) {
+      setEditError((err as Error).message)
+      setSavingEdit(false)
+    }
   }
 
   const backfillWallet = async (address: string) => {
@@ -513,23 +572,39 @@ export default function WalletsPage() {
                       </td>
                       {isAdmin && (
                         <td>
+                          <button
+                            className="btn-secondary"
+                            style={{ fontSize: '0.7rem', padding: '2px 8px' }}
+                            onClick={() => openEditModal(w)}
+                          >
+                            Edit
+                          </button>
                           {canBackfill && (
                             <button
                               className="btn-secondary"
                               onClick={() => backfillWallet(w.address)}
                               disabled={backfillingAddr === w.address}
-                              style={{ fontSize: '0.7rem', padding: '2px 8px' }}
+                              style={{ fontSize: '0.7rem', padding: '2px 8px', marginLeft: 6 }}
                             >
                               {backfillingAddr === w.address ? 'Backfilling…' : 'Backfill'}
                             </button>
                           )}
                           <button
                             className="btn-secondary"
-                            style={{ fontSize: '0.7rem', padding: '2px 8px', marginLeft: 6, color: 'var(--red)', borderColor: 'color-mix(in srgb, var(--red) 28%, var(--border))' }}
+                            style={{ fontSize: '0.7rem', padding: '4px 6px', marginLeft: 6, color: 'var(--red)', borderColor: 'color-mix(in srgb, var(--red) 28%, var(--border))', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                             onClick={() => openDeleteModal(w)}
                             disabled={deletingAddr === w.address}
+                            aria-label="Delete wallet"
+                            title={deletingAddr === w.address ? 'Deleting…' : 'Delete wallet'}
                           >
-                            {deletingAddr === w.address ? 'Deleting…' : 'Delete'}
+                            {deletingAddr === w.address ? (
+                              <span style={{ fontSize: '0.7rem' }}>…</span>
+                            ) : (
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                              </svg>
+                            )}
                           </button>
                         </td>
                       )}
@@ -567,7 +642,7 @@ export default function WalletsPage() {
                 <li>All of its transactions</li>
                 <li>All of its balance snapshots</li>
               </ul>
-              Gains for entity <strong>{deletingWallet.entity}</strong> will be recomputed without this wallet&rsquo;s contributions.
+              Gains for entity <strong>{deletingWallet.entity}</strong>{' '}will be recomputed without this wallet&rsquo;s contributions.
             </div>
 
             <div className="admin-access-inline-warning" style={{ marginBottom: 12, color: 'var(--fg, #1f2937)', lineHeight: 1.5 }}>
@@ -614,6 +689,110 @@ export default function WalletsPage() {
                 disabled={deletingAddr === deletingWallet.address}
               >
                 {deletingAddr === deletingWallet.address ? 'Deleting…' : 'Delete wallet'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit wallet modal — label + accountCode */}
+      {editingWallet && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => { if (e.target === e.currentTarget && !savingEdit) closeEditModal() }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: 24,
+          }}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: 480, width: '100%', padding: 24, background: 'var(--bg, #fff)' }}
+          >
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: 12 }}>
+              Edit wallet
+            </div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: 16, fontFamily: 'var(--mono)' }}>
+              {editingWallet.address}
+            </div>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+              <span className="budget-scope-label">Label</span>
+              <input
+                type="text"
+                className="fsearch"
+                autoFocus
+                value={editForm.label}
+                onChange={(e) => { setEditForm((p) => ({ ...p, label: e.target.value })); if (editError) setEditError(null) }}
+                disabled={savingEdit}
+                maxLength={80}
+                placeholder="e.g. Treasury Cold"
+                style={!editForm.label.trim() ? { borderColor: 'var(--red)' } : undefined}
+              />
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 }}>
+              <span className="budget-scope-label">
+                Account code <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(GL mapping — leave blank to unset)</span>
+              </span>
+              <input
+                type="text"
+                className="fsearch"
+                value={editForm.accountCode}
+                onChange={(e) => { setEditForm((p) => ({ ...p, accountCode: e.target.value })); if (editError) setEditError(null) }}
+                disabled={savingEdit}
+                maxLength={80}
+                placeholder="e.g. 1010-OPCO-USDC"
+              />
+            </label>
+
+            {(() => {
+              // Runtime errors (API failures) take precedence; otherwise derive
+              // a validation message from form state so the user sees WHY Save
+              // is disabled without having to click first.
+              const displayError = editError ?? (!editForm.label.trim() ? 'Label is required.' : null)
+              if (!displayError) return null
+              return (
+                <div
+                  role="alert"
+                  style={{
+                    marginBottom: 12,
+                    padding: '6px 10px',
+                    background: 'color-mix(in srgb, var(--red) 8%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--red) 25%, transparent)',
+                    borderRadius: 4,
+                    color: 'var(--red)',
+                    fontSize: '0.78rem',
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {displayError}
+                </div>
+              )
+            })()}
+
+            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginBottom: 18, lineHeight: 1.4 }}>
+              Changes apply immediately and are non-destructive — historical transactions and gains are unaffected. The Balance Sheet on-chain summary regroups this wallet under the new GL bucket on next page load.
+            </div>
+
+            <div className="admin-access-button-row" style={{ justifyContent: 'flex-end' }}>
+              <button
+                className="btn-secondary"
+                onClick={closeEditModal}
+                disabled={savingEdit}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={saveEdit}
+                disabled={savingEdit || !editForm.label.trim()}
+                style={(savingEdit || !editForm.label.trim()) ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                title={!editForm.label.trim() ? 'Label is required' : undefined}
+              >
+                {savingEdit ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>
