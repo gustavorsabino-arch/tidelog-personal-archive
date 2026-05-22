@@ -252,13 +252,24 @@ export default function WalletsPage() {
           <div className="admin-access-restricted-section active" style={{ marginTop: 16 }}>
             <div className="section-title">Flags</div>
             <div className="admin-access-department-grid">
-              {(['isExternal', 'overviewOnly', 'includeInOverview'] as const).map((flag) => (
-                <label key={flag} className={`admin-access-department-pill${newWallet[flag] ? ' selected' : ''}`}>
-                  <input type="checkbox" checked={newWallet[flag]}
-                    onChange={() => setNewWallet((p) => ({ ...p, [flag]: !p[flag] }))} disabled={creatingWallet} />
-                  {flag}
+              <label className={`admin-access-department-pill${newWallet.isExternal ? ' selected' : ''}`}>
+                <input type="checkbox" checked={newWallet.isExternal}
+                  onChange={() => setNewWallet((p) => ({ ...p, isExternal: !p.isExternal }))} disabled={creatingWallet} />
+                External counterparty
+              </label>
+              {newWallet.isExternal ? (
+                <label className={`admin-access-department-pill${newWallet.overviewOnly ? ' selected' : ''}`}>
+                  <input type="checkbox" checked={newWallet.overviewOnly}
+                    onChange={() => setNewWallet((p) => ({ ...p, overviewOnly: !p.overviewOnly }))} disabled={creatingWallet} />
+                  Show on overview anyway
                 </label>
-              ))}
+              ) : (
+                <label className={`admin-access-department-pill${newWallet.includeInOverview ? ' selected' : ''}`}>
+                  <input type="checkbox" checked={newWallet.includeInOverview}
+                    onChange={() => setNewWallet((p) => ({ ...p, includeInOverview: !p.includeInOverview }))} disabled={creatingWallet} />
+                  Show on overview
+                </label>
+              )}
             </div>
           </div>
 
