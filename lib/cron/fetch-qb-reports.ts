@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray } from 'drizzle-orm'
+import { and, eq, gte, inArray, or, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import {
   qbAccountCatalog,
@@ -7,7 +7,7 @@ import {
   qbTransactionCache,
   budgetQbMapping,
 } from '@/lib/db/schema'
-import { fetchQboJson, qbFetchReport, type QbReportType } from '@/lib/qb/client'
+import { QboHttpError, fetchQboJson, qbFetchReport, type QbReportType } from '@/lib/qb/client'
 import { getQboRealmId, isQboEntity, type QboEntity } from '@/lib/qb/config'
 import { buildGlAccountList } from './gl-account-list.ts'
 
@@ -25,6 +25,23 @@ const ACCOUNT_CATALOG_STALE_MS = 24 * 60 * 60 * 1000
 
 /** Parallel QB requests per entity for transaction payload backfill. */
 const TRANSACTION_PAYLOAD_CONCURRENCY = 6
+
+/**
+ * Wall-clock budget for a single payload-backfill pass. Vercel kills the
+ * function at 300s; budget for 240s so we exit cleanly and the report
+ * sections that already ran get committed. Remaining txn payloads pick up
+ * on the next run.
+ */
+const PAYLOAD_BACKFILL_BUDGET_MS = 240_000
+
+/**
+ * How long to trust a failure marker before re-attempting the fetch. Most
+ * 4xx failures are deletions and will keep failing forever, but a transient
+ * 400 (auth glitch, brief QB outage) shouldn't permanently suppress a real
+ * txn. Re-attempting after 7 days gives a self-healing path without needing
+ * a manual force-refresh.
+ */
+const FAILURE_MARKER_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 /**
  * Earliest year QB-cached reports go back to. Closed months before this are
@@ -280,6 +297,9 @@ async function backfillTransactionPayloads(
 
   // When forced we bypass the cache check — we want fresh payloads even if
   // rows already exist, because a txn's contents may have been edited in QB.
+  // Otherwise: a row counts as cached unless it's a stale failure marker
+  // (older than FAILURE_MARKER_TTL_MS), in which case we'll re-attempt it.
+  const failureMarkerCutoff = new Date(now.getTime() - FAILURE_MARKER_TTL_MS)
   const alreadyCached = force
     ? new Set<string>()
     : new Set(
@@ -288,6 +308,10 @@ async function backfillTransactionPayloads(
           .where(and(
             eq(qbTransactionCache.entityId, entityId),
             inArray(qbTransactionCache.txnId, refs.map((r) => r.txnId)),
+            or(
+              sql`(${qbTransactionCache.payload}->>'_failed') IS DISTINCT FROM 'true'`,
+              gte(qbTransactionCache.fetchedAt, failureMarkerCutoff),
+            ),
           )))
           .map((row) => row.txnId),
       )
@@ -301,13 +325,21 @@ async function backfillTransactionPayloads(
   console.log(`[qb-reports] ${entityId}: ${label} → backfilling ${toFetch.length}/${refs.length} txn payloads…`)
   let fetched = 0
   let failed = 0
+  let permanentlyFailed = 0
+  let abandoned = 0
   const total = toFetch.length
   const progressEvery = Math.max(25, Math.floor(total / 10))
   let logged = 0
+  const startedAt = Date.now()
+  let budgetExhausted = false
 
   const queue = [...toFetch]
   const workers = Array.from({ length: Math.min(TRANSACTION_PAYLOAD_CONCURRENCY, queue.length) }, async () => {
     while (queue.length > 0) {
+      if (Date.now() - startedAt >= PAYLOAD_BACKFILL_BUDGET_MS) {
+        budgetExhausted = true
+        return
+      }
       const next = queue.shift()
       if (!next) return
       const resource = normalizeTransactionResource(next.transactionType)
@@ -329,18 +361,54 @@ async function backfillTransactionPayloads(
         fetched++
       } catch (err) {
         failed++
-        console.warn(`[qb-reports] ${entityId}: ${next.transactionType} ${next.txnId} (→ ${resource}) failed: ${(err as Error).message}`)
+        // Permanent client errors (4xx other than 401/429) almost always mean
+        // the txn was deleted in QB. Write a failure marker so subsequent
+        // cron runs treat the txnId as cached and don't re-attempt the call;
+        // otherwise the same dead IDs bleed time every hour until the 5-min
+        // Vercel function timeout fires.
+        const isQbHttp = err instanceof QboHttpError
+        const isPermanent = isQbHttp && err.status >= 400 && err.status < 500
+          && err.status !== 401 && err.status !== 429
+        if (isPermanent) {
+          permanentlyFailed++
+          const marker = {
+            _failed: true as const,
+            status: (err as QboHttpError).status,
+            message: (err as QboHttpError).message.slice(0, 1000),
+            intuitTid: (err as QboHttpError).intuitTid,
+            firstFailedAt: now.toISOString(),
+          }
+          try {
+            await db.insert(qbTransactionCache).values({
+              entityId,
+              txnId: next.txnId,
+              resourceType: resource,
+              payload: marker as any,
+              fetchedAt: now,
+            }).onConflictDoUpdate({
+              target: [qbTransactionCache.entityId, qbTransactionCache.txnId],
+              set: { resourceType: resource, payload: marker as any, fetchedAt: now },
+            })
+          } catch (markerErr) {
+            console.warn(`[qb-reports] ${entityId}: failed to persist failure marker for ${next.txnId}: ${(markerErr as Error).message}`)
+          }
+        }
+        console.warn(`[qb-reports] ${entityId}: ${next.transactionType} ${next.txnId} (→ ${resource}) failed${isPermanent ? ' (permanent, marker stored)' : ''}: ${(err as Error).message}`)
       }
 
       const done = fetched + failed
       if (done - logged >= progressEvery && done < total) {
-        console.log(`[qb-reports] ${entityId}: ${label} payloads ${done}/${total} (${fetched} ok, ${failed} failed)`)
+        console.log(`[qb-reports] ${entityId}: ${label} payloads ${done}/${total} (${fetched} ok, ${failed} failed, ${permanentlyFailed} permanent)`)
         logged = done
       }
     }
   })
   await Promise.all(workers)
-  console.log(`[qb-reports] ${entityId}: ${label} payloads done — ${fetched} fetched, ${failed} failed, ${refs.length - toFetch.length} already cached`)
+  abandoned = queue.length
+  if (budgetExhausted) {
+    console.warn(`[qb-reports] ${entityId}: ${label} payloads — time budget exhausted, ${abandoned} txns deferred to next run`)
+  }
+  console.log(`[qb-reports] ${entityId}: ${label} payloads done — ${fetched} fetched, ${failed} failed (${permanentlyFailed} permanent), ${refs.length - toFetch.length} already cached${abandoned ? `, ${abandoned} deferred` : ''}`)
 
   return { fetched, skipped: refs.length - toFetch.length, failed }
 }
