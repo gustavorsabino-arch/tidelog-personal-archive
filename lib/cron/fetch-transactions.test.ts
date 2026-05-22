@@ -1,20 +1,4 @@
-import { test, expect, mock } from 'bun:test'
-
-// Stub modules that require DB / external config so parseTransaction
-// can be imported without a live database.
-mock.module('@/lib/db', () => ({ db: {} }))
-mock.module('@/lib/db/schema', () => ({ wallet: {}, transaction: {} }))
-mock.module('@/lib/helius', () => ({
-  heliusRpc: async () => ({ result: [] }),
-  heliusEnhanced: async () => [],
-  heliusGetAddressTransactions: async () => [],
-  heliusGetTokenAccountsByOwner: async () => [],
-}))
-mock.module('@/lib/transaction-pricing', () => ({
-  hydrateTransactionPrices: async (txs: unknown[]) => ({ transactions: txs }),
-  primeLatestPrices: async () => {},
-}))
-
+import { test, expect } from 'bun:test'
 import { parseTransaction } from './fetch-transactions'
 
 const ORCA = 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE'
@@ -250,6 +234,15 @@ test('parser: ATA-fallback recovers In when userAccount is missing but tokenAcco
   const orcaIn = movesWithAtas.find(m => m.asset === 'ORCA' && m.direction === 'in')
   expect(orcaIn).toBeDefined()
   expect(Math.abs(orcaIn!.qty - 50)).toBeLessThan(1e-6)
+})
+
+// 10. Structural: fetchTransactionsJob accepts beforeSig in opts.
+import type { fetchTransactionsJob } from './fetch-transactions'
+
+test('fetchTransactionsJob accepts beforeSig in opts', () => {
+  type Opts = Parameters<typeof fetchTransactionsJob>[0]
+  const opts: Opts = { full: true, walletAddr: 'x', beforeSig: 'abc' }
+  expect(opts.beforeSig).toBe('abc')
 })
 
 // 9. ATA-fallback: Helius returns userAccount: "" (empty string) on mint-style events.

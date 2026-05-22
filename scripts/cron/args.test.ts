@@ -74,7 +74,7 @@ test('parses --force --from=2026-03', () => {
   }
 })
 
-test('accepts --from=2026-01 (HISTORY_START boundary)', () => {
+test(`accepts --from=${CRON_HISTORY_START} (HISTORY_START boundary)`, () => {
   const res = parse(['fetch-qb-reports', '--force', `--from=${CRON_HISTORY_START}`])
   expect(res.ok).toBe(true)
 })
@@ -91,9 +91,9 @@ test('rejects malformed --from (single-digit month)', () => {
 })
 
 test('rejects --from before HISTORY_START', () => {
-  const res = parse(['fetch-qb-reports', '--force', '--from=2025-12'])
+  const res = parse(['fetch-qb-reports', '--force', '--from=2018-12'])
   expect(res.ok).toBe(false)
-  if (!res.ok) expect(res.error).toContain('>= 2026-01')
+  if (!res.ok) expect(res.error).toContain(`>= ${CRON_HISTORY_START}`)
 })
 
 test('rejects month > 12', () => {
