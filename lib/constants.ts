@@ -6,9 +6,9 @@ export const PROXY_BASE = ''
 export const ENTITIES = ['Opco', 'Foundation', 'Juku', 'Zagreus'] as const
 export const BUDGET_ENTITIES = ['Opco', 'Foundation', 'Zagreus'] as const
 
-export const FOCUS_TOKENS = ['SOL', 'ORCA', 'USDC', 'USDT'] as const
+export const FOCUS_TOKENS = ['SOL', 'ORCA', 'USDC', 'USDT', 'PYUSD', 'USDG'] as const
 
-export const STABLE_TOKENS = new Set(['USDC', 'USDT', 'PYUSD'])
+export const STABLE_TOKENS = new Set(['USDC', 'USDT', 'PYUSD', 'USDG'])
 
 export const TOKEN_COLORS: Record<string, string> = {
   SOL: '#9945ff',
@@ -16,6 +16,7 @@ export const TOKEN_COLORS: Record<string, string> = {
   USDC: '#2775ca',
   USDT: '#26a17b',
   PYUSD: '#0052FF',
+  USDG: '#1a365d',
   ETH: '#627EEA',
   default: '#6b7a8d',
 }
@@ -36,12 +37,14 @@ export const PRICE_MINTS: Record<string, string> = {
   USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
   USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
   PYUSD: '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo',
+  USDG: '2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH',
 }
 
 export const KNOWN_MINTS: Record<string, string> = {
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 'USDC',
   'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 'USDT',
   '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo': 'PYUSD',
+  '2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH': 'USDG',
   'So11111111111111111111111111111111111111112': 'SOL',
   'So11111111111111111111111111111111111111111': 'SOL',
   [ORCA_MINT]: 'ORCA',

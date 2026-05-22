@@ -26,6 +26,8 @@ await db.insert(token).values([
   { symbol: 'ORCA', name: 'Orca', decimals: 6, coinId: 'coingecko:orca' },
   { symbol: 'USDC', name: 'USD Coin', decimals: 6, coinId: 'coingecko:usd-coin' },
   { symbol: 'USDT', name: 'Tether USD', decimals: 6, coinId: 'coingecko:tether' },
+  { symbol: 'PYUSD', name: 'PayPal USD', decimals: 6, coinId: 'coingecko:paypal-usd' },
+  { symbol: 'USDG', name: 'Global Dollar', decimals: 6, coinId: 'coingecko:global-dollar' },
   { symbol: 'ETH', name: 'Ethereum', decimals: 18, coinId: 'coingecko:ethereum' },
   { symbol: 'BTC', name: 'Bitcoin', decimals: 8, coinId: 'coingecko:bitcoin' },
 ]).onConflictDoNothing()
