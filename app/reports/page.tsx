@@ -21,11 +21,12 @@ export default async function ReportsPage() {
   let lastUpdated: string | null = null
   if (existsSync(HTML_PATH)) {
     html = readFileSync(HTML_PATH, 'utf8')
-    // The report embeds its own generation timestamp inside the HTML header
-    // (`Generated <code>ISO_DATE</code>`). We prefer that over filesystem
-    // mtime, which Vercel resets to a fixed 2018 epoch when extracting the
-    // deployment bundle.
-    const m = html.match(/Generated\s*<code>([^<]+)<\/code>/i)
+    // The report embeds its generation timestamp as a hidden meta tag in the
+    // <head>. We prefer that over filesystem mtime, which Vercel resets to a
+    // fixed 2018 epoch when extracting the deployment bundle.
+    const m =
+      html.match(/<meta[^>]*name=["']report-generated-at["'][^>]*content=["']([^"']+)["']/i) ||
+      html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']report-generated-at["']/i)
     if (m && !Number.isNaN(Date.parse(m[1]))) lastUpdated = m[1]
   }
 
