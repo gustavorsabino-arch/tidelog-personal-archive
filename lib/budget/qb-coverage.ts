@@ -3,6 +3,7 @@ import { BUDGET_QBO_ENTITIES, type QboEntity } from '@/lib/qb/config'
 
 import { getBudgetOverviewActualDateRanges, parseQboProfitAndLossReport, type QboProfitAndLossAccountTotals, type QboProfitAndLossReport } from './actuals.ts'
 import { loadBudgetQbMappingState } from './qb-mapping-db.ts'
+import { loadBudgetQbMappingExclusions } from './qb-mapping-exclusion-db.ts'
 import { buildBudgetCoverageState } from './qb-coverage-model.ts'
 import type { BudgetCoverageState, BudgetViewState } from './types.ts'
 
@@ -22,12 +23,16 @@ async function fetchAccountNamesFromCache(entity: QboEntity): Promise<Record<str
 }
 
 export async function fetchBudgetCoverage(view: BudgetViewState): Promise<BudgetCoverageState> {
-  const mapping = await loadBudgetQbMappingState(view.year, true)
+  const [mapping, exclusions] = await Promise.all([
+    loadBudgetQbMappingState(view.year, true),
+    loadBudgetQbMappingExclusions(),
+  ])
   const ranges = getBudgetOverviewActualDateRanges(view)
   const entities = getBudgetQboEntities(view.entity)
 
   const accountTotals: QboProfitAndLossAccountTotals = {}
   const accountNames: Record<string, string> = {}
+  const catalogAccountNumbers = new Set<string>()
 
   await Promise.all(entities.map(async (entity) => {
     const [reports, entityAccountNames] = await Promise.all([
@@ -42,11 +47,20 @@ export async function fetchBudgetCoverage(view: BudgetViewState): Promise<Budget
       }
     }
     for (const [accountNumber, accountName] of Object.entries(entityAccountNames)) {
+      catalogAccountNumbers.add(accountNumber)
       if (!accountNames[accountNumber]) {
         accountNames[accountNumber] = accountName
       }
     }
   }))
 
-  return buildBudgetCoverageState(view, mapping.rows, accountTotals, accountNames, mapping.source)
+  return buildBudgetCoverageState(
+    view,
+    mapping.rows,
+    accountTotals,
+    accountNames,
+    mapping.source,
+    exclusions,
+    catalogAccountNumbers,
+  )
 }
