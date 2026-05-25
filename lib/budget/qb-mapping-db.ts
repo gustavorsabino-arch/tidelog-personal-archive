@@ -1,5 +1,6 @@
+import { inArray } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { budgetQbMapping } from '@/lib/db/schema/budget'
+import { budgetQbMapping, budgetQbMappingExclusion } from '@/lib/db/schema/budget'
 import { normalizeBudgetLineKey } from './catalog'
 import {
   getDefaultBudgetQbMappingState,
@@ -72,6 +73,8 @@ export async function saveBudgetQbMappingRows(rows: BudgetQbMappingRow[]): Promi
   await db.transaction(async (tx) => {
     await tx.delete(budgetQbMapping)
     if (payload.length > 0) {
+      const accountNumbers = payload.map((entry) => entry.qbAccountNumber)
+      await tx.delete(budgetQbMappingExclusion).where(inArray(budgetQbMappingExclusion.qbAccountNumber, accountNumbers))
       await tx.insert(budgetQbMapping).values(payload)
     }
   })

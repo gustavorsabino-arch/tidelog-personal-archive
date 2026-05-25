@@ -316,6 +316,19 @@ export type BudgetDepartmentActualsState = {
   unclassifiedLines: BudgetActualLineSet
 }
 
+export type BudgetQbMappingExclusionRow = {
+  accountNumber: string
+  reason: string
+  updatedAt: string | null
+}
+
+export type BudgetCoverageStaleMapping = {
+  accountNumber: string
+  mappingKey: string
+  mappingLine: string
+  inCatalog: boolean
+}
+
 export type BudgetCoverageAccountEntry = {
   accountNumber: string
   accountName: string | null
@@ -323,6 +336,7 @@ export type BudgetCoverageAccountEntry = {
   pctOfTotal: number
   mappingKey: string | null
   mappingLine: string | null
+  exclusionReason: string | null
 }
 
 export type BudgetCoverageState = {
@@ -334,9 +348,13 @@ export type BudgetCoverageState = {
   totalQbUsd: number
   mappedUsd: number
   unmappedUsd: number
+  excludedUsd: number
   coveragePct: number
   mappedAccounts: BudgetCoverageAccountEntry[]
   unmappedAccounts: BudgetCoverageAccountEntry[]
+  excludedAccounts: BudgetCoverageAccountEntry[]
+  staleMappings: BudgetCoverageStaleMapping[]
+  orphanedMappings: BudgetCoverageStaleMapping[]
 }
 
 export type BudgetReportCell = {

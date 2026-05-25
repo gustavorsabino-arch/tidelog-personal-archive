@@ -831,6 +831,86 @@ export default function BudgetPage() {
     }
   }
 
+  const coverageExportHref = useMemo(() => {
+    if (!coverageState) return null
+    const params = new URLSearchParams({
+      year: String(budgetView.year),
+      entity: budgetView.entity,
+      mode: budgetView.mode,
+      month: String(budgetView.month),
+      rangeStart: String(budgetView.rangeStart),
+      rangeEnd: String(budgetView.rangeEnd),
+    })
+    return `/api/budget/coverage/export?${params.toString()}`
+  }, [coverageState, budgetView])
+
+  async function excludeAccount(accountNumber: string) {
+    const reason = window.prompt(`Reason for excluding account ${accountNumber}:`)?.trim()
+    if (!reason) return
+    try {
+      const response = await fetch('/api/budget/coverage/exclusions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountNumber, reason }),
+      })
+      if (response.status === 409) {
+        const body = await response.json().catch(() => ({}))
+        window.alert(body.error ?? `Account ${accountNumber} is mapped.`)
+        return
+      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      await fetchCoverage()
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Failed to exclude account.')
+    }
+  }
+
+  async function unExcludeAccount(accountNumber: string) {
+    try {
+      const response = await fetch(`/api/budget/coverage/exclusions?accountNumber=${encodeURIComponent(accountNumber)}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      await fetchCoverage()
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Failed to remove exclusion.')
+    }
+  }
+
+  async function drillCoverageAccount(accountNumber: string, accountName: string | null) {
+    setActualDrillTitle(`Account ${accountNumber}${accountName ? ` — ${accountName}` : ''}`)
+    setActualDrillOpen(true)
+    setActualDrillLoading(true)
+    setActualDrillError(null)
+    setActualDrill(null)
+
+    const params = new URLSearchParams({
+      year: String(budgetView.year),
+      entity: budgetView.entity,
+      mode: budgetView.mode,
+      month: String(budgetView.month),
+      rangeStart: String(budgetView.rangeStart),
+      rangeEnd: String(budgetView.rangeEnd),
+      accountNumber,
+    })
+
+    try {
+      const drill = await apiFetch<BudgetActualDrillState>(`/api/budget/coverage/drill?${params.toString()}`)
+      setActualDrill(drill)
+    } catch (error) {
+      setActualDrillError(error instanceof Error ? error.message : 'Failed to load account drill.')
+    } finally {
+      setActualDrillLoading(false)
+    }
+  }
+
+  function unmapStaleAccount({ accountNumber, mappingLine }: { accountNumber: string; mappingLine: string }) {
+    if (!window.confirm(`Unmap account ${accountNumber} from "${mappingLine}"? This removes the mapping row.`)) return
+    setSuggestedMappingAccount(accountNumber)
+    setActiveTab('mapping')
+    if (!mappingState && !mappingLoading) {
+      void loadBudgetMapping()
+    }
+  }
+
   async function saveBudgetMapping(rows: BudgetQbMappingRow[]) {
     setMappingSaving(true)
     setMappingError(null)
@@ -1368,6 +1448,7 @@ export default function BudgetPage() {
             coverage={coverageState}
             loading={coverageLoading}
             error={coverageError}
+            exportHref={coverageExportHref}
             onMapAccount={(accountNumber) => {
               setSuggestedMappingAccount(accountNumber)
               setActiveTab('mapping')
@@ -1375,6 +1456,10 @@ export default function BudgetPage() {
                 void loadBudgetMapping()
               }
             }}
+            onExcludeAccount={(accountNumber) => void excludeAccount(accountNumber)}
+            onUnExcludeAccount={(accountNumber) => void unExcludeAccount(accountNumber)}
+            onUnmapStale={unmapStaleAccount}
+            onDrillAccount={(accountNumber, accountName) => void drillCoverageAccount(accountNumber, accountName)}
           />
         </div>
       )}
