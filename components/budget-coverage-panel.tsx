@@ -160,9 +160,9 @@ export function BudgetCoveragePanel({
       )}
 
       {coverage.excludedAccounts.length > 0 && (
-        <details className="section" style={{ marginTop: 4 }}>
+        <details className="section budget-coverage-collapsible" style={{ marginTop: 4 }}>
           <summary className="section-header">
-            <span className="section-title">Excluded Accounts</span>
+            <span className="section-title"><span className="budget-coverage-chevron" aria-hidden>▸</span>Excluded Accounts</span>
             <span className="budget-section-note">
               {coverage.excludedAccounts.length} account{coverage.excludedAccounts.length === 1 ? '' : 's'} · {fmtUSD(coverage.excludedUsd, 0)} (omitted from coverage %)
             </span>
@@ -203,9 +203,9 @@ export function BudgetCoveragePanel({
       )}
 
       {coverage.staleMappings.length > 0 && (
-        <details className="section" style={{ marginTop: 4 }}>
+        <details className="section budget-coverage-collapsible" style={{ marginTop: 4 }}>
           <summary className="section-header">
-            <span className="section-title">Stale Mappings</span>
+            <span className="section-title"><span className="budget-coverage-chevron" aria-hidden>▸</span>Stale Mappings</span>
             <span className="budget-section-note">
               {coverage.staleMappings.length} mapped account{coverage.staleMappings.length === 1 ? '' : 's'} with no activity · {coverage.orphanedMappings.length} no longer in QB
             </span>

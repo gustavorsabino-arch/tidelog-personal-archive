@@ -203,6 +203,13 @@ td.label { font-family: var(--sans); font-size: 0.78rem }
 .budget-inline-account-input { min-width: 110px; width: 110px }
 .budget-coverage-summary-grid { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 18px }
 
+/* Collapsible coverage sections — Excluded Accounts, Stale Mappings. */
+.budget-coverage-collapsible > summary { cursor: pointer; list-style: none; padding: 4px 6px; margin: 0 -6px; border-radius: 6px; transition: background 0.15s ease }
+.budget-coverage-collapsible > summary::-webkit-details-marker { display: none }
+.budget-coverage-collapsible > summary:hover { background: var(--surface-hover, rgba(0,0,0,0.03)) }
+.budget-coverage-collapsible > summary .budget-coverage-chevron { display: inline-block; margin-right: 8px; transition: transform 0.15s ease; color: var(--muted); font-size: 0.7em }
+.budget-coverage-collapsible[open] > summary .budget-coverage-chevron { transform: rotate(90deg) }
+
 .tab-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px }
 .tab-btn { font-family: var(--mono); font-size: 0.72rem; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; transition: all 0.15s ease; box-shadow: var(--shadow) }
 .tab-btn:hover { color: var(--text); border-color: var(--border2); transform: translateY(-1px) }
@@ -537,9 +544,6 @@ th.sortable:hover { color: var(--accent) }
   .admin-access-form-actions { align-items: flex-start }
   .admin-access-button-row { width: 100%; justify-content: flex-start }
   .admin-access-inline-warning { max-width: 100% }
-  /* Budget admin entry points hidden on mobile/tablet — desktop-only flows. */
-  .budget-admin-only { display: none !important }
-  .budget-admin-fallback { display: inline-block }
 }
 
 @media (max-width: 640px) {
