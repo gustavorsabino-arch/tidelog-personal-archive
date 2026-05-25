@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { fmtUSD } from '@/lib/format'
 import type { BudgetCoverageState } from '@/lib/budget/types'
 
@@ -8,6 +9,11 @@ type BudgetCoveragePanelProps = {
   loading: boolean
   error: string | null
   onMapAccount: (accountNumber: string) => void
+  onExcludeAccount: (accountNumber: string) => void
+  onUnExcludeAccount: (accountNumber: string) => void
+  onUnmapStale: (row: { accountNumber: string; mappingLine: string }) => void
+  onDrillAccount: (accountNumber: string, accountName: string | null) => void
+  exportHref: string | null
 }
 
 export function BudgetCoveragePanel({
@@ -15,7 +21,14 @@ export function BudgetCoveragePanel({
   loading,
   error,
   onMapAccount,
+  onExcludeAccount,
+  onUnExcludeAccount,
+  onUnmapStale,
+  onDrillAccount,
+  exportHref,
 }: BudgetCoveragePanelProps) {
+  const [staleFilter, setStaleFilter] = useState<'all' | 'orphaned'>('all')
+
   if (loading) {
     return (
       <div className="status-bar">
@@ -51,12 +64,19 @@ export function BudgetCoveragePanel({
         <div>
           <span className="section-title">Coverage</span>
           <div className="budget-section-note" style={{ marginTop: 4 }}>
-            Compares positive QuickBooks P&amp;L account totals against the saved QB mapping for the selected scope.
+            Compares positive QuickBooks P&amp;L account totals against the saved QB mapping for the selected scope. Excluded accounts are reported separately and do not affect coverage %.
           </div>
         </div>
-        <span className="budget-section-note">
-          {coverage.mappingSource === 'data-branch' ? 'Using saved mapping' : 'Using default mapping'} · {new Date(coverage.fetchedAt).toLocaleString()}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {exportHref && (
+            <a className="btn-secondary" href={exportHref} download>
+              Export CSV
+            </a>
+          )}
+          <span className="budget-section-note">
+            {coverage.mappingSource === 'data-branch' ? 'Using saved mapping' : 'Using default mapping'} · {new Date(coverage.fetchedAt).toLocaleString()}
+          </span>
+        </div>
       </div>
 
       <div className="cards-grid budget-coverage-summary-grid">
@@ -73,6 +93,11 @@ export function BudgetCoveragePanel({
           <div className="card-value" style={{ color: coverage.unmappedUsd > 0 ? 'var(--red)' : 'var(--green)' }}>
             {fmtUSD(coverage.unmappedUsd, 0)}
           </div>
+          {coverage.excludedUsd > 0 && (
+            <div className="card-bar-label" style={{ marginTop: 4, color: 'var(--muted)', fontSize: '0.7rem' }}>
+              + {fmtUSD(coverage.excludedUsd, 0)} excluded (omitted from %)
+            </div>
+          )}
         </div>
         <div className="card">
           <div className="card-label">Coverage</div>
@@ -105,13 +130,20 @@ export function BudgetCoveragePanel({
               <tbody>
                 {coverage.unmappedAccounts.map((entry) => (
                   <tr key={entry.accountNumber}>
-                    <td style={{ fontFamily: 'var(--mono)' }}>{entry.accountNumber}</td>
+                    <td style={{ fontFamily: 'var(--mono)' }}>
+                      <button type="button" style={{ background: 'none', border: 0, color: 'var(--accent)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit', padding: 0 }} onClick={() => onDrillAccount(entry.accountNumber, entry.accountName)}>
+                        {entry.accountNumber}
+                      </button>
+                    </td>
                     <td className="label" style={{ color: 'var(--muted)' }}>{entry.accountName || '—'}</td>
                     <td className="num">{fmtUSD(entry.amountUsd, 0)}</td>
                     <td className="num" style={{ color: 'var(--muted)' }}>{(entry.pctOfTotal * 100).toFixed(1)}%</td>
-                    <td className="num">
+                    <td className="num" style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                       <button className="btn-secondary" type="button" onClick={() => onMapAccount(entry.accountNumber)}>
                         + Map
+                      </button>
+                      <button className="btn-secondary" type="button" onClick={() => onExcludeAccount(entry.accountNumber)}>
+                        Exclude
                       </button>
                     </td>
                   </tr>
@@ -125,6 +157,96 @@ export function BudgetCoveragePanel({
           <span className="status-dot ok" />
           <span className="status-text">All positive QuickBooks P&amp;L accounts in this scope are mapped to budget lines.</span>
         </div>
+      )}
+
+      {coverage.excludedAccounts.length > 0 && (
+        <details className="section" style={{ marginTop: 4 }}>
+          <summary className="section-header">
+            <span className="section-title">Excluded Accounts</span>
+            <span className="budget-section-note">
+              {coverage.excludedAccounts.length} account{coverage.excludedAccounts.length === 1 ? '' : 's'} · {fmtUSD(coverage.excludedUsd, 0)} (omitted from coverage %)
+            </span>
+          </summary>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Account #</th>
+                  <th>Name</th>
+                  <th className="num">Amount</th>
+                  <th>Reason</th>
+                  <th className="num">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {coverage.excludedAccounts.map((entry) => (
+                  <tr key={entry.accountNumber}>
+                    <td style={{ fontFamily: 'var(--mono)' }}>
+                      <button type="button" style={{ background: 'none', border: 0, color: 'var(--accent)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit', padding: 0 }} onClick={() => onDrillAccount(entry.accountNumber, entry.accountName)}>
+                        {entry.accountNumber}
+                      </button>
+                    </td>
+                    <td className="label" style={{ color: 'var(--muted)' }}>{entry.accountName || '—'}</td>
+                    <td className="num">{fmtUSD(entry.amountUsd, 0)}</td>
+                    <td className="label" style={{ color: 'var(--muted)' }}>{entry.exclusionReason || '—'}</td>
+                    <td className="num">
+                      <button className="btn-secondary" type="button" onClick={() => onUnExcludeAccount(entry.accountNumber)}>
+                        Un-exclude
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+
+      {coverage.staleMappings.length > 0 && (
+        <details className="section" style={{ marginTop: 4 }}>
+          <summary className="section-header">
+            <span className="section-title">Stale Mappings</span>
+            <span className="budget-section-note">
+              {coverage.staleMappings.length} mapped account{coverage.staleMappings.length === 1 ? '' : 's'} with no activity · {coverage.orphanedMappings.length} no longer in QB
+            </span>
+          </summary>
+          <div style={{ padding: '8px 0 12px', display: 'flex', gap: 8 }}>
+            <button type="button" className="btn-secondary" style={{ background: staleFilter === 'all' ? 'var(--accent-bg)' : undefined }} onClick={() => setStaleFilter('all')}>
+              All stale ({coverage.staleMappings.length})
+            </button>
+            <button type="button" className="btn-secondary" style={{ background: staleFilter === 'orphaned' ? 'var(--accent-bg)' : undefined }} onClick={() => setStaleFilter('orphaned')}>
+              Orphaned only ({coverage.orphanedMappings.length})
+            </button>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Account #</th>
+                  <th>Budget Line</th>
+                  <th>In QB?</th>
+                  <th className="num">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(staleFilter === 'orphaned' ? coverage.orphanedMappings : coverage.staleMappings).map((row) => (
+                  <tr key={`${row.accountNumber}:${row.mappingKey}`}>
+                    <td style={{ fontFamily: 'var(--mono)' }}>{row.accountNumber}</td>
+                    <td className="label">{row.mappingLine}</td>
+                    <td className="label" style={{ color: row.inCatalog ? 'var(--muted)' : 'var(--red)' }}>
+                      {row.inCatalog ? 'Yes' : 'No (orphaned)'}
+                    </td>
+                    <td className="num">
+                      <button className="btn-secondary" type="button" onClick={() => onUnmapStale({ accountNumber: row.accountNumber, mappingLine: row.mappingLine })}>
+                        Unmap
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
       )}
 
       <div className="section">
@@ -148,7 +270,11 @@ export function BudgetCoveragePanel({
             <tbody>
               {coverage.mappedAccounts.length > 0 ? coverage.mappedAccounts.map((entry) => (
                 <tr key={entry.accountNumber}>
-                  <td style={{ fontFamily: 'var(--mono)' }}>{entry.accountNumber}</td>
+                  <td style={{ fontFamily: 'var(--mono)' }}>
+                    <button type="button" style={{ background: 'none', border: 0, color: 'var(--accent)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit', padding: 0 }} onClick={() => onDrillAccount(entry.accountNumber, entry.accountName)}>
+                      {entry.accountNumber}
+                    </button>
+                  </td>
                   <td className="label" style={{ color: 'var(--muted)' }}>{entry.accountName || '—'}</td>
                   <td className="label">{entry.mappingLine || entry.mappingKey || '—'}</td>
                   <td className="num">{fmtUSD(entry.amountUsd, 0)}</td>
