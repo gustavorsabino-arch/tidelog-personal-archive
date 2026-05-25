@@ -398,9 +398,9 @@ export default function BudgetPage() {
 
   useEffect(() => {
     if (!canViewBudget || activeTab !== 'coverage') return
-    if (coverageState || coverageLoading) return
+    if (coverageState || coverageLoading || coverageError) return
     void fetchCoverage()
-  }, [activeTab, canViewBudget, coverageLoading, coverageState])
+  }, [activeTab, canViewBudget, coverageLoading, coverageState, coverageError])
 
   // Lazy-load team data when the user activates a tab that needs it. Bootstrap
   // skips team for everyone — only Headcount and Team tabs read team rows, and
