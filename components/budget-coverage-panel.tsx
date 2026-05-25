@@ -223,6 +223,7 @@ export function BudgetCoveragePanel({
               <thead>
                 <tr>
                   <th>Account #</th>
+                  <th>Name</th>
                   <th>Budget Line</th>
                   <th>In QB?</th>
                   <th className="num">Action</th>
@@ -232,6 +233,7 @@ export function BudgetCoveragePanel({
                 {(staleFilter === 'orphaned' ? coverage.orphanedMappings : coverage.staleMappings).map((row) => (
                   <tr key={`${row.accountNumber}:${row.mappingKey}`}>
                     <td style={{ fontFamily: 'var(--mono)' }}>{row.accountNumber}</td>
+                    <td className="label" style={{ color: 'var(--muted)' }}>{row.accountName || '—'}</td>
                     <td className="label">{row.mappingLine}</td>
                     <td className="label" style={{ color: row.inCatalog ? 'var(--muted)' : 'var(--red)' }}>
                       {row.inCatalog ? 'Yes' : 'No (orphaned)'}

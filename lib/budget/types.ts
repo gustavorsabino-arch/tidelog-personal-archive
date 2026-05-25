@@ -324,6 +324,7 @@ export type BudgetQbMappingExclusionRow = {
 
 export type BudgetCoverageStaleMapping = {
   accountNumber: string
+  accountName: string | null
   mappingKey: string
   mappingLine: string
   inCatalog: boolean

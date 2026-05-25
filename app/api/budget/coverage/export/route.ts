@@ -32,7 +32,7 @@ function staleRow(section: string, row: BudgetCoverageStaleMapping): string {
   return [
     section,
     row.accountNumber,
-    '',
+    row.accountName ?? '',
     row.mappingLine,
     '',
     '',

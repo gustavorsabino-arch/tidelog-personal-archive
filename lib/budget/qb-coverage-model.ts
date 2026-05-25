@@ -85,6 +85,7 @@ export function buildBudgetCoverageState(
       if (amount > 0) continue
       staleMappings.push({
         accountNumber,
+        accountName: accountNames[accountNumber] ?? null,
         mappingKey: row.key,
         mappingLine: row.line,
         inCatalog: catalogAccountNumbers.has(accountNumber),
