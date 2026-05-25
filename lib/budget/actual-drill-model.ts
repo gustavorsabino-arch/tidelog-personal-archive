@@ -49,7 +49,11 @@ export function buildBudgetActualDrillTransactionsFromLedgerRows(
     const amountUsd = options.amountTransform ? options.amountTransform(row.amountUsd ?? 0) : row.amountUsd
     if (!isBudgetActualDrillAmountVisible(amountUsd)) continue
 
-    const name = pickBudgetActualDrillNameFromDescription(row.memo) || (row.splitName ? null : row.name)
+    // For Journal Entries, QB GL column[3] holds the per-line Entity name (what
+    // the QB UI shows in the NAME column). Other transaction types may put a
+    // header-level counterparty there, so we still null it when a splitName is set.
+    const trustRowName = !row.splitName || row.transactionType === 'Journal Entry'
+    const name = pickBudgetActualDrillNameFromDescription(row.memo) || (trustRowName ? row.name : null)
     rows.push({
       id: `${options.entity}:${options.accountNumber}:${rowIndex}`,
       entity: options.entity,
