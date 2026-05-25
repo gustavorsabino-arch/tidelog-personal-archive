@@ -396,6 +396,12 @@ export default function BudgetPage() {
     void loadBudgetMapping()
   }, [activeTab, canViewBudget, mappingLoading, mappingState])
 
+  useEffect(() => {
+    if (!canViewBudget || activeTab !== 'coverage') return
+    if (coverageState || coverageLoading) return
+    void fetchCoverage()
+  }, [activeTab, canViewBudget, coverageLoading, coverageState])
+
   // Lazy-load team data when the user activates a tab that needs it. Bootstrap
   // skips team for everyone — only Headcount and Team tabs read team rows, and
   // both tabs are admin-only via getVisibleBudgetTabs.
