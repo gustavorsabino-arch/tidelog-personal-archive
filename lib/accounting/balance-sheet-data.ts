@@ -27,7 +27,10 @@ export async function getBalanceSheetData(entity: QboEntity, asOf: string): Prom
       if (!fallback) throw new Error(`No cached balance sheet on or before ${asOf}`)
       return { bs: parseBsReport(fallback.data), bsAsOf: fallback.asOfDate, bsFetchedAt: fallback.fetchedAt }
     })(),
-    getEntityOnchainSummary(entityId),
+    // Pass the same asOf through so the on-chain side reconciles with the
+    // QuickBooks side at the chosen date — otherwise on-chain silently shows
+    // "today" while QB shows the historical view.
+    getEntityOnchainSummary(entityId, asOf),
   ])
 
   const bs = qbResult.status === 'fulfilled' ? qbResult.value.bs : null

@@ -3,8 +3,8 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { balanceSnapshot } from '@/lib/db/schema/financial'
 import { wallet } from '@/lib/db/schema/reference'
-import { getCurrentPrices } from '@/lib/defillama'
-import { STABLE_TOKENS } from '@/lib/constants'
+import { getCurrentPrices, getHistoricalPrice } from '@/lib/defillama'
+import { FOCUS_TOKENS, STABLE_TOKENS } from '@/lib/constants'
 
 export type OnchainTokenRow = {
   token: string
@@ -22,12 +22,23 @@ export type OnchainSummary = {
 }
 
 /**
- * Aggregate the most recent on-chain balance snapshot for an entity's wallets.
- * Uses whatever the latest snapshot date is per (wallet, token); joins with
- * the latest `price` row per token. Stablecoins fall back to $1 if no price
- * row exists.
+ * Aggregate the on-chain balance snapshot for an entity's wallets.
+ *
+ * - `asOf` null/undefined → latest snapshot per (wallet, token), current prices.
+ * - `asOf = "YYYY-MM-DD"` → latest snapshot per (wallet, token) with date ≤ asOf,
+ *   priced at DefiLlama historical for that date. Mirrors the Overview page's
+ *   as-of behavior so both views reconcile when the same date is picked.
+ *
+ * Stablecoins fall back to $1 if no price row exists.
  */
-export async function getEntityOnchainSummary(entityId: string): Promise<OnchainSummary> {
+export async function getEntityOnchainSummary(
+  entityId: string,
+  asOf?: string | null,
+): Promise<OnchainSummary> {
+  // Strict ISO date — anything else falls back to "latest" so a typo'd query
+  // doesn't 500 the entire page.
+  const asOfDate = asOf && /^\d{4}-\d{2}-\d{2}$/.test(asOf) ? asOf : null
+
   const wallets = await db
     .select({ address: wallet.address })
     .from(wallet)
@@ -38,7 +49,7 @@ export async function getEntityOnchainSummary(entityId: string): Promise<Onchain
   }
   const addresses = wallets.map((w) => w.address)
 
-  // Latest snapshot per (wallet, token)
+  // Latest snapshot per (wallet, token), optionally bounded by date <= asOf.
   const snapshots = await db
     .select({
       walletAddress: balanceSnapshot.walletAddress,
@@ -48,16 +59,25 @@ export async function getEntityOnchainSummary(entityId: string): Promise<Onchain
       rn: sql<number>`(row_number() over (partition by ${balanceSnapshot.walletAddress}, ${balanceSnapshot.token} order by ${balanceSnapshot.date} desc))::int`.as('rn'),
     })
     .from(balanceSnapshot)
-    .where(inArray(balanceSnapshot.walletAddress, addresses))
+    .where(
+      asOfDate
+        ? and(
+            inArray(balanceSnapshot.walletAddress, addresses),
+            sql`${balanceSnapshot.date} <= ${asOfDate}`,
+          )
+        : inArray(balanceSnapshot.walletAddress, addresses),
+    )
 
   const latest = snapshots.filter((r) => r.rn === 1)
   if (latest.length === 0) {
-    return { totalUsd: 0, snapshotDate: null, walletCount: wallets.length, byToken: [] }
+    return { totalUsd: 0, snapshotDate: asOfDate, walletCount: wallets.length, byToken: [] }
   }
 
   const tokenSymbols = Array.from(new Set(latest.map((r) => r.token)))
-  const currentPrices = tokenSymbols.length > 0 ? await getCurrentPrices() : {}
-  const priceByToken = new Map<string, number>(Object.entries(currentPrices))
+  const priceMap = asOfDate
+    ? await getHistoricalPricesAtDate(asOfDate)
+    : (tokenSymbols.length > 0 ? await getCurrentPrices() : {})
+  const priceByToken = new Map<string, number>(Object.entries(priceMap))
 
   // Aggregate by token
   const agg = new Map<string, { amount: number; wallets: Set<string>; latestDate: string }>()
@@ -82,4 +102,22 @@ export async function getEntityOnchainSummary(entityId: string): Promise<Onchain
   byToken.sort((a, b) => b.usd - a.usd)
 
   return { totalUsd, snapshotDate, walletCount: wallets.length, byToken }
+}
+
+/**
+ * DefiLlama historical prices for FOCUS_TOKENS at the given date's midnight
+ * UTC. Same helper pattern as treasury-overview so both views resolve the
+ * exact same prices for any given as-of date.
+ */
+async function getHistoricalPricesAtDate(asOf: string): Promise<Record<string, number>> {
+  const ts = Math.floor(Date.parse(`${asOf}T23:59:59Z`) / 1000)
+  if (!Number.isFinite(ts)) return {}
+  const results = await Promise.all(
+    FOCUS_TOKENS.map(async (sym) => [sym, await getHistoricalPrice(sym, ts)] as const),
+  )
+  const out: Record<string, number> = {}
+  for (const [sym, price] of results) {
+    if (typeof price === 'number') out[sym] = price
+  }
+  return out
 }
