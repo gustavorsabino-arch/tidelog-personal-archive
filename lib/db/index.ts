@@ -51,12 +51,15 @@ if (config.mode === 'local') {
     username: config.username,
     password: getAuthToken,
     ssl: 'require',
-    max: 10,
-    // Keep idle connections alive for ~one IAM-token lifetime. With the prior
-    // 20s value, a 30s pause between user clicks would close every connection
-    // and the next query would pay TLS handshake + IAM auth (~50–150ms) before
-    // running. 14 min keeps the pool warm for a typical browsing session.
-    idle_timeout: 14 * 60,
+    // Sized for Vercel serverless against a small RDS instance
+    // (max_connections=79). Each invocation runs in its own function instance;
+    // a 10-deep pool × N instances trivially overshoots the server cap under
+    // burst traffic, producing FATAL 53300 ("too many connections") errors
+    // across every endpoint. 3 per instance + a 60s idle timeout lets bursts
+    // of cron + user traffic coexist; the cached IAM token (above) keeps
+    // re-handshakes cheap when a connection has to be re-opened.
+    max: 3,
+    idle_timeout: 60,
   })
 }
 
