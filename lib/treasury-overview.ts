@@ -3,22 +3,62 @@ import { db } from '@/lib/db'
 import { balanceSnapshot, wallet } from '@/lib/db/schema'
 import { buildTreasuryOverview } from '@/lib/overview'
 import { toDisplayEntity } from '@/lib/entity'
-import { getCurrentPrices } from '@/lib/defillama'
+import { getCurrentPrices, getHistoricalPrice } from '@/lib/defillama'
+import { FOCUS_TOKENS } from '@/lib/constants'
 import type { BalanceSnapshot, Prices, TreasuryOverview, Wallet } from '@/lib/types'
 
-export async function getTreasuryOverview(entityFilter?: string | null): Promise<TreasuryOverview> {
-  // Fetch wallet roster, latest balance snapshot, and current prices in one
-  // round-trip set. The balance snapshot uses an inline subselect for max(date)
-  // so we don't pay an extra round-trip after the parallel batch.
+/**
+ * Treasury overview, optionally as-of a historical date.
+ *
+ * - `asOf` null/undefined → latest snapshot, current prices (existing behavior).
+ * - `asOf = "YYYY-MM-DD"` → latest snapshot per (wallet, token) where date ≤ asOf,
+ *   priced with DefiLlama historical at that date's midnight UTC. Stablecoins
+ *   stay at $1 via the same code path used everywhere else.
+ *
+ * Coverage caveat: `balance_snapshot` is Solana-only (the EVM cron is a stub),
+ * so EVM wallets render as empty at any historical date. Whirlpool LPs and
+ * on-chain treasury management positions aren't snapshotted either — this
+ * view is SPL spot only.
+ */
+export async function getTreasuryOverview(
+  entityFilter?: string | null,
+  asOf?: string | null,
+): Promise<TreasuryOverview> {
+  // Validate asOf shape before letting it near the SQL builder.
+  const asOfDate = asOf && /^\d{4}-\d{2}-\d{2}$/.test(asOf) ? asOf : null
+
+  // Latest snapshot per (wallet, token) at or before asOf, expressed via
+  // ROW_NUMBER() partitioning — same pattern as lib/accounting/onchain-summary
+  // and lib/treasury-management. We materialize all rows ≤ date, then keep
+  // rn=1. The B-tree index on (date) keeps the scan cheap.
+  const balanceQuery = asOfDate
+    ? db
+        .select({
+          date: balanceSnapshot.date,
+          walletAddress: balanceSnapshot.walletAddress,
+          token: balanceSnapshot.token,
+          amount: balanceSnapshot.amount,
+          fetchedAt: balanceSnapshot.fetchedAt,
+          rn: sql<number>`(row_number() over (partition by ${balanceSnapshot.walletAddress}, ${balanceSnapshot.token} order by ${balanceSnapshot.date} desc))::int`.as('rn'),
+        })
+        .from(balanceSnapshot)
+        .where(sql`${balanceSnapshot.date} <= ${asOfDate}`)
+        .then((rows) => rows.filter((r) => r.rn === 1).map(({ rn: _rn, ...rest }) => rest))
+    : db.select().from(balanceSnapshot).where(
+        eq(balanceSnapshot.date, sql`(select max(${balanceSnapshot.date}) from ${balanceSnapshot})`),
+      )
+
+  const pricesPromise = asOfDate ? getHistoricalPricesAtDate(asOfDate) : getCurrentPrices()
+
   const [walletRows, balanceRows, currentPrices] = await Promise.all([
     db.select().from(wallet).orderBy(wallet.label),
-    db.select().from(balanceSnapshot).where(
-      eq(balanceSnapshot.date, sql`(select max(${balanceSnapshot.date}) from ${balanceSnapshot})`),
-    ),
-    getCurrentPrices(),
+    balanceQuery,
+    pricesPromise,
   ])
 
-  const latestDate = balanceRows[0]?.date ?? null
+  // For historical view, the displayed snapshot date is the chosen asOf even
+  // if no row matches it — finance team wants to know "the report is as of X".
+  const latestDate = asOfDate ?? (balanceRows[0]?.date ?? null)
 
   const balances: BalanceSnapshot['balances'] = {}
   for (const row of balanceRows) {
@@ -54,4 +94,20 @@ export async function getTreasuryOverview(entityFilter?: string | null): Promise
   }))
 
   return buildTreasuryOverview(registry, snapshot, prices, entityFilter ?? null)
+}
+
+// Fetch DefiLlama historical prices for all FOCUS_TOKENS at the given date's
+// midnight UTC. Returns the same Prices shape as getCurrentPrices() so the
+// downstream consumer doesn't care which it got.
+async function getHistoricalPricesAtDate(asOf: string): Promise<Prices> {
+  const ts = Math.floor(Date.parse(`${asOf}T23:59:59Z`) / 1000)
+  if (!Number.isFinite(ts)) return {}
+  const results = await Promise.all(
+    FOCUS_TOKENS.map(async (sym) => [sym, await getHistoricalPrice(sym, ts)] as const),
+  )
+  const out: Prices = {}
+  for (const [sym, price] of results) {
+    if (typeof price === 'number') out[sym] = price
+  }
+  return out
 }

@@ -12,6 +12,7 @@ import type { TreasuryOverview } from '@/lib/types'
 
 export default function OverviewPage() {
   const [entity, setEntity] = useState<string>('')
+  const [asOf, setAsOf] = useState<string>('')  // 'YYYY-MM-DD' or '' for today
   const [drilldownKey, setDrilldownKey] = useState<string | null>(null)
   const [trendModal, setTrendModal] = useState<{
     walletAddr: string
@@ -19,7 +20,10 @@ export default function OverviewPage() {
     scopeTitle: string
     tokens: string[]
   } | null>(null)
-  const swrKey = `/api/treasury/overview${entity ? `?entity=${entity}` : ''}`
+  const swrKey = `/api/treasury/overview?${new URLSearchParams({
+    ...(entity ? { entity } : {}),
+    ...(asOf ? { as_of: asOf } : {}),
+  }).toString()}`
   const { data, isLoading, error: swrError, mutate } = useSWR<TreasuryOverview>(
     swrKey,
     apiFetch<TreasuryOverview>,
@@ -69,6 +73,28 @@ export default function OverviewPage() {
             </button>
           ))}
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>As of</label>
+          <input
+            type="date"
+            className="fsearch"
+            value={asOf}
+            max={new Date().toISOString().slice(0, 10)}
+            onChange={(e) => setAsOf(e.target.value)}
+            style={{ width: 160 }}
+            title="Show balances as of this date (blank = today). Only Solana spot balances are snapshotted — EVM and on-chain treasury positions are not available historically."
+          />
+          {asOf ? (
+            <button
+              className="entity-tab"
+              onClick={() => setAsOf('')}
+              title="Reset to today"
+              style={{ padding: '4px 10px' }}
+            >
+              Today
+            </button>
+          ) : null}
+        </div>
         <button className="fetch-btn" onClick={refresh} disabled={loading}>
           {loading ? '⟳ Loading…' : '⟳ Refresh'}
         </button>
@@ -87,6 +113,7 @@ export default function OverviewPage() {
         </span>
         <span className="status-meta">
           {data?.snapshotDate ? `as of ${data.snapshotDate}` : ''}
+          {asOf ? <span style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 10, background: 'rgba(212,160,23,0.18)', color: '#D4A017', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Historical · Solana spot only</span> : null}
         </span>
       </div>
 

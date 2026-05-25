@@ -7,6 +7,10 @@ export async function GET(req: NextRequest) {
   if (deny) return deny
 
   const entityFilter = req.nextUrl.searchParams.get('entity')
-  const overview = await getTreasuryOverview(entityFilter)
+  const asOfRaw = req.nextUrl.searchParams.get('as_of')
+  // Strict ISO date — anything else is silently ignored so the view falls back
+  // to "latest" rather than 500ing on a typo'd query string.
+  const asOf = asOfRaw && /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : null
+  const overview = await getTreasuryOverview(entityFilter, asOf)
   return NextResponse.json(overview)
 }
