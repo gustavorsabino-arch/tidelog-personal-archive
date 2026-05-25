@@ -50,3 +50,12 @@ export const budgetQbMapping = app.table(
     primaryKey({ columns: [t.qbAccountNumber, t.department, t.lineItem] }),
   ],
 )
+
+export const budgetQbMappingExclusion = app.table(
+  'budget_qb_mapping_exclusion',
+  {
+    qbAccountNumber: text('qb_account_number').primaryKey(),
+    reason: text('reason').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+)
