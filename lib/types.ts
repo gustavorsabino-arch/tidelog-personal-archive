@@ -6,12 +6,15 @@ export interface Wallet {
   chain: string
   entity: string
   accountCode: string | null
-  isExternal: boolean
-  overviewOnly?: boolean
-  includeInOverview?: boolean
+  type: 'internal' | 'external'
+  hiddenFromFinance: boolean
+  needsBackfill: boolean
+  lastFullBackfillAt: string | null
   // Wave 2c — when true, transactions on this wallet are grouped by
   // (token, month) into a single bulk QB journal entry on post.
   isBulkTreasury?: boolean
+  createdAt: string
+  updatedAt: string
   balances?: Record<string, number>
   totalUSD?: number
 }
