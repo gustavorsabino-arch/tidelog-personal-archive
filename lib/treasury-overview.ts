@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { balanceSnapshot, wallet } from '@/lib/db/schema'
 import { buildTreasuryOverview } from '@/lib/overview'
@@ -27,26 +27,21 @@ export async function getTreasuryOverview(
   // Validate asOf shape before letting it near the SQL builder.
   const asOfDate = asOf && /^\d{4}-\d{2}-\d{2}$/.test(asOf) ? asOf : null
 
-  // Latest snapshot per (wallet, token) at or before asOf, expressed via
-  // ROW_NUMBER() partitioning — same pattern as lib/accounting/onchain-summary
-  // and lib/treasury-management. We materialize all rows ≤ date, then keep
-  // rn=1. The B-tree index on (date) keeps the scan cheap.
-  const balanceQuery = asOfDate
-    ? db
-        .select({
-          date: balanceSnapshot.date,
-          walletAddress: balanceSnapshot.walletAddress,
-          token: balanceSnapshot.token,
-          amount: balanceSnapshot.amount,
-          fetchedAt: balanceSnapshot.fetchedAt,
-          rn: sql<number>`(row_number() over (partition by ${balanceSnapshot.walletAddress}, ${balanceSnapshot.token} order by ${balanceSnapshot.date} desc))::int`.as('rn'),
-        })
-        .from(balanceSnapshot)
-        .where(sql`${balanceSnapshot.date} <= ${asOfDate}`)
-        .then((rows) => rows.filter((r) => r.rn === 1).map(({ rn: _rn, ...rest }) => rest))
-    : db.select().from(balanceSnapshot).where(
-        eq(balanceSnapshot.date, sql`(select max(${balanceSnapshot.date}) from ${balanceSnapshot})`),
-      )
+  // Latest snapshot per (wallet, token), bounded by asOf when set. Per-wallet
+  // partitioning is required — filtering by a single global max(date) would
+  // silently drop any wallet whose newest snapshot isn't on that exact date.
+  const balanceQuery = db
+    .select({
+      date: balanceSnapshot.date,
+      walletAddress: balanceSnapshot.walletAddress,
+      token: balanceSnapshot.token,
+      amount: balanceSnapshot.amount,
+      fetchedAt: balanceSnapshot.fetchedAt,
+      rn: sql<number>`(row_number() over (partition by ${balanceSnapshot.walletAddress}, ${balanceSnapshot.token} order by ${balanceSnapshot.date} desc))::int`.as('rn'),
+    })
+    .from(balanceSnapshot)
+    .where(asOfDate ? sql`${balanceSnapshot.date} <= ${asOfDate}` : sql`true`)
+    .then((rows) => rows.filter((r) => r.rn === 1).map(({ rn: _rn, ...rest }) => rest))
 
   const pricesPromise = asOfDate ? getHistoricalPricesAtDate(asOfDate) : getCurrentPrices()
 
