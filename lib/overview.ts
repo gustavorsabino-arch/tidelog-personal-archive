@@ -12,18 +12,13 @@ import type {
 } from '@/lib/types'
 
 export function shouldIncludeInOverview(wallet: Wallet): boolean {
-  // External wallets (counterparties) are excluded by default. They only
-  // appear in Overview if explicitly flagged `overviewOnly` — a rare case for
-  // a tracked non-operational wallet we want visible (e.g. a custody partner).
-  if (wallet.isExternal) return wallet.overviewOnly === true
-  // Internal wallets are included by default; explicit false hides them.
-  return wallet.includeInOverview !== false
+  return wallet.type === 'internal' && !wallet.hiddenFromFinance
 }
 
 export function getWalletTypeLabel(wallet: Wallet): string {
-  if (shouldIncludeInOverview(wallet) && wallet.isExternal) return 'Overview Included'
-  if (wallet.isExternal) return 'External'
-  return 'Operational'
+  if (wallet.type === 'external') return 'External'
+  if (wallet.hiddenFromFinance) return 'Hidden'
+  return 'Internal'
 }
 
 export function extractLatestPrices(priceCache: Record<string, unknown>): Prices {

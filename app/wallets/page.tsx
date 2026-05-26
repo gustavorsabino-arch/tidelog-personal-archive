@@ -95,7 +95,7 @@ export default function WalletsPage() {
   // derived from this so switching tabs doesn't zero them out.
   const preEntityFiltered = useMemo(() => {
     return walletRegistry.filter((w) => {
-      if (!showExternal && w.isExternal) return false
+      if (!showExternal && w.type === 'external') return false
       if (search) {
         const s = search.toLowerCase()
         if (!w.label.toLowerCase().includes(s) &&
@@ -530,7 +530,7 @@ export default function WalletsPage() {
                 ))
               : filtered.map((w) => {
                   const c = ENTITY_COLORS[w.entity] || '#888'
-                  const canBackfill = w.chain === 'SOL' && !w.isExternal
+                  const canBackfill = w.chain === 'SOL' && w.type === 'internal'
                   return (
                     <tr key={w.address}>
                       <td>
