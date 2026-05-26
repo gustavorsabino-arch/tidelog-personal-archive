@@ -14,12 +14,12 @@ import {
 } from '@/lib/qb/force-refresh'
 
 /**
- * Vercel Pro supports up to 900s. The force-refresh job fetches all QB
- * reports + transaction payloads for the requested range and typically takes
- * 5-10 minutes on a well-populated tenant; long from-period ranges (e.g.
- * 2026-01) need the full 900s budget to complete reconcile + completeForceRun.
+ * Vercel Pro caps Serverless Function maxDuration at 800s. The force-refresh
+ * job fetches all QB reports + transaction payloads for the requested range
+ * and typically takes 5-10 minutes on a well-populated tenant; long
+ * from-period ranges (e.g. 2026-01) approach the limit.
  */
-export const maxDuration = 900
+export const maxDuration = 800
 
 export async function GET(req: Request) {
   const { deny } = await requirePermission('admin:manage_data', req)
