@@ -41,7 +41,9 @@ export async function getHistoricalPrice(token: string, timestamp: number): Prom
 export async function getDailyPrices(token: string, startTs: number, days = 365): Promise<Array<{ timestamp: number; price: number }>> {
   const coinId = COIN_IDS[token]
   if (!coinId) return []
-  const span = days * 24 * 60 // minutes
+  // DefiLlama's `span` is the number of data points to return, not minutes.
+  // The endpoint caps at 500 points per request; clamp to avoid silent failure.
+  const span = Math.min(Math.max(1, days), 500)
   const r = await fetch(`https://coins.llama.fi/chart/${coinId}?start=${startTs}&span=${span}&period=1d`, {
     next: { revalidate: 3600 },
   })
