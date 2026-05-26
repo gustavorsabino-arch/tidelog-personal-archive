@@ -5,8 +5,8 @@ import type { WalletRow } from './sol'
 test('ETH stub returns skipped count and logs a warn line', async () => {
   const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
   const wallets: WalletRow[] = [
-    { address: '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', chain: 'ETH', entityId: 'opco', isExternal: false },
-    { address: '0xdac17f958d2ee523a2206206994597c13d831ec7', chain: 'ETH', entityId: 'opco', isExternal: false },
+    { address: '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', chain: 'ETH', entityId: 'opco', type: 'internal' as const, hiddenFromFinance: false },
+    { address: '0xdac17f958d2ee523a2206206994597c13d831ec7', chain: 'ETH', entityId: 'opco', type: 'internal' as const, hiddenFromFinance: false },
   ]
   const res = await fetchEthBalances(wallets)
   expect(res.skipped).toBe(2)

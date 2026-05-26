@@ -12,7 +12,8 @@ test('WalletRow type accepts the columns we read', () => {
     address: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
     chain: 'SOL',
     entityId: 'opco',
-    isExternal: false,
+    type: 'internal' as const,
+    hiddenFromFinance: false,
   }
   expect(row.address).toBeDefined()
 })
