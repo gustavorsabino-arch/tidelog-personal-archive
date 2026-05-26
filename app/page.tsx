@@ -9,6 +9,8 @@ import { OverviewTrendModal } from '@/components/overview-trend-modal'
 import { Skeleton } from '@/components/skeleton'
 import { buildOverviewDrilldown, getSortedActiveTokens } from '@/lib/overview'
 import type { TreasuryOverview } from '@/lib/types'
+import * as XLSX from 'xlsx'
+import { buildOverviewWorkbook } from '@/lib/overview-export'
 
 export default function OverviewPage() {
   const [entity, setEntity] = useState<string>('')
@@ -20,6 +22,7 @@ export default function OverviewPage() {
     scopeTitle: string
     tokens: string[]
   } | null>(null)
+  const [exporting, setExporting] = useState(false)
   const swrKey = `/api/treasury/overview?${new URLSearchParams({
     ...(entity ? { entity } : {}),
     ...(asOf ? { as_of: asOf } : {}),
@@ -31,6 +34,29 @@ export default function OverviewPage() {
   const loading = isLoading
   const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
   const refresh = () => { void mutate() }
+
+  async function handleExport() {
+    let payload: TreasuryOverview | undefined = data
+    if (entity) {
+      setExporting(true)
+      try {
+        const params = new URLSearchParams()
+        if (asOf) params.set('as_of', asOf)
+        payload = await apiFetch<TreasuryOverview>(
+          `/api/treasury/overview${params.toString() ? '?' + params : ''}`
+        )
+      } catch (err) {
+        setExporting(false)
+        alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      setExporting(false)
+    }
+    if (!payload) return
+    const wb = buildOverviewWorkbook(payload)
+    const dateStr = payload.snapshotDate ?? new Date().toISOString().slice(0, 10)
+    XLSX.writeFile(wb, `tidelog-overview-${dateStr}.xlsx`)
+  }
 
   const prices = data?.prices || {}
   const wallets = data?.wallets || []
@@ -97,6 +123,14 @@ export default function OverviewPage() {
         </div>
         <button className="fetch-btn" onClick={refresh} disabled={loading}>
           {loading ? '⟳ Loading…' : '⟳ Refresh'}
+        </button>
+        <button
+          className="fetch-btn"
+          onClick={handleExport}
+          disabled={loading || exporting || wallets.length === 0}
+          title="Download all wallets and balances as an Excel workbook"
+        >
+          {exporting ? '⏳ Exporting…' : '⬇ Export'}
         </button>
       </div>
 
