@@ -59,6 +59,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Wallet already exists', code: 'admin.address_conflict' }, { status: 409 })
   }
 
+  const isInternal = (input.type ?? 'internal') === 'internal'
+  const isHidden = input.hiddenFromFinance ?? false
+  // Every new internal-non-hidden wallet needs a backfill until the cron or
+  // inline backfill below clears the flag.
+  const needsBackfill = isInternal && !isHidden
+
   // Insert
   try {
     await db.insert(wallet).values({
@@ -67,27 +73,27 @@ export async function POST(req: Request) {
       chain: input.chain,
       entityId: input.entityId,
       accountCode: input.accountCode,
-      isExternal: input.isExternal ?? false,
-      overviewOnly: input.overviewOnly ?? false,
-      includeInOverview: input.includeInOverview ?? true,
+      type: input.type ?? 'internal',
+      hiddenFromFinance: input.hiddenFromFinance ?? false,
+      needsBackfill: needsBackfill,
     })
   } catch (err) {
     console.error(`[admin-wallets][POST] db insert failed message=${(err as Error).message}`)
     return NextResponse.json({ error: 'Insert failed', code: 'admin.insert_failed' }, { status: 500 })
   }
-  console.info(`[admin-wallets][POST] inserted address=${address} entity=${input.entityId} isExternal=${input.isExternal ?? false}`)
+  console.info(`[admin-wallets][POST] inserted address=${address} entity=${input.entityId} type=${input.type ?? 'internal'} hidden=${isHidden}`)
 
   await logAudit({
     userId: user.id === 'dev-user' ? null : user.id,
     action: 'wallet.created',
     resourceType: 'wallet',
     resourceId: address,
-    metadata: { label: input.label, chain: input.chain, entityId: input.entityId, isExternal: input.isExternal ?? false, byEmail: user.email },
+    metadata: { label: input.label, chain: input.chain, entityId: input.entityId, type: input.type ?? 'internal', hiddenFromFinance: isHidden, needsBackfill, byEmail: user.email },
   })
 
   // Optional backfill kickoff (SOL non-external only)
   let backfillResult: unknown = undefined
-  const shouldBackfill = input.backfill !== false && input.chain === 'SOL' && !(input.isExternal ?? false)
+  const shouldBackfill = input.backfill !== false && input.chain === 'SOL' && isInternal && !isHidden
   if (shouldBackfill) {
     console.info(`[admin-wallets][POST] backfill kickoff mode=full beforeSig=none`)
     await logAudit({
@@ -113,7 +119,13 @@ export async function POST(req: Request) {
       backfillResult = { ok: false, error: errMsg }
     }
   } else {
-    const reason = input.chain !== 'SOL' ? 'not-sol' : (input.isExternal ? 'external' : 'opt-out')
+    const reason = input.chain !== 'SOL'
+      ? 'not-sol'
+      : !isInternal
+      ? 'external'
+      : isHidden
+      ? 'hidden'
+      : 'opt-out'
     console.info(`[admin-wallets][POST] backfill skipped reason=${reason}`)
   }
 
@@ -127,9 +139,9 @@ export async function POST(req: Request) {
       chain: input.chain,
       entityId: input.entityId,
       accountCode: input.accountCode,
-      isExternal: input.isExternal ?? false,
-      overviewOnly: input.overviewOnly ?? false,
-      includeInOverview: input.includeInOverview ?? true,
+      type: input.type ?? 'internal',
+      hiddenFromFinance: isHidden,
+      needsBackfill,
     },
   }
   if (backfillResult !== undefined) {

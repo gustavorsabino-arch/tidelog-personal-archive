@@ -18,15 +18,14 @@ type NewWalletForm = {
   label: string
   entityId: string
   accountCode: string
-  isExternal: boolean
-  overviewOnly: boolean
-  includeInOverview: boolean
+  type: 'internal' | 'external'
+  hiddenFromFinance: boolean
   backfill: boolean
 }
 
 const EMPTY_NEW_WALLET: NewWalletForm = {
   chain: 'SOL', address: '', label: '', entityId: '', accountCode: '',
-  isExternal: false, overviewOnly: false, includeInOverview: true, backfill: true,
+  type: 'internal' as const, hiddenFromFinance: false, backfill: true,
 }
 
 export default function WalletsPage() {
@@ -56,7 +55,12 @@ export default function WalletsPage() {
   const [deletingWallet, setDeletingWallet] = useState<Wallet | null>(null)
   const [confirmText, setConfirmText] = useState('')
   const [editingWallet, setEditingWallet] = useState<Wallet | null>(null)
-  const [editForm, setEditForm] = useState<{ label: string; accountCode: string }>({ label: '', accountCode: '' })
+  const [editForm, setEditForm] = useState<{
+    label: string
+    accountCode: string
+    type: 'internal' | 'external'
+    hiddenFromFinance: boolean
+  }>({ label: '', accountCode: '', type: 'internal', hiddenFromFinance: false })
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
@@ -95,7 +99,7 @@ export default function WalletsPage() {
   // derived from this so switching tabs doesn't zero them out.
   const preEntityFiltered = useMemo(() => {
     return walletRegistry.filter((w) => {
-      if (!showExternal && w.isExternal) return false
+      if (!showExternal && w.type === 'external') return false
       if (search) {
         const s = search.toLowerCase()
         if (!w.label.toLowerCase().includes(s) &&
@@ -181,7 +185,12 @@ export default function WalletsPage() {
 
   const openEditModal = (w: Wallet) => {
     setEditingWallet(w)
-    setEditForm({ label: w.label, accountCode: w.accountCode ?? '' })
+    setEditForm({
+      label: w.label,
+      accountCode: w.accountCode ?? '',
+      type: w.type,
+      hiddenFromFinance: w.hiddenFromFinance,
+    })
     setEditError(null)
     setError(null)
   }
@@ -205,10 +214,21 @@ export default function WalletsPage() {
     const newAccountCode = editForm.accountCode.trim() === '' ? null : editForm.accountCode.trim()
     const oldAccountCode = editingWallet.accountCode ?? null
     if (newAccountCode !== oldAccountCode) patch.accountCode = newAccountCode
+    if (editForm.type !== editingWallet.type) patch.type = editForm.type
+    if (editForm.hiddenFromFinance !== editingWallet.hiddenFromFinance) patch.hiddenFromFinance = editForm.hiddenFromFinance
 
     if (Object.keys(patch).length === 0) {
       closeEditModal()
       return
+    }
+
+    const becameInternal = editingWallet.type === 'external' && editForm.type === 'internal'
+    const becameUnhidden = editingWallet.hiddenFromFinance === true && editForm.hiddenFromFinance === false
+    if (becameInternal || becameUnhidden) {
+      const ok = window.confirm(
+        `This wallet now needs a full balance + transaction backfill to populate historical data.\n\nSave the change anyway? The "Needs backfill" pill will appear on this wallet's row, and you can run the backfill from there.`
+      )
+      if (!ok) return
     }
 
     setSavingEdit(true); setEditError(null)
@@ -403,22 +423,35 @@ export default function WalletsPage() {
           <div className="admin-access-restricted-section active" style={{ marginTop: 16 }}>
             <div className="section-title">Flags</div>
             <div className="admin-access-department-grid">
-              <label className={`admin-access-department-pill${newWallet.isExternal ? ' selected' : ''}`}>
-                <input type="checkbox" checked={newWallet.isExternal}
-                  onChange={() => setNewWallet((p) => ({ ...p, isExternal: !p.isExternal }))} disabled={creatingWallet} />
-                External counterparty
+              <label className={`admin-access-department-pill${newWallet.type === 'internal' ? ' selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="new-wallet-type"
+                  checked={newWallet.type === 'internal'}
+                  onChange={() => setNewWallet((p) => ({ ...p, type: 'internal' }))}
+                  disabled={creatingWallet}
+                />
+                Internal
               </label>
-              {newWallet.isExternal ? (
-                <label className={`admin-access-department-pill${newWallet.overviewOnly ? ' selected' : ''}`}>
-                  <input type="checkbox" checked={newWallet.overviewOnly}
-                    onChange={() => setNewWallet((p) => ({ ...p, overviewOnly: !p.overviewOnly }))} disabled={creatingWallet} />
-                  Show on overview anyway
-                </label>
-              ) : (
-                <label className={`admin-access-department-pill${newWallet.includeInOverview ? ' selected' : ''}`}>
-                  <input type="checkbox" checked={newWallet.includeInOverview}
-                    onChange={() => setNewWallet((p) => ({ ...p, includeInOverview: !p.includeInOverview }))} disabled={creatingWallet} />
-                  Show on overview
+              <label className={`admin-access-department-pill${newWallet.type === 'external' ? ' selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="new-wallet-type"
+                  checked={newWallet.type === 'external'}
+                  onChange={() => setNewWallet((p) => ({ ...p, type: 'external', hiddenFromFinance: false }))}
+                  disabled={creatingWallet}
+                />
+                External
+              </label>
+              {newWallet.type === 'internal' && (
+                <label className={`admin-access-department-pill${newWallet.hiddenFromFinance ? ' selected' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={newWallet.hiddenFromFinance}
+                    onChange={() => setNewWallet((p) => ({ ...p, hiddenFromFinance: !p.hiddenFromFinance }))}
+                    disabled={creatingWallet}
+                  />
+                  Hidden from finance
                 </label>
               )}
             </div>
@@ -431,7 +464,7 @@ export default function WalletsPage() {
             </div>
           )}
 
-          {newWallet.chain === 'SOL' && !newWallet.isExternal && (
+          {newWallet.chain === 'SOL' && newWallet.type === 'internal' && !newWallet.hiddenFromFinance && (
             <label className="admin-access-department-pill" style={{ marginTop: 12 }}>
               <input type="checkbox" checked={newWallet.backfill}
                 onChange={() => setNewWallet((p) => ({ ...p, backfill: !p.backfill }))} disabled={creatingWallet} />
@@ -530,7 +563,7 @@ export default function WalletsPage() {
                 ))
               : filtered.map((w) => {
                   const c = ENTITY_COLORS[w.entity] || '#888'
-                  const canBackfill = w.chain === 'SOL' && !w.isExternal
+                  const showBackfillButton = w.chain === 'SOL' && w.type === 'internal' && !w.hiddenFromFinance && w.needsBackfill
                   return (
                     <tr key={w.address}>
                       <td>
@@ -557,6 +590,39 @@ export default function WalletsPage() {
                       </td>
                       <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
                         {getWalletTypeLabel(w)}
+                        {w.needsBackfill && (
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            marginLeft: 8,
+                            borderRadius: 999,
+                            background: 'color-mix(in srgb, #d97706 12%, transparent)',
+                            color: '#d97706',
+                            fontSize: '0.65rem',
+                            fontFamily: 'var(--mono)',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em',
+                          }}>
+                            ⚠ Needs backfill
+                          </span>
+                        )}
+                        {w.hiddenFromFinance && (
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            marginLeft: 8,
+                            borderRadius: 999,
+                            background: 'var(--surface)',
+                            color: 'var(--muted)',
+                            fontSize: '0.65rem',
+                            fontFamily: 'var(--mono)',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em',
+                            border: '1px solid var(--border)',
+                          }}>
+                            🔒 Hidden
+                          </span>
+                        )}
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <input
@@ -579,14 +645,14 @@ export default function WalletsPage() {
                           >
                             Edit
                           </button>
-                          {canBackfill && (
+                          {showBackfillButton && (
                             <button
                               className="btn-secondary"
                               onClick={() => backfillWallet(w.address)}
                               disabled={backfillingAddr === w.address}
                               style={{ fontSize: '0.7rem', padding: '2px 8px', marginLeft: 6 }}
                             >
-                              {backfillingAddr === w.address ? 'Backfilling…' : 'Backfill'}
+                              {backfillingAddr === w.address ? 'Backfilling…' : 'Run backfill'}
                             </button>
                           )}
                           <button
@@ -747,6 +813,48 @@ export default function WalletsPage() {
                 placeholder="e.g. 1010-OPCO-USDC"
               />
             </label>
+
+            <div style={{ marginBottom: 14 }}>
+              <span className="budget-scope-label" style={{ display: 'block', marginBottom: 6 }}>Type</span>
+              <div style={{ display: 'flex', gap: 16 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="radio"
+                    name="edit-wallet-type"
+                    checked={editForm.type === 'internal'}
+                    onChange={() => setEditForm(p => ({ ...p, type: 'internal' }))}
+                    disabled={savingEdit}
+                  />
+                  Internal
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="radio"
+                    name="edit-wallet-type"
+                    checked={editForm.type === 'external'}
+                    onChange={() => setEditForm(p => ({ ...p, type: 'external', hiddenFromFinance: false }))}
+                    disabled={savingEdit}
+                  />
+                  External
+                </label>
+              </div>
+            </div>
+            {editForm.type === 'internal' && (
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={editForm.hiddenFromFinance}
+                    onChange={(e) => setEditForm(p => ({ ...p, hiddenFromFinance: e.target.checked }))}
+                    disabled={savingEdit}
+                  />
+                  Hidden from finance views
+                </label>
+                <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: 4 }}>
+                  Wallet stays in counterparty lookup but is excluded from overview, G&amp;L, P&amp;L, FIFO, and ledger.
+                </div>
+              </div>
+            )}
 
             {(() => {
               // Runtime errors (API failures) take precedence; otherwise derive

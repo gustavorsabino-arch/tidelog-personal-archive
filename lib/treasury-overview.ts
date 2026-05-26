@@ -83,9 +83,12 @@ export async function getTreasuryOverview(
     chain: w.chain,
     entity: toDisplayEntity(w.entityId),
     accountCode: w.accountCode,
-    isExternal: w.isExternal,
-    overviewOnly: w.overviewOnly,
-    includeInOverview: w.includeInOverview,
+    type: w.type,
+    hiddenFromFinance: w.hiddenFromFinance,
+    needsBackfill: w.needsBackfill,
+    lastFullBackfillAt: w.lastFullBackfillAt?.toISOString() ?? null,
+    createdAt: w.createdAt.toISOString(),
+    updatedAt: w.updatedAt.toISOString(),
   }))
 
   return buildTreasuryOverview(registry, snapshot, prices, entityFilter ?? null)

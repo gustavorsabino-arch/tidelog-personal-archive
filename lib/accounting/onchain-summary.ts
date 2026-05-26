@@ -42,7 +42,7 @@ export async function getEntityOnchainSummary(
   const wallets = await db
     .select({ address: wallet.address })
     .from(wallet)
-    .where(and(eq(wallet.entityId, entityId), eq(wallet.isExternal, false)))
+    .where(and(eq(wallet.entityId, entityId), eq(wallet.type, 'internal'), eq(wallet.hiddenFromFinance, false)))
 
   if (wallets.length === 0) {
     return { totalUsd: 0, snapshotDate: null, walletCount: 0, byToken: [] }

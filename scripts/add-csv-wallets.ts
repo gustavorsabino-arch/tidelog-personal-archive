@@ -60,20 +60,19 @@ const values = all.map((w) => ({
   chain: 'SOL',
   entityId: 'opco',
   accountCode: null,
-  isExternal: false,
-  overviewOnly: false,
-  includeInOverview: w.includeInOverview,
+  type: 'internal' as const,
+  hiddenFromFinance: !w.includeInOverview,
 }))
 
 const inserted = await db
   .insert(wallet)
   .values(values)
   .onConflictDoNothing()
-  .returning({ address: wallet.address, label: wallet.label, includeInOverview: wallet.includeInOverview })
+  .returning({ address: wallet.address, label: wallet.label, hiddenFromFinance: wallet.hiddenFromFinance })
 
 console.log(`[add-csv-wallets] inserted ${inserted.length} new wallets (skipped ${all.length - inserted.length} duplicates)`)
 for (const w of inserted) {
-  const tag = w.includeInOverview ? '' : '  [hidden from overview]'
+  const tag = w.hiddenFromFinance ? '  [hidden from overview]' : ''
   console.log(`  ${w.address}  ${w.label}${tag}`)
 }
 

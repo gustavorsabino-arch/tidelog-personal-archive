@@ -7,7 +7,8 @@ export type WalletRow = {
   address: string
   chain: string
   entityId: string
-  isExternal: boolean
+  type: 'internal' | 'external'
+  hiddenFromFinance: boolean
 }
 
 export type FetchBalancesResult = {

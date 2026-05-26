@@ -5,6 +5,7 @@ import { wallet, transaction } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { logAudit } from '@/lib/audit'
 import { fetchTransactionsJob } from '@/lib/cron/fetch-transactions'
+import { fetchBalancesJob } from '@/lib/cron/fetch-balances'
 
 export const maxDuration = 300
 
@@ -19,7 +20,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ address
 
   const { address } = await params
 
-  // Look up the wallet
   const [walletRow] = await db.select().from(wallet).where(eq(wallet.address, address)).limit(1)
   if (!walletRow) {
     return NextResponse.json({ error: 'Wallet not found', code: 'admin.wallet_not_found' }, { status: 404 })
@@ -27,11 +27,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ address
   if (walletRow.chain !== 'SOL') {
     return NextResponse.json({ error: `Backfill not supported for ${walletRow.chain}`, code: 'admin.backfill_not_supported_for_chain' }, { status: 400 })
   }
-  if (walletRow.isExternal) {
+  if (walletRow.type === 'external') {
     return NextResponse.json({ error: 'Backfill not supported for external wallets', code: 'admin.backfill_external' }, { status: 400 })
   }
+  if (walletRow.hiddenFromFinance === true) {
+    return NextResponse.json({ error: 'Backfill not supported for hidden wallets (un-hide first)', code: 'admin.backfill_hidden' }, { status: 400 })
+  }
 
-  // Look up oldest tx in DB for this wallet → use its txHash as the resume cursor
+  // Resume cursor: oldest tx in DB → fetch only older txs from chain.
   const [oldest] = await db
     .select({ txHash: transaction.txHash, blockTime: transaction.blockTime })
     .from(transaction)
@@ -51,24 +54,51 @@ export async function POST(req: Request, { params }: { params: Promise<{ address
     metadata: { mode, beforeSig: beforeSig ?? null, byEmail: user.email },
   })
 
-  let result
+  let txResult
   try {
-    result = await fetchTransactionsJob({ full: true, walletAddr: address, beforeSig })
+    txResult = await fetchTransactionsJob({ full: true, walletAddr: address, beforeSig })
   } catch (err) {
     const errMsg = (err as Error).message
-    console.error(`[admin-wallets][BACKFILL] job failed message=${errMsg}`)
-    // Audit the failure so the trail isn't an orphaned 'triggered' with no outcome.
+    console.error(`[admin-wallets][BACKFILL] tx job failed message=${errMsg}`)
     await logAudit({
       userId: user.id === 'dev-user' ? null : user.id,
       action: 'wallet.backfill.failed',
       resourceType: 'wallet',
       resourceId: address,
-      metadata: { mode, beforeSig: beforeSig ?? null, error: errMsg, byEmail: user.email },
+      metadata: { mode, stage: 'transactions', error: errMsg, byEmail: user.email },
     })
     return NextResponse.json({ ok: false, error: errMsg, code: 'admin.backfill_failed' }, { status: 500 })
   }
 
+  let balResult
+  try {
+    balResult = await fetchBalancesJob({ walletAddr: address })
+  } catch (err) {
+    const errMsg = (err as Error).message
+    console.error(`[admin-wallets][BACKFILL] balance job failed message=${errMsg}`)
+    await logAudit({
+      userId: user.id === 'dev-user' ? null : user.id,
+      action: 'wallet.backfill.failed',
+      resourceType: 'wallet',
+      resourceId: address,
+      metadata: { mode, stage: 'balances', error: errMsg, byEmail: user.email },
+    })
+    return NextResponse.json({ ok: false, error: errMsg, code: 'admin.backfill_failed' }, { status: 500 })
+  }
+
+  // Both succeeded — clear the flag and stamp completion.
+  await db.update(wallet)
+    .set({ needsBackfill: false, lastFullBackfillAt: new Date(), updatedAt: new Date() })
+    .where(eq(wallet.address, address))
+
   const elapsedMs = Date.now() - startedAt
+  await logAudit({
+    userId: user.id === 'dev-user' ? null : user.id,
+    action: 'wallet.backfill.completed',
+    resourceType: 'wallet',
+    resourceId: address,
+    metadata: { mode, durationMs: elapsedMs, txResult, balResult, byEmail: user.email },
+  })
   console.info(`[admin-wallets][BACKFILL] done duration=${elapsedMs}ms`)
-  return NextResponse.json(result)
+  return NextResponse.json({ ...txResult, balances: balResult, durationMs: elapsedMs })
 }
