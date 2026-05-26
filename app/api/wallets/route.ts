@@ -17,9 +17,10 @@ export async function GET(req: Request) {
     chain: w.chain,
     entity: toDisplayEntity(w.entityId),
     accountCode: w.accountCode,
-    isExternal: w.isExternal,
-    overviewOnly: w.overviewOnly,
-    includeInOverview: w.includeInOverview,
+    type: w.type,
+    hiddenFromFinance: w.hiddenFromFinance,
+    needsBackfill: w.needsBackfill,
+    lastFullBackfillAt: w.lastFullBackfillAt?.toISOString() ?? null,
     isBulkTreasury: w.isBulkTreasury,
   }))
 
