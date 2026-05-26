@@ -1,6 +1,7 @@
 import type { CachedTransactionPayload } from '../qb/cache-reads.ts'
 import { getQboRealmId, type QboEntity } from '../qb/config.ts'
 import { enrichGlRowsWithClass } from '../qb/gl-class-enrich.ts'
+import { enrichGlRowsWithName } from '../qb/gl-name-enrich.ts'
 
 import {
   buildBudgetActualDrillTransactionsFromLedgerRows,
@@ -93,11 +94,21 @@ export async function loadBudgetActualLedgerTransactions(
   //
   // Fail-open: a cache read failure (e.g. running in a test without a DB)
   // returns the parsed rows unchanged, preserving today's behavior.
-  const enrichedRows = options.accountId
+  const classEnrichedRows = options.accountId
     ? await enrichGlRowsWithClass(parsedRows, options.entity, options.accountId, {
         payloadMap: options.preloadedPayloadMap,
       })
     : parsedRows
+
+  // Then enrich `name` from the cached payload — QB GL doesn't reliably
+  // populate the Name column for JEs (per-line Entity.EntityRef.name lives
+  // on the JE body) or for Bills (vendor lives at VendorRef.name on the
+  // body). Reuses the same payloadMap so no extra DB roundtrip.
+  const enrichedRows = options.accountId
+    ? await enrichGlRowsWithName(classEnrichedRows, options.entity, options.accountId, {
+        payloadMap: options.preloadedPayloadMap,
+      })
+    : classEnrichedRows
 
   const directTransactions = buildBudgetActualDrillTransactionsFromLedgerRows(enrichedRows, {
     entity: options.entity,
