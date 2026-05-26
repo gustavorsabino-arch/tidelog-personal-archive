@@ -401,11 +401,15 @@ async function processWallet(
  * for one-shot historical backfills; don't use on the recurring cron schedule.
  */
 export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: string; beforeSig?: string } = {}) {
+  const internalFilter = and(
+    eq(wallet.type, 'internal'),
+    eq(wallet.hiddenFromFinance, false),
+  )
   const wallets = opts.walletAddr
-    ? await db.select().from(wallet).where(and(eq(wallet.address, opts.walletAddr), eq(wallet.isExternal, false)))
-    : await db.select().from(wallet).where(eq(wallet.isExternal, false))
+    ? await db.select().from(wallet).where(and(eq(wallet.address, opts.walletAddr), internalFilter))
+    : await db.select().from(wallet).where(internalFilter)
   if (opts.walletAddr && wallets.length === 0) {
-    throw new Error(`wallet not found in registry (or is external): ${opts.walletAddr}`)
+    throw new Error(`wallet not found in registry (or is external/hidden): ${opts.walletAddr}`)
   }
   const results: Record<string, WalletResult> = {}
   let totalInserted = 0
