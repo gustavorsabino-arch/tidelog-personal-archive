@@ -180,11 +180,20 @@ export interface GainLossSummary {
   shortTermGain: number
   longTermGain: number
   dispositions: number
+  tokens: string[]
+}
+
+export interface GainLossPagination {
+  page: number
+  pageSize: number
+  totalRows: number
+  hasMore: boolean
 }
 
 export interface GainLossResponse {
   gainLoss: GainLossEntry[]
   summary: GainLossSummary
+  pagination: GainLossPagination
 }
 
 export interface TreasuryManagementProtocolError {
