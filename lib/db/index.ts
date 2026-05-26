@@ -52,13 +52,11 @@ if (config.mode === 'local') {
     password: getAuthToken,
     ssl: 'require',
     // Sized for Vercel serverless against a small RDS instance
-    // (max_connections=79). Each invocation runs in its own function instance;
-    // a 10-deep pool × N instances trivially overshoots the server cap under
-    // burst traffic, producing FATAL 53300 ("too many connections") errors
-    // across every endpoint. 3 per instance + a 60s idle timeout lets bursts
-    // of cron + user traffic coexist; the cached IAM token (above) keeps
-    // re-handshakes cheap when a connection has to be re-opened.
-    max: 3,
+    // (max_connections=79). 6 per instance × ~6 concurrent instances under
+    // burst leaves ~43 connections free for user traffic; still bounded well
+    // under the 79 cap that previously produced FATAL 53300 ("too many
+    // connections") cascades when set to 10.
+    max: 6,
     idle_timeout: 60,
   })
 }

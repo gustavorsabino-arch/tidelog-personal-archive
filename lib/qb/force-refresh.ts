@@ -136,6 +136,32 @@ export async function completeForceRun(runId: string, result: unknown): Promise<
 }
 
 /**
+ * Persist progress for one entity into the run's `result.entities` map.
+ * Called after each entity finishes (including reconcile) so partial progress
+ * is visible/recoverable even if the function dies before completing all
+ * entities or before completeForceRun lands.
+ */
+export async function updateForceRunEntityProgress(
+  runId: string,
+  entityId: string,
+  entityResult: unknown,
+): Promise<void> {
+  const [current] = await db
+    .select({ result: qbForceRefreshRun.result })
+    .from(qbForceRefreshRun)
+    .where(eq(qbForceRefreshRun.id, runId))
+    .limit(1)
+  if (!current) return
+  const base = (current.result as Record<string, unknown> | null) ?? {}
+  const entities = { ...((base.entities as Record<string, unknown> | undefined) ?? {}) }
+  entities[entityId] = entityResult
+  await db
+    .update(qbForceRefreshRun)
+    .set({ result: { ...base, entities } as any })
+    .where(and(eq(qbForceRefreshRun.id, runId), eq(qbForceRefreshRun.status, 'running')))
+}
+
+/**
  * Transition to 'failed' only if still 'running'. If a concurrent cancel
  * moved the row to 'canceled', keep that state — the user's intent wins.
  */
@@ -147,6 +173,24 @@ export async function failForceRun(runId: string, error: string): Promise<void> 
 }
 
 export async function listRecentForceRuns(limit = 20): Promise<ForceRefreshRun[]> {
+  // Sweep stale 'running' rows before returning. Without this, a run whose
+  // function was killed by Vercel before it could call completeForceRun
+  // would sit at status='running' until the next POST triggered the sweep
+  // inside createForceRun. Calling the same sweep here makes the admin page
+  // self-heal on load.
+  const staleCutoff = new Date(Date.now() - FORCE_REFRESH_STALE_MS)
+  await db
+    .update(qbForceRefreshRun)
+    .set({
+      status: 'failed',
+      finishedAt: new Date(),
+      error: 'timed out (function killed before completion)',
+    })
+    .where(and(
+      eq(qbForceRefreshRun.status, 'running'),
+      lt(qbForceRefreshRun.startedAt, staleCutoff),
+    ))
+
   const rows = await db
     .select()
     .from(qbForceRefreshRun)

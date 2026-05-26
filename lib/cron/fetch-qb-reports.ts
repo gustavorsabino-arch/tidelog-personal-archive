@@ -544,6 +544,13 @@ export async function fetchQbReportsJob(
      * When it resolves true the job aborts with ForceRefreshCanceledError.
      */
     shouldAbort?: () => Promise<boolean>
+    /**
+     * Called immediately after each entity finishes (including reconcile).
+     * Used by the force-refresh route to persist per-entity progress so
+     * partial completion is observable even if the function dies before
+     * all entities finish.
+     */
+    onEntityProgress?: (entityId: string, entityResult: unknown) => Promise<void>
   },
 ): Promise<{ ok: boolean; [k: string]: unknown }> {
   const now = new Date()
@@ -735,6 +742,12 @@ export async function fetchQbReportsJob(
       payloads: { fetched: payloadsFetched, skipped: payloadsSkipped, failed: payloadsFailed },
       pruned: { reports: reportsPruned, txns: txnsPruned },
       failures,
+    }
+
+    if (opts?.onEntityProgress) {
+      await opts.onEntityProgress(entityId, results[entityId]).catch((err) => {
+        console.warn(`[qb-reports] ${entityId}: onEntityProgress callback failed: ${(err as Error).message}`)
+      })
     }
   }
 

@@ -10,14 +10,16 @@ import {
   isRunCanceled,
   listRecentForceRuns,
   parseFromPeriod,
+  updateForceRunEntityProgress,
 } from '@/lib/qb/force-refresh'
 
 /**
- * Vercel Pro supports up to 800s. The force-refresh job fetches all QB
+ * Vercel Pro supports up to 900s. The force-refresh job fetches all QB
  * reports + transaction payloads for the requested range and typically takes
- * 5-10 minutes on a well-populated tenant.
+ * 5-10 minutes on a well-populated tenant; long from-period ranges (e.g.
+ * 2026-01) need the full 900s budget to complete reconcile + completeForceRun.
  */
-export const maxDuration = 800
+export const maxDuration = 900
 
 export async function GET(req: Request) {
   const { deny } = await requirePermission('admin:manage_data', req)
@@ -86,6 +88,8 @@ export async function POST(req: Request) {
         force: true,
         forceFrom: fromPeriod,
         shouldAbort: () => isRunCanceled(run.id),
+        onEntityProgress: (entityId, entityResult) =>
+          updateForceRunEntityProgress(run.id, entityId, entityResult),
       })
       await completeForceRun(run.id, result)
       await logAudit({
