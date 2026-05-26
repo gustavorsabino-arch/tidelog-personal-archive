@@ -23,6 +23,7 @@ function makeWallet(partial: Partial<TreasuryOverviewWallet> & {
 
 const fixture: TreasuryOverview = {
   snapshotDate: '2026-05-26',
+  fetchedAt: null,
   wallets: [
     makeWallet({
       address: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
