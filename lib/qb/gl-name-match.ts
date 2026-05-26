@@ -86,6 +86,7 @@ function findEntityName(
   resourceType: string,
   qbAccountId: string,
   expectedAmount: number | null,
+  skipMatches: number,
 ): string | null {
   const wrapperKey = RESOURCE_TYPE_TO_WRAPPER[resourceType]
   if (!wrapperKey) return null
@@ -95,24 +96,37 @@ function findEntityName(
 
   // For JEs, the per-line Entity.EntityRef.name is the right source.
   // Two-phase match: account+amount first, then account-only fallback.
+  // skipMatches lets multiple GL rows on the same (account, amount) map to
+  // distinct payload lines — without it, all such rows would collapse onto
+  // the first matching line and show the same entity name.
   if (Array.isArray(lines)) {
     if (expectedAmount !== null) {
+      let matchCount = 0
       for (const line of lines) {
         const detail = getLineDetail(line)
         if (!detail) continue
         if (detail.AccountRef?.value !== qbAccountId) continue
         const lineAmount = toNumber(line.Amount)
         if (lineAmount === null || !amountsMatch(lineAmount, expectedAmount)) continue
-        const name = pickLineEntityName(line)
-        if (name) return name
+        if (matchCount === skipMatches) {
+          const name = pickLineEntityName(line)
+          if (name) return name
+          break
+        }
+        matchCount++
       }
     }
+    let matchCount = 0
     for (const line of lines) {
       const detail = getLineDetail(line)
       if (!detail) continue
       if (detail.AccountRef?.value !== qbAccountId) continue
-      const name = pickLineEntityName(line)
-      if (name) return name
+      if (matchCount === skipMatches) {
+        const name = pickLineEntityName(line)
+        if (name) return name
+        break
+      }
+      matchCount++
     }
   }
 
@@ -132,7 +146,23 @@ export function enrichRowsWithNameFromPayloads(
   qbAccountId: string,
   payloadMap: ReadonlyMap<string, CachedTransactionPayload>,
 ): ParsedQboGeneralLedgerRow[] {
-  return rows.map((row) => {
+  // Pre-compute each row's position within its (txnId, amount) group. When
+  // a single JE has multiple lines on the same account at the same amount
+  // (e.g. 4 distinct employees getting $1000 Wellness Bonus on account
+  // 60330), the GL emits N rows that all match the same payload predicate.
+  // Without per-group positions, every row collapses to the first matching
+  // line and shows the same entity. Positions let the Nth GL row map to
+  // the Nth matching payload line.
+  const groupCounts = new Map<string, number>()
+  const rowPositions = rows.map((row) => {
+    if (!row.txnId) return 0
+    const key = `${row.txnId}:${row.amountUsd ?? 'null'}`
+    const pos = groupCounts.get(key) ?? 0
+    groupCounts.set(key, pos + 1)
+    return pos
+  })
+
+  return rows.map((row, i) => {
     if (!row.txnId) return { ...row }
     const record = payloadMap.get(row.txnId)
     if (!record) return { ...row }
@@ -142,6 +172,7 @@ export function enrichRowsWithNameFromPayloads(
         record.resourceType,
         qbAccountId,
         row.amountUsd,
+        rowPositions[i],
       )
       if (name) return { ...row, name }
       return { ...row }

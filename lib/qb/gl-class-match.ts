@@ -70,6 +70,7 @@ function findLineClass(
   resourceType: string,
   qbAccountId: string,
   expectedAmount: number | null,
+  skipMatches: number,
 ): string | null {
   const wrapperKey = RESOURCE_TYPE_TO_WRAPPER[resourceType]
   if (!wrapperKey) return null
@@ -78,28 +79,38 @@ function findLineClass(
   const lines = wrapped?.Line
   if (!Array.isArray(lines)) return null
 
-  // Pass 1 — require account AND amount match.
+  // Pass 1 — require account AND amount match. skipMatches positions the
+  // matcher onto the Nth qualifying line so multi-line same-(account,amount)
+  // JEs don't collapse every GL row onto the first line's class.
   if (expectedAmount !== null) {
+    let matchCount = 0
     for (const line of lines) {
       const detail = getLineDetail(line)
       if (!detail) continue
       if (detail.AccountRef?.value !== qbAccountId) continue
       const lineAmount = toNumber(line.Amount)
       if (lineAmount === null || !amountsMatch(lineAmount, expectedAmount)) continue
-      const className = detail.ClassRef?.name?.trim()
-      if (className) return className
-      // Account+amount matched but no class — keep looking in case a
-      // duplicate-account/amount line later carries the class.
+      if (matchCount === skipMatches) {
+        const className = detail.ClassRef?.name?.trim()
+        if (className) return className
+        break
+      }
+      matchCount++
     }
   }
 
-  // Pass 2 — account match only.
+  // Pass 2 — account match only, same positional semantics.
+  let matchCount = 0
   for (const line of lines) {
     const detail = getLineDetail(line)
     if (!detail) continue
     if (detail.AccountRef?.value !== qbAccountId) continue
-    const className = detail.ClassRef?.name?.trim()
-    if (className) return className
+    if (matchCount === skipMatches) {
+      const className = detail.ClassRef?.name?.trim()
+      if (className) return className
+      break
+    }
+    matchCount++
   }
 
   return null
@@ -117,7 +128,19 @@ export function enrichRowsWithClassFromPayloads(
   qbAccountId: string,
   payloadMap: ReadonlyMap<string, CachedTransactionPayload>,
 ): ParsedQboGeneralLedgerRow[] {
-  return rows.map((row) => {
+  // Per-(txnId, amount) positions so multi-line same-(account,amount) JEs
+  // map each GL row onto a distinct payload line. See parallel reasoning
+  // in `gl-name-match.ts`.
+  const groupCounts = new Map<string, number>()
+  const rowPositions = rows.map((row) => {
+    if (!row.txnId) return 0
+    const key = `${row.txnId}:${row.amountUsd ?? 'null'}`
+    const pos = groupCounts.get(key) ?? 0
+    groupCounts.set(key, pos + 1)
+    return pos
+  })
+
+  return rows.map((row, i) => {
     if (row.className || !row.txnId) return { ...row }
     const record = payloadMap.get(row.txnId)
     if (!record) return { ...row }
@@ -128,6 +151,7 @@ export function enrichRowsWithClassFromPayloads(
         record.resourceType,
         qbAccountId,
         row.amountUsd,
+        rowPositions[i],
       )
       if (className) return { ...row, className }
       return { ...row }
