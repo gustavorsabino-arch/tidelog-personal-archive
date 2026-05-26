@@ -61,7 +61,7 @@ function buildSheet(wallets: TreasuryOverviewWallet[]): XLSX.WorkSheet {
   for (let i = 0; i < rows.length; i++) {
     const qtyRef = XLSX.utils.encode_cell({ c: 3, r: i + 1 })
     const usdRef = XLSX.utils.encode_cell({ c: 4, r: i + 1 })
-    if (ws[qtyRef]) ws[qtyRef].z = '#,##0.######'
+    if (ws[qtyRef]) ws[qtyRef].z = '#,##0.00'
     if (ws[usdRef]) ws[usdRef].z = '#,##0.00'
   }
 

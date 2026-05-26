@@ -148,3 +148,10 @@ test('Asset Qty and USD Value cells are stored as numbers (so Excel SUM works)',
   expect(ws['D2'].t).toBe('n')
   expect(ws['E2'].t).toBe('n')
 })
+
+test('Asset Qty and USD Value both render with exactly 2 decimals', () => {
+  const wb = buildOverviewWorkbook(fixture)
+  const ws = wb.Sheets.All
+  expect(ws['D2'].z).toBe('#,##0.00')
+  expect(ws['E2'].z).toBe('#,##0.00')
+})
