@@ -88,6 +88,7 @@ export async function POST(req: Request) {
         force: true,
         forceFrom: fromPeriod,
         shouldAbort: () => isRunCanceled(run.id),
+        accountScope: 'budget-mapped',
         onEntityProgress: (entityId, entityResult) =>
           updateForceRunEntityProgress(run.id, entityId, entityResult),
       })

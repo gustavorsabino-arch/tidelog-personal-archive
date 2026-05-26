@@ -66,6 +66,16 @@ type ReportSpec = {
   isClosed: boolean
 }
 
+/**
+ * Which GL accounts the run is responsible for.
+ * - 'pnl-typed': all P&L-typed accounts + budget-mapped (default — powers
+ *   the P&L drill on /pnl). Used by the daily cron.
+ * - 'budget-mapped': budget-mapped accounts only. Used by force-refresh so
+ *   a finance-triggered refresh stays under Vercel's 800s budget; non-budget
+ *   P&L accounts continue to be refreshed by the daily cron.
+ */
+export type QbAccountScope = 'pnl-typed' | 'budget-mapped'
+
 type MonthRange = { periodStart: string; periodEnd: string; isClosed: boolean }
 
 function iso(date: Date): string {
@@ -102,7 +112,11 @@ function entityIdToQboEntity(id: string): QboEntity | null {
   return isQboEntity(cap) ? cap : null
 }
 
-async function buildSpecsForEntity(entityId: string, now: Date = new Date()): Promise<ReportSpec[]> {
+async function buildSpecsForEntity(
+  entityId: string,
+  now: Date = new Date(),
+  accountScope: QbAccountScope = 'pnl-typed',
+): Promise<ReportSpec[]> {
   const months = enumerateMonths(now)
   const today = iso(now)
 
@@ -145,7 +159,10 @@ async function buildSpecsForEntity(entityId: string, now: Date = new Date()): Pr
     accountType: qbAccountCatalog.accountType,
   }).from(qbAccountCatalog).where(eq(qbAccountCatalog.entityId, entityId))
 
-  const accounts = buildGlAccountList(budgetAccountNumbers, catalog)
+  const allAccounts = buildGlAccountList(budgetAccountNumbers, catalog)
+  const accounts = accountScope === 'budget-mapped'
+    ? allAccounts.filter((a) => new Set(budgetAccountNumbers).has(a.accountNumber))
+    : allAccounts
   if (accounts.length === 0) return specs
 
   for (const { accountNumber, accountId } of accounts) {
@@ -444,6 +461,7 @@ async function reconcileReportCache(
   entityId: string,
   forceFromDate: string,
   writtenKeys: Set<string>,
+  glAccountScope: Set<string> | null = null,
 ): Promise<number> {
   const rows = await db
     .select({
@@ -460,7 +478,17 @@ async function reconcileReportCache(
     ))
 
   const orphanIds = rows
-    .filter((r) => !writtenKeys.has(cacheKey(r.reportType, r.periodStart, r.periodEnd, r.filterParams)))
+    .filter((r) => {
+      // GL rows outside the scope of this run were never refreshed, so
+      // missing-from-writtenKeys doesn't mean "QB no longer returns them".
+      // Preserve them — they'll be reconciled on a later run whose scope
+      // includes them.
+      if (glAccountScope !== null && r.reportType === 'general_ledger') {
+        const acctNum = (r.filterParams as Record<string, unknown> | null)?.accountNumber
+        if (typeof acctNum !== 'string' || !glAccountScope.has(acctNum)) return false
+      }
+      return !writtenKeys.has(cacheKey(r.reportType, r.periodStart, r.periodEnd, r.filterParams))
+    })
     .map((r) => r.id)
 
   if (orphanIds.length === 0) return 0
@@ -551,6 +579,13 @@ export async function fetchQbReportsJob(
      * all entities finish.
      */
     onEntityProgress?: (entityId: string, entityResult: unknown) => Promise<void>
+    /**
+     * Which GL accounts to refresh. 'pnl-typed' (default) is the full set the
+     * daily cron uses. 'budget-mapped' narrows GL fetching to budget-mapped
+     * accounts only so force-refresh fits under Vercel's 800s budget.
+     * Non-GL specs (BS, P&L) always run regardless of scope.
+     */
+    accountScope?: QbAccountScope
   },
 ): Promise<{ ok: boolean; [k: string]: unknown }> {
   const now = new Date()
@@ -561,6 +596,7 @@ export async function fetchQbReportsJob(
   const forceFromDate = opts?.force
     ? `${opts.forceFrom ?? `${HISTORY_START_YEAR}-01`}-01`
     : null
+  const accountScope: QbAccountScope = opts?.accountScope ?? 'pnl-typed'
 
   if (forceFromDate) {
     console.log(`[qb-reports] FORCE: upsert + reconcile for period_start >= ${forceFromDate}`)
@@ -599,7 +635,17 @@ export async function fetchQbReportsJob(
 
     // Build specs after the catalog refresh so GL specs can resolve account
     // numbers → QB internal IDs from the freshly-populated qb_account_catalog.
-    const specs = await buildSpecsForEntity(entityId, now)
+    const specs = await buildSpecsForEntity(entityId, now, accountScope)
+
+    // Track GL account numbers in this run's scope. Used by reconcile so we
+    // only delete orphans within scope — non-scope GL cache rows stay intact.
+    const glAccountNumbersInScope = new Set<string>()
+    for (const spec of specs) {
+      if (spec.reportType === 'general_ledger') {
+        const acctNum = (spec.filterParams as Record<string, unknown>)?.accountNumber
+        if (typeof acctNum === 'string') glAccountNumbersInScope.add(acctNum)
+      }
+    }
 
     // Level 1: batch-load every cached row for this entity into an in-memory
     // Map. Replaces the previous per-spec query (one DB roundtrip per spec)
@@ -721,7 +767,8 @@ export async function fetchQbReportsJob(
     let reportsPruned = 0
     let txnsPruned = 0
     if (forceFromDate !== null && failures.length === 0) {
-      reportsPruned = await reconcileReportCache(entityId, forceFromDate, writtenKeys)
+      const reconcileScope = accountScope === 'budget-mapped' ? glAccountNumbersInScope : null
+      reportsPruned = await reconcileReportCache(entityId, forceFromDate, writtenKeys, reconcileScope)
       txnsPruned = await reconcileTxnCache(entityId)
       if (reportsPruned > 0 || txnsPruned > 0) {
         console.log(`[qb-reports] ${entityId}: reconciled — pruned ${reportsPruned} orphan report rows, ${txnsPruned} orphan txn payloads`)
