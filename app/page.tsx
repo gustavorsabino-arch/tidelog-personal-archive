@@ -134,7 +134,7 @@ export default function OverviewPage() {
         {/* Total Portfolio */}
         <div className="card" style={{ borderTop: '3px solid var(--accent)' }}>
           <div className="card-label">Total Portfolio</div>
-          <div className="card-value blue">{fmtUSD(grandTotal, 0)}</div>
+          <div className="card-value blue">{fmtUSD(grandTotal)}</div>
           <div className="card-sub">
             {wallets.length} wallets · {Object.keys(entityTotals).length} entities
           </div>
@@ -148,7 +148,7 @@ export default function OverviewPage() {
             onClick={() => toggleDrilldown('stables')}
           >
             <div className="card-label">Stablecoins <span style={{ color: '#2775CA', fontSize: '0.6rem' }}>▾</span></div>
-            <div className="card-value">{fmtUSD(stablesUSD, 0)}</div>
+            <div className="card-value">{fmtUSD(stablesUSD)}</div>
             <div className="card-sub">
               {pct(stablesUSD)}%{stableSummary ? ` · ${stableSummary}` : ' · No stable balances'}
             </div>
@@ -172,7 +172,7 @@ export default function OverviewPage() {
                 onClick={() => toggleDrilldown(`token:${token}`)}
               >
                 <div className="card-label">{token} <span style={{ color, fontSize: '0.6rem' }}>▾</span></div>
-                <div className="card-value">{fmtUSD(usd, 0)}</div>
+                <div className="card-value">{fmtUSD(usd)}</div>
                 <div className="card-sub">
                   {pct(usd)}% · {fmtNum(amount, token === 'SOL' ? 2 : 0)} {token} · ${typeof price === 'number' ? price.toFixed(token === 'ORCA' ? 4 : 2) : '—'}
                 </div>
@@ -238,7 +238,7 @@ export default function OverviewPage() {
               {/* Total */}
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8 }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '1.25rem', fontWeight: 600 }}>
-                  {fmtUSD(et.totalUSD, 0)}
+                  {fmtUSD(et.totalUSD)}
                 </span>
                 <button
                   type="button"
@@ -291,7 +291,7 @@ export default function OverviewPage() {
                         {fmtNum(amt, t === 'SOL' ? 4 : 2)}
                       </span>
                       <span style={{ fontFamily: 'var(--mono)', fontSize: '0.7rem', color: 'var(--accent)', minWidth: 72, textAlign: 'right' }}>
-                        {fmtUSD(usd, 0)}
+                        {fmtUSD(usd)}
                       </span>
                       <span style={{ fontFamily: 'var(--mono)', fontSize: '0.62rem', color: 'var(--muted)', minWidth: 36, textAlign: 'right' }}>
                         {pctOf(usd, grandTotal)}%
@@ -323,7 +323,7 @@ export default function OverviewPage() {
               {drilldown.walletCount} wallets
             </span>
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.92rem', fontWeight: 600, color: 'var(--text)', marginLeft: 'auto' }}>
-              {fmtUSD(drilldown.subtotalUSD, 0)}
+              {fmtUSD(drilldown.subtotalUSD)}
             </span>
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.68rem', color: 'var(--muted)' }}>
               {drilldown.portfolioPct.toFixed(1)}% of portfolio
@@ -406,7 +406,7 @@ export default function OverviewPage() {
                         </td>
                       )}
                       <td className="num" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent)' }}>
-                        {fmtUSD(row.totalUSD, 0)}
+                        {fmtUSD(row.totalUSD)}
                       </td>
                       {drilldown.rowTokens.map(token => {
                         const amount = row.tokenAmounts[token] || 0
@@ -420,11 +420,11 @@ export default function OverviewPage() {
                         return (
                           <td key={token} className="num">
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '0.73rem', color: tokenColor, fontWeight: 600 }}>
-                              {fmtNum(amount, token === 'SOL' || token === 'ETH' ? 4 : 0)}
+                              {fmtNum(amount, token === 'SOL' || token === 'ETH' ? 4 : 2)}
                             </div>
                             {!STABLE_TOKENS.has(token) && (
                               <div style={{ fontFamily: 'var(--mono)', fontSize: '0.61rem', color: 'var(--muted)' }}>
-                                {fmtUSD(usd, 0)}
+                                {fmtUSD(usd)}
                               </div>
                             )}
                           </td>

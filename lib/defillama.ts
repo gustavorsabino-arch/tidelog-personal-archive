@@ -8,6 +8,8 @@ export const COIN_IDS: Record<string, string> = {
   ORCA: 'solana:orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE',
   USDC: 'coingecko:usd-coin',
   USDT: 'coingecko:tether',
+  PYUSD: 'coingecko:paypal-usd',
+  USDG: 'coingecko:global-dollar',
 }
 
 export async function getCurrentPrices(tokens = ['SOL', 'ORCA', 'USDC', 'USDT']): Promise<Record<string, number>> {
