@@ -64,7 +64,7 @@ test('CreateWalletSchema rejects backfill=true on external SOL wallet', () => {
     label: 'Test',
     chain: 'SOL',
     entityId: 'opco',
-    isExternal: true,
+    type: 'external',
     backfill: true,
   })
   expect(result.success).toBe(false)
@@ -98,6 +98,55 @@ test('CreateWalletSchema rejects backfill=true on BTC', () => {
     label: 'BTC wallet',
     chain: 'BTC',
     entityId: 'opco',
+    backfill: true,
+  })
+  expect(result.success).toBe(false)
+})
+
+test('CreateWalletSchema accepts type=internal as default', () => {
+  const result = CreateWalletSchema.safeParse({
+    address: 'GwH3Hiv5mACLX3ufTw1pFsrhSPon5tdw252DBs4Rx4PV',
+    label: 'Test Wallet',
+    chain: 'SOL',
+    entityId: 'opco',
+  })
+  expect(result.success).toBe(true)
+  if (result.success) {
+    expect(result.data.type).toBe('internal')
+    expect(result.data.hiddenFromFinance).toBe(false)
+  }
+})
+
+test('CreateWalletSchema accepts type=external', () => {
+  const result = CreateWalletSchema.safeParse({
+    address: 'GwH3Hiv5mACLX3ufTw1pFsrhSPon5tdw252DBs4Rx4PV',
+    label: 'External CP',
+    chain: 'SOL',
+    entityId: 'opco',
+    type: 'external',
+  })
+  expect(result.success).toBe(true)
+})
+
+test('CreateWalletSchema rejects type=external + hiddenFromFinance=true', () => {
+  const result = CreateWalletSchema.safeParse({
+    address: 'GwH3Hiv5mACLX3ufTw1pFsrhSPon5tdw252DBs4Rx4PV',
+    label: 'Bad combo',
+    chain: 'SOL',
+    entityId: 'opco',
+    type: 'external',
+    hiddenFromFinance: true,
+  })
+  expect(result.success).toBe(false)
+})
+
+test('CreateWalletSchema rejects backfill=true for external wallet', () => {
+  const result = CreateWalletSchema.safeParse({
+    address: 'GwH3Hiv5mACLX3ufTw1pFsrhSPon5tdw252DBs4Rx4PV',
+    label: 'External',
+    chain: 'SOL',
+    entityId: 'opco',
+    type: 'external',
     backfill: true,
   })
   expect(result.success).toBe(false)

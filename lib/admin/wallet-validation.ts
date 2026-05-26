@@ -25,9 +25,8 @@ export const CreateWalletSchema = z.object({
   chain: z.enum(['SOL', 'ETH', 'BTC']),
   entityId: z.string().min(1),
   accountCode: z.string().optional(),
-  isExternal: z.boolean().default(false),
-  overviewOnly: z.boolean().default(false),
-  includeInOverview: z.boolean().default(true),
+  type: z.enum(['internal', 'external']).default('internal'),
+  hiddenFromFinance: z.boolean().default(false),
   backfill: z.boolean().optional(),
 }).superRefine((val, ctx) => {
   if (!validateAddress(val.chain, val.address)) {
@@ -35,6 +34,14 @@ export const CreateWalletSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['address'],
       message: `Invalid ${val.chain} address format`,
+    })
+  }
+  // External wallets cannot also be hidden (DB CHECK enforces the same).
+  if (val.type === 'external' && val.hiddenFromFinance === true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['hiddenFromFinance'],
+      message: 'External wallets cannot be hidden (they are already excluded from finance views)',
     })
   }
   if (val.backfill === true) {
@@ -45,7 +52,7 @@ export const CreateWalletSchema = z.object({
         message: 'Backfill is only supported for SOL wallets',
       })
     }
-    if (val.isExternal === true) {
+    if (val.type === 'external') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['backfill'],
