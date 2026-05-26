@@ -1,4 +1,5 @@
-import { pgSchema, text, boolean, integer, timestamp } from 'drizzle-orm/pg-core'
+import { pgSchema, text, boolean, integer, timestamp, check } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
 
 const app = pgSchema('app')
 
@@ -11,21 +12,24 @@ export const entity = app.table('entity', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+export const walletType = app.enum('wallet_type', ['internal', 'external'])
+
 export const wallet = app.table('wallet', {
   address: text('address').primaryKey(),
   label: text('label').notNull(),
   chain: text('chain').notNull(),
   entityId: text('entity_id').notNull().references(() => entity.id),
   accountCode: text('account_code'),
-  isExternal: boolean('is_external').notNull().default(false),
-  overviewOnly: boolean('overview_only').notNull().default(false),
-  includeInOverview: boolean('include_in_overview').notNull().default(true),
-  // Wave 2c — when true, txs on this wallet aggregate by (token, month) into
-  // a single bulk QB journal entry instead of one JE per tx.
+  type: walletType('type').notNull().default('internal'),
+  hiddenFromFinance: boolean('hidden_from_finance').notNull().default(false),
+  needsBackfill: boolean('needs_backfill').notNull().default(false),
+  lastFullBackfillAt: timestamp('last_full_backfill_at', { withTimezone: true }),
   isBulkTreasury: boolean('is_bulk_treasury').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-})
+}, (t) => [
+  check('chk_external_not_hidden', sql`NOT (${t.type} = 'external' AND ${t.hiddenFromFinance} = true)`),
+])
 
 export const token = app.table('token', {
   symbol: text('symbol').primaryKey(),
