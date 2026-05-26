@@ -47,6 +47,7 @@ export function OverviewTrendModal({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState<SeriesMode>('total')
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -230,9 +231,65 @@ export function OverviewTrendModal({
                       const x = series.values.length === 1 ? 320 : index / (series.values.length - 1) * 640
                       const y = 220 - ((value - min) / range) * 220
                       const isLast = index === series.values.length - 1
-                      return <circle key={`${points[index]?.date}-${index}`} cx={x} cy={y} r={isLast ? '4.5' : '3'} fill={accentColor} />
+                      const isHovered = hoveredIdx === index
+                      return (
+                        <g key={`${points[index]?.date}-${index}`}>
+                          <circle
+                            cx={x} cy={y}
+                            r={isHovered ? '6' : isLast ? '4.5' : '3'}
+                            fill={accentColor}
+                            onMouseEnter={() => setHoveredIdx(index)}
+                            onMouseLeave={() => setHoveredIdx(null)}
+                            style={{ cursor: 'pointer' }}
+                          />
+                          {/* Wider invisible hit target so hover is forgiving on dense series. */}
+                          <circle
+                            cx={x} cy={y} r="10" fill="transparent"
+                            onMouseEnter={() => setHoveredIdx(index)}
+                            onMouseLeave={() => setHoveredIdx(null)}
+                          />
+                        </g>
+                      )
                     })}
                   </svg>
+                  {hoveredIdx !== null && points[hoveredIdx] && (() => {
+                    const point = points[hoveredIdx]
+                    const total = series.values.length
+                    const leftPct = total <= 1 ? 50 : (hoveredIdx / (total - 1)) * 100
+                    const displayUsd = series.values[hoveredIdx]
+                    const tokenForRow = mode === 'total' ? null : mode
+                    const qty = tokenForRow ? (point.tokenAmounts[tokenForRow] ?? 0) : null
+                    const spot = tokenForRow && qty ? (point.tokenUsd[tokenForRow] ?? 0) / qty : null
+                    return (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 4,
+                          left: `${leftPct}%`,
+                          transform: leftPct > 80 ? 'translateX(-100%)' : leftPct < 20 ? 'translateX(0)' : 'translateX(-50%)',
+                          pointerEvents: 'none',
+                          background: 'var(--surface2)',
+                          border: '1px solid var(--border)',
+                          padding: '6px 10px',
+                          borderRadius: 4,
+                          fontFamily: 'var(--mono)',
+                          fontSize: '0.7rem',
+                          whiteSpace: 'nowrap',
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                          zIndex: 10,
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, marginBottom: 2 }}>{fmtDate(point.date)}</div>
+                        <div style={{ color: accentColor, fontWeight: 600 }}>{fmtUSD(displayUsd, 2)}</div>
+                        {tokenForRow && qty !== null && (
+                          <div style={{ color: 'var(--muted)', marginTop: 2 }}>
+                            {fmtNum(qty, tokenForRow === 'SOL' || tokenForRow === 'ETH' ? 4 : 2)} {tokenForRow}
+                            {spot !== null && spot > 0 ? ` @ $${spot.toFixed(2)}` : ''}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
                 <div className="trend-chart-foot">
                   <span>{firstDate ? fmtDate(firstDate) : '—'}</span>
