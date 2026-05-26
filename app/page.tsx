@@ -36,26 +36,25 @@ export default function OverviewPage() {
   const refresh = () => { void mutate() }
 
   async function handleExport() {
-    let payload: TreasuryOverview | undefined = data
-    if (entity) {
-      setExporting(true)
-      try {
+    setExporting(true)
+    try {
+      let payload: TreasuryOverview | undefined = data
+      if (entity) {
         const params = new URLSearchParams()
         if (asOf) params.set('as_of', asOf)
         payload = await apiFetch<TreasuryOverview>(
           `/api/treasury/overview${params.toString() ? '?' + params : ''}`
         )
-      } catch (err) {
-        setExporting(false)
-        alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
-        return
       }
+      if (!payload) return
+      const wb = buildOverviewWorkbook(payload)
+      const dateStr = payload.snapshotDate ?? new Date().toISOString().slice(0, 10)
+      XLSX.writeFile(wb, `tidelog-overview-${dateStr}.xlsx`)
+    } catch (err) {
+      alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
       setExporting(false)
     }
-    if (!payload) return
-    const wb = buildOverviewWorkbook(payload)
-    const dateStr = payload.snapshotDate ?? new Date().toISOString().slice(0, 10)
-    XLSX.writeFile(wb, `tidelog-overview-${dateStr}.xlsx`)
   }
 
   const prices = data?.prices || {}
