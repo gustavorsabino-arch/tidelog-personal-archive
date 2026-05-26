@@ -96,6 +96,14 @@ export function OverviewTrendModal({
     return { values, current, start, change, high, low }
   }, [data, mode])
 
+  // Only show per-token tabs for tokens this wallet actually held in the window.
+  // Avoids confusing $0-everywhere charts for tokens the parent drilldown
+  // includes as a column but this wallet never owned.
+  const activeTokens = useMemo(() => {
+    const pts = data?.points || []
+    return tokens.filter(token => pts.some(point => (point.tokenAmounts[token] || 0) > 0))
+  }, [data, tokens])
+
   const path = useMemo(() => buildLinePath(series.values, 640, 220), [series.values])
   const areaPath = useMemo(() => buildAreaPath(path, series.values, 640, 220), [path, series.values])
   const accentColor = mode === 'total' ? 'var(--accent)' : (TOKEN_COLORS[mode] || TOKEN_COLORS.default)
@@ -103,7 +111,7 @@ export function OverviewTrendModal({
   const firstDate = data?.firstDate || null
   const lastDate = data?.lastDate || null
   const pointCount = points.length
-  const showSeriesButtons = tokens.length > 1
+  const showSeriesButtons = activeTokens.length > 1
   const modeLabel = mode === 'total' ? 'Total Wallet Value' : `${mode} Value`
   const subtitle = firstDate && lastDate ? `${fmtDate(firstDate)} → ${fmtDate(lastDate)}` : 'Historical balance range'
   const latestPoint = points.at(-1) || null
@@ -123,7 +131,7 @@ export function OverviewTrendModal({
 
         <div className="modal-body" style={{ padding: 20 }}>
           <div className="trend-meta">
-            <span className="trend-chip">Scope: {scopeTitle}</span>
+            <span className="trend-chip">From: {scopeTitle}</span>
             <span className="trend-chip">Series: {modeLabel}</span>
             <span className="trend-chip">{pointCount} snapshots</span>
           </div>
@@ -141,7 +149,7 @@ export function OverviewTrendModal({
             >
               Total
             </button>
-            {showSeriesButtons && tokens.map(token => {
+            {showSeriesButtons && activeTokens.map(token => {
               const color = TOKEN_COLORS[token] || TOKEN_COLORS.default
               const active = mode === token
               return (
