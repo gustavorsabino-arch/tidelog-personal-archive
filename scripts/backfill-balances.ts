@@ -519,7 +519,7 @@ async function main() {
     const rows = await db
       .select({ address: walletTbl.address, label: walletTbl.label })
       .from(walletTbl)
-      .where(and(eq(walletTbl.chain, 'SOL'), eq(walletTbl.isExternal, false)))
+      .where(and(eq(walletTbl.chain, 'SOL'), eq(walletTbl.type, 'internal'), eq(walletTbl.hiddenFromFinance, false)))
       .orderBy(
         sql`CASE
           WHEN ${walletTbl.entityId} = 'foundation' AND ${walletTbl.label} ILIKE '%FTX%' THEN 7

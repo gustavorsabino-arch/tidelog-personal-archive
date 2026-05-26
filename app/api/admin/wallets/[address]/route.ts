@@ -70,7 +70,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ addre
       label: walletRow.label,
       chain: walletRow.chain,
       entityId: walletRow.entityId,
-      isExternal: walletRow.isExternal,
+      type: walletRow.type,
       deletedTxCount: txCount,
       deletedSnapshotCount: snapCount,
       gainsRecomputed,

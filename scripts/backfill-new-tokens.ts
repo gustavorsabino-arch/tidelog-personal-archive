@@ -69,7 +69,7 @@ for (const sym of requestedSyms) {
   targets.push({ symbol: sym, mint })
 }
 
-const wallets = await db.select().from(wallet).where(eq(wallet.isExternal, false))
+const wallets = await db.select().from(wallet).where(and(eq(wallet.type, 'internal'), eq(wallet.hiddenFromFinance, false)))
 console.log(`[backfill-new-tokens] start wallets=${wallets.length} tokens=${targets.map((t) => t.symbol).join(',')}`)
 
 const entitiesAffected = new Set<string>()
