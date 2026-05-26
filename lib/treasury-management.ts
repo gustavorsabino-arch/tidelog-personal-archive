@@ -74,7 +74,7 @@ export async function getTreasuryManagementData(
     .from(wallet)
     .where(
       and(
-        eq(wallet.isExternal, false),
+        and(eq(wallet.type, 'internal'), eq(wallet.hiddenFromFinance, false)),
         like(wallet.label, 'Treasury Management%'),
         entityFilter ? eq(wallet.entityId, entityFilter) : undefined,
       ),
