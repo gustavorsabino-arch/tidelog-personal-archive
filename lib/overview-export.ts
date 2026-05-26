@@ -7,13 +7,14 @@ interface Row {
   walletAddr: string
   asset: string
   qty: number
+  spot: number
   usd: number
 }
 
-const HEADER = ['Wallet name', 'Wallet address', 'Asset', 'Asset Qty', 'USD Value']
+const HEADER = ['Wallet name', 'Wallet address', 'Asset', 'Asset Qty', 'Spot Price', 'USD Value']
 
-// Column widths: name, address (wide enough for 44-char base58 + margin), asset, qty, usd.
-const COL_WIDTHS = [{ wch: 28 }, { wch: 46 }, { wch: 8 }, { wch: 18 }, { wch: 16 }]
+// Column widths: name, address (wide enough for 44-char base58 + margin), asset, qty, spot, usd.
+const COL_WIDTHS = [{ wch: 28 }, { wch: 46 }, { wch: 8 }, { wch: 18 }, { wch: 14 }, { wch: 16 }]
 
 export function buildOverviewWorkbook(data: TreasuryOverview): XLSX.WorkBook {
   const wb = XLSX.utils.book_new()
@@ -30,12 +31,14 @@ function buildSheet(wallets: TreasuryOverviewWallet[]): XLSX.WorkSheet {
   for (const w of wallets) {
     for (const [asset, qty] of Object.entries(w.balances)) {
       if (!qty || qty <= 0) continue
+      const usd = w.tokenUsd[asset] ?? 0
       rows.push({
         walletName: w.label,
         walletAddr: w.address,
         asset,
         qty,
-        usd: w.tokenUsd[asset] ?? 0,
+        spot: usd / qty,
+        usd,
       })
     }
   }
@@ -46,7 +49,7 @@ function buildSheet(wallets: TreasuryOverviewWallet[]): XLSX.WorkSheet {
   // post-process cells; then we override the address column to text-typed.
   XLSX.utils.sheet_add_aoa(
     ws,
-    rows.map(r => [r.walletName, r.walletAddr, r.asset, r.qty, r.usd]),
+    rows.map(r => [r.walletName, r.walletAddr, r.asset, r.qty, r.spot, r.usd]),
     { origin: 'A2' },
   )
 
@@ -57,11 +60,13 @@ function buildSheet(wallets: TreasuryOverviewWallet[]): XLSX.WorkSheet {
     ws[cellRef] = { t: 's', v: rows[i].walletAddr, z: '@' }
   }
 
-  // Apply number formats to Asset Qty (col D) and USD Value (col E).
+  // Apply 2-decimal number format to Asset Qty (col D), Spot Price (col E), and USD Value (col F).
   for (let i = 0; i < rows.length; i++) {
     const qtyRef = XLSX.utils.encode_cell({ c: 3, r: i + 1 })
-    const usdRef = XLSX.utils.encode_cell({ c: 4, r: i + 1 })
+    const spotRef = XLSX.utils.encode_cell({ c: 4, r: i + 1 })
+    const usdRef = XLSX.utils.encode_cell({ c: 5, r: i + 1 })
     if (ws[qtyRef]) ws[qtyRef].z = '#,##0.00'
+    if (ws[spotRef]) ws[spotRef].z = '#,##0.00'
     if (ws[usdRef]) ws[usdRef].z = '#,##0.00'
   }
 

@@ -74,12 +74,12 @@ test('workbook has exactly 5 sheets in correct order', () => {
   expect(wb.SheetNames).toEqual(['All', 'Opco', 'Foundation', 'Juku', 'Zagreus'])
 })
 
-test('header row matches the 5-column spec on every sheet', () => {
+test('header row matches the 6-column spec on every sheet', () => {
   const wb = buildOverviewWorkbook(fixture)
   for (const name of wb.SheetNames) {
     const rows = sheetRows(wb.Sheets[name])
     expect(rows[0]).toEqual([
-      'Wallet name', 'Wallet address', 'Asset', 'Asset Qty', 'USD Value',
+      'Wallet name', 'Wallet address', 'Asset', 'Asset Qty', 'Spot Price', 'USD Value',
     ])
   }
 })
@@ -103,7 +103,7 @@ test('zero-qty rows are excluded', () => {
 test('rows are sorted by USD Value descending within each sheet', () => {
   const wb = buildOverviewWorkbook(fixture)
   const rows = sheetRows(wb.Sheets.All).slice(1)
-  const usdValues = rows.map(r => r[4] as number)
+  const usdValues = rows.map(r => r[5] as number)
   for (let i = 1; i < usdValues.length; i++) {
     expect(usdValues[i]).toBeLessThanOrEqual(usdValues[i - 1])
   }
@@ -125,7 +125,7 @@ test('empty entity still gets a sheet with header only', () => {
   const zagreusRows = sheetRows(wb.Sheets.Zagreus)
   expect(zagreusRows).toHaveLength(1) // just the header
   expect(zagreusRows[0]).toEqual([
-    'Wallet name', 'Wallet address', 'Asset', 'Asset Qty', 'USD Value',
+    'Wallet name', 'Wallet address', 'Asset', 'Asset Qty', 'Spot Price', 'USD Value',
   ])
 })
 
@@ -141,17 +141,30 @@ test('address column is text-typed and wide enough not to truncate', () => {
   expect(ws['!cols']![1].wch).toBeGreaterThanOrEqual(46)
 })
 
-test('Asset Qty and USD Value cells are stored as numbers (so Excel SUM works)', () => {
+test('Asset Qty, Spot Price, and USD Value cells are stored as numbers (so Excel SUM works)', () => {
   const wb = buildOverviewWorkbook(fixture)
   const ws = wb.Sheets.All
-  // Column D = Asset Qty, Column E = USD Value
+  // Column D = Asset Qty, Column E = Spot Price, Column F = USD Value
   expect(ws['D2'].t).toBe('n')
   expect(ws['E2'].t).toBe('n')
+  expect(ws['F2'].t).toBe('n')
 })
 
-test('Asset Qty and USD Value both render with exactly 2 decimals', () => {
+test('Asset Qty, Spot Price, and USD Value all render with exactly 2 decimals', () => {
   const wb = buildOverviewWorkbook(fixture)
   const ws = wb.Sheets.All
   expect(ws['D2'].z).toBe('#,##0.00')
   expect(ws['E2'].z).toBe('#,##0.00')
+  expect(ws['F2'].z).toBe('#,##0.00')
+})
+
+test('Spot Price equals USD Value divided by Asset Qty', () => {
+  const wb = buildOverviewWorkbook(fixture)
+  const rows = sheetRows(wb.Sheets.All).slice(1)
+  for (const row of rows) {
+    const qty = row[3] as number
+    const spot = row[4] as number
+    const usd = row[5] as number
+    expect(spot).toBeCloseTo(usd / qty, 10)
+  }
 })
