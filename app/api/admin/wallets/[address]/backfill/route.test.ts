@@ -35,13 +35,45 @@ test('rejects ETH wallet with 400', async () => {
   expect(body.code).toBe('admin.backfill_not_supported_for_chain')
 })
 
-test('rejects external wallet with 400', async () => {
-  await db.insert(wallet).values({ address: SOL_ADDR, label: 'external', chain: 'SOL', entityId: 'opco', isExternal: true })
-  const req = new Request('http://localhost/api/admin/wallets/x/backfill', { method: 'POST', headers: ADMIN_HEADERS })
-  const res = await POST(req, { params: Promise.resolve({ address: SOL_ADDR }) })
+test('POST rejects type=external', async () => {
+  await db.insert(wallet).values({
+    address: SOL_ADDR, label: 'External CP', chain: 'SOL', entityId: 'opco',
+    type: 'external', hiddenFromFinance: false, needsBackfill: false,
+  })
+  const req = new Request(`http://localhost/api/admin/wallets/${SOL_ADDR}/backfill`, {
+    method: 'POST', headers: ADMIN_HEADERS,
+  })
+  const res = await POST(req as any, { params: Promise.resolve({ address: SOL_ADDR }) })
   expect(res.status).toBe(400)
   const body = await res.json()
-  expect(body.code).toBe('admin.backfill_external')
+  expect(body.code).toMatch(/external/)
+})
+
+test('POST rejects hiddenFromFinance=true', async () => {
+  await db.insert(wallet).values({
+    address: SOL_ADDR, label: 'Hidden', chain: 'SOL', entityId: 'opco',
+    type: 'internal', hiddenFromFinance: true, needsBackfill: false,
+  })
+  const req = new Request(`http://localhost/api/admin/wallets/${SOL_ADDR}/backfill`, {
+    method: 'POST', headers: ADMIN_HEADERS,
+  })
+  const res = await POST(req as any, { params: Promise.resolve({ address: SOL_ADDR }) })
+  expect(res.status).toBe(400)
+})
+
+test('POST on success clears needs_backfill and stamps last_full_backfill_at', async () => {
+  await db.insert(wallet).values({
+    address: SOL_ADDR, label: 'Internal', chain: 'SOL', entityId: 'opco',
+    type: 'internal', hiddenFromFinance: false, needsBackfill: true,
+  })
+  const req = new Request(`http://localhost/api/admin/wallets/${SOL_ADDR}/backfill`, {
+    method: 'POST', headers: ADMIN_HEADERS,
+  })
+  const res = await POST(req as any, { params: Promise.resolve({ address: SOL_ADDR }) })
+  expect(res.status).toBe(200)
+  const [row] = await db.select().from(wallet).where(eq(wallet.address, SOL_ADDR))
+  expect(row?.needsBackfill).toBe(false)
+  expect(row?.lastFullBackfillAt).not.toBeNull()
 })
 
 test('non-admin returns 403', async () => {
