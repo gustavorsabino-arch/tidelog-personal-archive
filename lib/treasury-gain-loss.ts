@@ -63,6 +63,11 @@ export async function getTreasuryGainLoss(
 
   const baseConditions = buildBaseConditions(dbEntity, opts)
 
+  // Build the three independent queries first, then await them concurrently.
+  // Cross-region (local dev → RDS in us-east-1) every round-trip is ~150ms,
+  // so serial 3-query execution adds ~450ms of pure network. Parallelizing
+  // reduces it to a single round-trip's worth.
+
   // Summary aggregation — single query computes everything the KPI cards need.
   // Per-term lot counts use the `realized_term` column as a fast path:
   //   - 'ST' rows: all lots are ST, count = jsonb_array_length (cheap)
@@ -70,7 +75,7 @@ export async function getTreasuryGainLoss(
   //   - 'mixed' rows: need jsonb_array_elements unnest to count per-term lots
   // Mixed rows should be rare (only disposals that span the 1-year ST/LT
   // boundary), so this avoids unnesting 95%+ of rows.
-  const [summaryRow] = await db
+  const summaryPromise = db
     .select({
       stTotal: sql<string>`coalesce(sum(${transactionGain.stGain}), 0)`,
       ltTotal: sql<string>`coalesce(sum(${transactionGain.ltGain}), 0)`,
@@ -100,7 +105,7 @@ export async function getTreasuryGainLoss(
   // intentionally drops the token filter so the dropdown lists every token
   // present in the wider filter set (not just the currently-selected one).
   const tokenBaseConditions = buildBaseConditions(dbEntity, { ...opts, token: null })
-  const tokenRows = await db
+  const tokensPromise = db
     .selectDistinct({ asset: transactionGain.asset })
     .from(transactionGain)
     .innerJoin(transaction, and(
@@ -110,7 +115,6 @@ export async function getTreasuryGainLoss(
       eq(transaction.asset, transactionGain.asset),
     ))
     .where(and(...tokenBaseConditions))
-  const tokens = tokenRows.map(r => r.asset).sort()
 
   // Detail query — paginated by row. Newest first (matches the client's default
   // sort). Lots are expanded in code after the page is fetched, then filtered
@@ -119,7 +123,7 @@ export async function getTreasuryGainLoss(
   if (term === 'ST') detailConditions.push(sql`${transactionGain.stGain} != 0`)
   if (term === 'LT') detailConditions.push(sql`${transactionGain.ltGain} != 0`)
 
-  const rows = await db
+  const detailPromise = db
     .select({
       tg: transactionGain,
       tx: transaction,
@@ -137,6 +141,32 @@ export async function getTreasuryGainLoss(
     .orderBy(desc(transaction.blockTime))
     .limit(pageSize)
     .offset(offset)
+
+  // When a term filter is applied, the unfiltered totalRows from the summary
+  // overcounts (it includes rows with only-other-term lots). Run a separate
+  // count keyed by the same detail predicates so pagination is accurate.
+  const filteredCountPromise = (term === 'ST' || term === 'LT')
+    ? db
+        .select({ count: sql<string>`count(*)` })
+        .from(transactionGain)
+        .innerJoin(transaction, and(
+          eq(transaction.txHash, transactionGain.txHash),
+          eq(transaction.walletAddress, transactionGain.walletAddress),
+          eq(transaction.direction, transactionGain.direction),
+          eq(transaction.asset, transactionGain.asset),
+        ))
+        .where(and(...detailConditions))
+    : Promise.resolve(null)
+
+  const [summaryRows, tokenRows, rows, filteredCountRows] = await Promise.all([
+    summaryPromise,
+    tokensPromise,
+    detailPromise,
+    filteredCountPromise,
+  ])
+
+  const summaryRow = summaryRows[0]
+  const tokens = tokenRows.map(r => r.asset).sort()
 
   const entries: GainLossEntry[] = []
   for (const r of rows) {
@@ -177,23 +207,12 @@ export async function getTreasuryGainLoss(
   const longTermGain = term === 'ST' ? 0 : ltTotal
   const dispositions = term === 'ST' ? stLots : term === 'LT' ? ltLots : totalLots
 
-  // For pagination: total post-term-filter row count. When term filter is
-  // 'ST', rows with only LT lots are excluded server-side via the `st_gain != 0`
-  // predicate, so totalRows reflects only matching disposal rows.
-  let paginationRows = totalRows
-  if (term === 'ST' || term === 'LT') {
-    const [filteredRow] = await db
-      .select({ count: sql<string>`count(*)` })
-      .from(transactionGain)
-      .innerJoin(transaction, and(
-        eq(transaction.txHash, transactionGain.txHash),
-        eq(transaction.walletAddress, transactionGain.walletAddress),
-        eq(transaction.direction, transactionGain.direction),
-        eq(transaction.asset, transactionGain.asset),
-      ))
-      .where(and(...detailConditions))
-    paginationRows = Number(filteredRow?.count ?? 0)
-  }
+  // For pagination: total post-term-filter row count. Computed in parallel
+  // above as `filteredCountRows`. When no term filter is applied, falls back
+  // to the summary's totalRows (which already reflects the base WHERE).
+  const paginationRows = filteredCountRows
+    ? Number(filteredCountRows[0]?.count ?? 0)
+    : totalRows
 
   return {
     gainLoss: entries,
