@@ -211,8 +211,14 @@ export async function getTreasuryGainLoss(
 export async function getGainLossMonths(entity: string): Promise<string[]> {
   const dbEntity = toDbEntity(entity)
 
+  // DISTINCT pushed into Postgres so we ship at most a few dozen rows back
+  // (one per month) instead of one row per disposal. At 65k+ disposals per
+  // entity, the old "select all blockTimes and dedupe in Node" approach was
+  // both slow on the wire and slow in V8.
   const rows = await db
-    .select({ blockTime: transaction.blockTime })
+    .selectDistinct({
+      month: sql<string>`to_char(${transaction.blockTime} at time zone 'UTC', 'YYYY-MM')`,
+    })
     .from(transactionGain)
     .innerJoin(transaction, and(
       eq(transaction.txHash, transactionGain.txHash),
@@ -227,12 +233,9 @@ export async function getGainLossMonths(entity: string): Promise<string[]> {
       inArray(transactionGain.asset, [...GAINS_ASSETS]),
     ))
 
-  const set = new Set<string>()
-  for (const r of rows) {
-    const d = r.blockTime
-    const y = d.getUTCFullYear()
-    const m = String(d.getUTCMonth() + 1).padStart(2, '0')
-    set.add(`${y}-${m}`)
-  }
-  return Array.from(set).sort().reverse()
+  return rows
+    .map(r => r.month)
+    .filter((m): m is string => typeof m === 'string')
+    .sort()
+    .reverse()
 }
