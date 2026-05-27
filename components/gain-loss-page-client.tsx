@@ -9,37 +9,45 @@ import { useGainLossMonths } from '@/lib/hooks/use-gain-loss-months'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import { CopyButton } from '@/components/copy-button'
-import type { GainLossEntry, GainLossResponse, GainLossSummary } from '@/lib/types'
+import type { GainLossEntry, GainLossPagination, GainLossResponse, GainLossSummary } from '@/lib/types'
 
 type GainLossPageClientProps = {
   initialEntity: string
   initialGainLoss: GainLossEntry[]
   initialSummary: GainLossSummary
+  initialPagination: GainLossPagination
 }
+
+const PAGE_SIZE_OPTIONS = [100, 250, 500]
 
 export function GainLossPageClient({
   initialEntity,
   initialGainLoss,
   initialSummary,
+  initialPagination,
 }: GainLossPageClientProps) {
   const [entity, setEntity] = useState(initialEntity)
   const [gainLoss, setGainLoss] = useState<GainLossEntry[]>(initialGainLoss)
   const [summary, setSummary] = useState<GainLossSummary>(initialSummary)
+  const [pagination, setPagination] = useState<GainLossPagination>(initialPagination)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Server-side filters (require a refetch)
+  // All filters are now server-side — refetch triggers on any change.
   const [yearFilter, setYearFilter] = useState('')
   const [monthFilter, setMonthFilter] = useState('')
-  // Client-side filters (narrow the already-fetched dataset)
   const [tokenFilter, setTokenFilter] = useState('')
-  const [termFilter, setTermFilter] = useState('')
+  const [termFilter, setTermFilter] = useState<'' | 'ST' | 'LT'>('')
   const [walletFilter, setWalletFilter] = useState('')
+
+  // Pagination state.
+  const [page, setPage] = useState(initialPagination.page)
+  const [pageSize, setPageSize] = useState(initialPagination.pageSize)
 
   const { options: walletOptions } = useEntityWallets(entity)
   const { years: yearOptions, byYear: monthsByYear, loading: monthsLoading } = useGainLossMonths(entity)
 
-  async function fetchData() {
+  async function fetchData(targetPage: number = page) {
     setLoading(true)
     try {
       const params = new URLSearchParams({ entity })
@@ -48,9 +56,16 @@ export function GainLossPageClient({
         params.set('from', range.from)
         params.set('to', range.to)
       }
+      if (tokenFilter) params.set('token', tokenFilter)
+      if (termFilter) params.set('term', termFilter)
+      if (walletFilter) params.set('walletAddr', walletFilter)
+      params.set('page', String(targetPage))
+      params.set('pageSize', String(pageSize))
+
       const res = await apiFetch<GainLossResponse>(`/api/treasury/gain-loss?${params}`)
       setGainLoss(res.gainLoss)
       setSummary(res.summary)
+      setPagination(res.pagination)
       setError(null)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Unknown error')
@@ -59,20 +74,29 @@ export function GainLossPageClient({
     }
   }
 
-  // One-way flag: flips true the first time state moves away from SSR initial
-  // values, and stays true. Skips the redundant initial fetch (state already
-  // came from SSR) without suppressing later refetches when the user happens
-  // to reset filters back to their initial values.
+  // Whether the client state is identical to what SSR delivered. Used to skip
+  // the first useEffect-driven refetch, since the table is already populated.
   const hasInteracted = useRef(false)
 
+  // Any filter or page-size change resets to page 1 and refetches.
   useEffect(() => {
     const atInitialState =
-      entity === initialEntity && !yearFilter && !monthFilter
+      entity === initialEntity &&
+      !yearFilter && !monthFilter && !tokenFilter && !termFilter && !walletFilter &&
+      pageSize === initialPagination.pageSize
     if (!atInitialState) hasInteracted.current = true
     if (!hasInteracted.current && atInitialState) return
-    fetchData()
+    setPage(1)
+    void fetchData(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entity, initialEntity, yearFilter, monthFilter])
+  }, [entity, yearFilter, monthFilter, tokenFilter, termFilter, walletFilter, pageSize])
+
+  // Page navigation refetches without resetting filters.
+  function goToPage(next: number) {
+    const target = Math.max(1, next)
+    setPage(target)
+    void fetchData(target)
+  }
 
   // Stale-selection resets — drop a selection that's no longer in the available
   // options after an entity switch or data change. Avoids a stuck filter that
@@ -100,12 +124,9 @@ export function GainLossPageClient({
     }
   }, [monthFilter, monthsByYear])
 
-  // Token options reflect the assets present in the current (server-filtered)
-  // dataset, so e.g. narrowing by year hides tokens with no disposals that year.
-  const tokenOptions = useMemo(
-    () => Array.from(new Set(gainLoss.map(g => g.asset))).sort(),
-    [gainLoss],
-  )
+  // Token dropdown is now driven by the server's summary.tokens list, which
+  // reflects the current filter set (sans token filter itself).
+  const tokenOptions = useMemo(() => summary.tokens, [summary.tokens])
 
   useEffect(() => {
     if (tokenFilter && tokenOptions.length > 0 && !tokenOptions.includes(tokenFilter)) {
@@ -113,21 +134,8 @@ export function GainLossPageClient({
     }
   }, [tokenFilter, tokenOptions])
 
-  const filtered = useMemo(() => {
-    return gainLoss.filter(g => {
-      if (tokenFilter && g.asset !== tokenFilter) return false
-      if (termFilter && g.term !== termFilter) return false
-      if (walletFilter && g.walletAddr !== walletFilter) return false
-      return true
-    })
-  }, [gainLoss, tokenFilter, termFilter, walletFilter])
-
-  const filteredSummary = useMemo(() => ({
-    totalGain: filtered.reduce((s, g) => s + g.gain, 0),
-    shortTermGain: filtered.filter(g => g.term === 'ST').reduce((s, g) => s + g.gain, 0),
-    longTermGain: filtered.filter(g => g.term === 'LT').reduce((s, g) => s + g.gain, 0),
-    dispositions: filtered.length,
-  }), [filtered])
+  const totalPages = Math.max(1, Math.ceil(pagination.totalRows / pageSize))
+  const hasFilter = !!(tokenFilter || termFilter || walletFilter || yearFilter || monthFilter)
 
   const columns = [
     {
@@ -233,44 +241,49 @@ export function GainLossPageClient({
           <div className="cards-grid">
             <div className="card">
               <div className="card-label">Total Realized</div>
-              <div className={`card-value ${filteredSummary.totalGain >= 0 ? 'green' : 'red'}`}>
-                {filteredSummary.totalGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.totalGain)}
+              <div className={`card-value ${summary.totalGain >= 0 ? 'green' : 'red'}`}>
+                {summary.totalGain >= 0 ? '+' : ''}{fmtUSD(summary.totalGain)}
               </div>
               <div className="card-sub">
-                {tokenFilter || termFilter || walletFilter || yearFilter || monthFilter ? 'Filtered view' : 'Full entity data'}
+                {hasFilter ? 'Filtered view' : 'Full entity data'}
               </div>
             </div>
             <div className="card">
               <div className="card-label">Short Term</div>
-              <div className={`card-value ${filteredSummary.shortTermGain >= 0 ? 'green' : 'red'}`}>
-                {filteredSummary.shortTermGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.shortTermGain)}
+              <div className={`card-value ${summary.shortTermGain >= 0 ? 'green' : 'red'}`}>
+                {summary.shortTermGain >= 0 ? '+' : ''}{fmtUSD(summary.shortTermGain)}
               </div>
               <div className="card-sub">
-                {tokenFilter || termFilter || walletFilter || yearFilter || monthFilter ? 'Filtered view' : 'Full entity data'}
+                {hasFilter ? 'Filtered view' : 'Full entity data'}
               </div>
             </div>
             <div className="card">
               <div className="card-label">Long Term</div>
-              <div className={`card-value ${filteredSummary.longTermGain >= 0 ? 'green' : 'red'}`}>
-                {filteredSummary.longTermGain >= 0 ? '+' : ''}{fmtUSD(filteredSummary.longTermGain)}
+              <div className={`card-value ${summary.longTermGain >= 0 ? 'green' : 'red'}`}>
+                {summary.longTermGain >= 0 ? '+' : ''}{fmtUSD(summary.longTermGain)}
               </div>
               <div className="card-sub">
-                {tokenFilter || termFilter || walletFilter || yearFilter || monthFilter ? 'Filtered view' : 'Full entity data'}
+                {hasFilter ? 'Filtered view' : 'Full entity data'}
               </div>
             </div>
             <div className="card">
               <div className="card-label">Dispositions</div>
-              <div className="card-value">{filteredSummary.dispositions}</div>
-              <div className="card-sub">
-                {tokenFilter || termFilter || walletFilter || yearFilter || monthFilter ? `${summary.dispositions.toLocaleString()} total` : 'Full entity data'}
-              </div>
+              <div className="card-value">{summary.dispositions.toLocaleString()}</div>
+              <div className="card-sub">{hasFilter ? 'Filtered view' : 'Full entity data'}</div>
             </div>
           </div>
           )}
 
           <div className="section">
             <div className="section-header">
-              <span className="section-title">{filtered.length} realized events</span>
+              <span className="section-title">
+                {pagination.totalRows.toLocaleString()} realized event{pagination.totalRows === 1 ? '' : 's'}
+                {pagination.totalRows > 0 && (
+                  <span style={{ color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>
+                    · page {pagination.page} of {totalPages}
+                  </span>
+                )}
+              </span>
               <div className="section-filters">
                 <select
                   className="fsel"
@@ -310,7 +323,7 @@ export function GainLossPageClient({
                   <option value="">All tokens</option>
                   {tokenOptions.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
-                <select className="fsel" value={termFilter} onChange={e => setTermFilter(e.target.value)}>
+                <select className="fsel" value={termFilter} onChange={e => setTermFilter(e.target.value as '' | 'ST' | 'LT')}>
                   <option value="">All terms</option>
                   <option value="ST">Short Term</option>
                   <option value="LT">Long Term</option>
@@ -319,9 +332,30 @@ export function GainLossPageClient({
                   <option value="">All wallets</option>
                   {walletOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
+                <select className="fsel" value={pageSize} onChange={e => setPageSize(Number(e.target.value))}>
+                  {PAGE_SIZE_OPTIONS.map(s => <option key={s} value={s}>{s} / page</option>)}
+                </select>
               </div>
             </div>
-            <DataTable data={filtered as unknown as Record<string, unknown>[]} columns={columns as any} defaultSort={{ col: 'soldDate', dir: 'desc' }} maxHeight="600px" />
+            <DataTable data={gainLoss as unknown as Record<string, unknown>[]} columns={columns as any} defaultSort={{ col: 'soldDate', dir: 'desc' }} maxHeight="600px" />
+            {pagination.totalRows > pageSize && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, padding: '8px 0' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+                  Showing {gainLoss.length} of {pagination.totalRows.toLocaleString()} disposal rows
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn-secondary" disabled={loading || pagination.page <= 1} onClick={() => goToPage(pagination.page - 1)}>
+                    ← Prev
+                  </button>
+                  <span style={{ alignSelf: 'center', fontSize: '0.75rem' }}>
+                    Page {pagination.page} of {totalPages}
+                  </span>
+                  <button className="btn-secondary" disabled={loading || !pagination.hasMore} onClick={() => goToPage(pagination.page + 1)}>
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

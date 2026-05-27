@@ -32,6 +32,7 @@ export default async function GainLossPage() {
       initialEntity={initialEntity}
       initialGainLoss={initialData.gainLoss}
       initialSummary={initialData.summary}
+      initialPagination={initialData.pagination}
     />
   )
 }
