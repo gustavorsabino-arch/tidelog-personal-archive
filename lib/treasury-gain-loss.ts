@@ -64,17 +64,27 @@ export async function getTreasuryGainLoss(
   const baseConditions = buildBaseConditions(dbEntity, opts)
 
   // Summary aggregation — single query computes everything the KPI cards need.
-  // st_lots / lt_lots use jsonb_array_elements to count per-term lots inside the
-  // lots JSONB array, so a row with mixed ST+LT lots contributes correctly to
-  // both buckets. The CASE wrapping st_gain/lt_gain mirrors the client's old
-  // behavior: when term filter is 'ST', longTermGain reads as 0 (and vice versa).
+  // Per-term lot counts use the `realized_term` column as a fast path:
+  //   - 'ST' rows: all lots are ST, count = jsonb_array_length (cheap)
+  //   - 'LT' rows: all lots are LT, count = jsonb_array_length (cheap)
+  //   - 'mixed' rows: need jsonb_array_elements unnest to count per-term lots
+  // Mixed rows should be rare (only disposals that span the 1-year ST/LT
+  // boundary), so this avoids unnesting 95%+ of rows.
   const [summaryRow] = await db
     .select({
       stTotal: sql<string>`coalesce(sum(${transactionGain.stGain}), 0)`,
       ltTotal: sql<string>`coalesce(sum(${transactionGain.ltGain}), 0)`,
       totalLots: sql<string>`coalesce(sum(jsonb_array_length(${transactionGain.lots})), 0)`,
-      stLots: sql<string>`coalesce(sum((select count(*) from jsonb_array_elements(${transactionGain.lots}) e where e->>'term' = 'ST')), 0)`,
-      ltLots: sql<string>`coalesce(sum((select count(*) from jsonb_array_elements(${transactionGain.lots}) e where e->>'term' = 'LT')), 0)`,
+      stLots: sql<string>`coalesce(sum(case
+        when ${transactionGain.realizedTerm} = 'ST' then jsonb_array_length(${transactionGain.lots})
+        when ${transactionGain.realizedTerm} = 'LT' then 0
+        else (select count(*) from jsonb_array_elements(${transactionGain.lots}) e where e->>'term' = 'ST')
+      end), 0)`,
+      ltLots: sql<string>`coalesce(sum(case
+        when ${transactionGain.realizedTerm} = 'LT' then jsonb_array_length(${transactionGain.lots})
+        when ${transactionGain.realizedTerm} = 'ST' then 0
+        else (select count(*) from jsonb_array_elements(${transactionGain.lots}) e where e->>'term' = 'LT')
+      end), 0)`,
       totalRows: sql<string>`count(*)`,
     })
     .from(transactionGain)
