@@ -11,7 +11,14 @@ export function LoginButton({ callbackURL }: { callbackURL: string }) {
     setLoading(true)
     setErr(null)
     try {
-      await authClient.signIn.social({ provider: 'google', callbackURL })
+      // better-auth's client returns { data, error } and does NOT throw on
+      // HTTP errors. Without checking `error` here, a 5xx (e.g. DB down)
+      // leaves the button stuck in "Signing in…" forever.
+      const res = await authClient.signIn.social({ provider: 'google', callbackURL })
+      if (res?.error) {
+        setErr(res.error.message ?? `Sign-in failed (${res.error.status ?? 'unknown error'})`)
+        setLoading(false)
+      }
     } catch (e) {
       setErr((e as Error).message)
       setLoading(false)

@@ -36,12 +36,37 @@ if (config.mode === 'local') {
   // lifetime don't re-sign. RDS IAM tokens are valid for 15 min; we refresh
   // 1 min early to give in-flight connection attempts a safe margin.
   const TOKEN_TTL_MS = 14 * 60 * 1000
+  // Negative-cache STS failures briefly so a thundering herd of requests
+  // during an OIDC/AWS outage doesn't hammer STS — every caller fails fast
+  // off the cached error instead of waiting 5s for its own timeout.
+  const NEG_CACHE_MS = 5 * 1000
+  // Cap how long we'll wait on STS+RDS signing. STS in steady state takes
+  // <500ms; if it's hanging or returning slow errors, we'd rather fail the
+  // request than tie up the serverless function for its full timeout.
+  const AUTH_TIMEOUT_MS = 5 * 1000
   let cachedToken: { value: string; expiresAt: number } | null = null
+  let cachedError: { error: Error; expiresAt: number } | null = null
   const getAuthToken = async () => {
     if (cachedToken && cachedToken.expiresAt > Date.now()) return cachedToken.value
-    const value = await signer.getAuthToken()
-    cachedToken = { value, expiresAt: Date.now() + TOKEN_TTL_MS }
-    return value
+    if (cachedError && cachedError.expiresAt > Date.now()) throw cachedError.error
+    try {
+      const value = await Promise.race([
+        signer.getAuthToken(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`RDS IAM auth token request timed out after ${AUTH_TIMEOUT_MS}ms`)),
+            AUTH_TIMEOUT_MS,
+          ),
+        ),
+      ])
+      cachedToken = { value, expiresAt: Date.now() + TOKEN_TTL_MS }
+      cachedError = null
+      return value
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      cachedError = { error: err, expiresAt: Date.now() + NEG_CACHE_MS }
+      throw err
+    }
   }
 
   client = postgres({
@@ -58,6 +83,10 @@ if (config.mode === 'local') {
     // connections") cascades when set to 10.
     max: 6,
     idle_timeout: 60,
+    // Bound how long we'll wait to establish a connection. Default is 30s
+    // which is long enough that a broken DB (e.g. AWS OIDC misconfig, RDS
+    // unavailable) makes login requests appear to hang indefinitely.
+    connect_timeout: 10,
   })
 }
 
