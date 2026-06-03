@@ -54,6 +54,7 @@ type QbPostJoinRow = {
   postingStatus: 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed'
   docNumber: string
   qbJournalEntryId: string | null
+  duplicateWarningAt: Date | null
 }
 
 export function rowToTransaction(
@@ -116,6 +117,7 @@ export function rowToTransaction(
     qbPostingStatus: qbPostRow?.postingStatus ?? null,
     qbDocNumber: qbPostRow?.docNumber ?? null,
     qbJournalEntryId: qbPostRow?.qbJournalEntryId ?? null,
+    qbDuplicateWarning: qbPostRow?.duplicateWarningAt != null,
   }
 }
 
@@ -218,6 +220,7 @@ export async function getTreasuryTransactions({
         postingStatus: qbPost.postingStatus,
         docNumber: qbPost.docNumber,
         qbJournalEntryId: qbPost.qbJournalEntryId,
+        duplicateWarningAt: qbPost.duplicateWarningAt,
       },
     })
     .from(transaction)

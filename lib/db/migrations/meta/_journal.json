@@ -120,6 +120,13 @@
       "when": 1779810538582,
       "tag": "0016_goofy_black_crow",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1780446562002,
+      "tag": "0017_salty_molly_hayes",
+      "breakpoints": true
     }
   ]
 }

@@ -37,6 +37,10 @@ export type PostBatchResult = {
     docNumber: string
     qbJournalEntryId: string
     memberTxIds: string[]
+    // Set when the post-POST duplicate scan saw >1 JE in QB carrying our
+    // DocNumber + TxnDate. The POST itself succeeded — this flag is a
+    // best-effort "you should manually void the other one" signal for the UI.
+    duplicateWarning?: boolean
   }>
   failures: Array<{
     docNumber: string
@@ -429,42 +433,106 @@ async function postOneGroupLocked(
       .set({ docNumber })
       .where(eq(qbPost.id, pending.id))
 
-    // D11 — idempotency probe: did a prior run already POST a JE for this
-    // qb_post.id? (network error after QB ack, container restart mid-flight, …)
-    let qbJournalEntryId: string
-    const existing = await findQbJeByPrivateNote(entity, pending.id)
-    if (existing) {
-      qbJournalEntryId = existing.Id
-    } else {
-      // Resolve vendor refs (out-direction members with a labelled counterparty
-      // get matched against QB's vendor list; matches attach EntityRef to the
-      // AP-side line in buildJournalEntry).
-      const vendorEntityRef = await resolveVendorRef(entity, group)
+    // TODO: Idempotency check removed — PrivateNote is not queryable in QB
+    // QBOQL (returns 400 QueryParserError, blocking the whole post). Proper
+    // idempotency to be implemented in Wave 2d using DocNumber-based detection
+    // (pre-allocate qb_post with status='posting' + DocNumber, retry-adopt by
+    // DocNumber query). Until then, the duplicate-scan immediately after POST
+    // (below) is our detection layer. PrivateNote is still set on outbound JEs
+    // (in buildJournalEntry) as a manual-audit trail in QB's UI.
+    //
+    // Resolve vendor refs (out-direction members with a labelled counterparty
+    // get matched against QB's vendor list; matches attach EntityRef to the
+    // AP-side line in buildJournalEntry).
+    const vendorEntityRef = await resolveVendorRef(entity, group)
 
-      const txsForPost = (group.kind === 'individual'
-        ? [group.tx]
-        : group.members
-      ).map((t) =>
-        toTxForPost(t, {
-          // We verified eligibility above; non-null assertions are safe here.
-          walletAccountCode: (t.glAccountOverride ?? t.walletAccountCode) as string,
-          counterpartyGl: (t.counterpartyGlOverride ?? t.counterpartyGlMapValue) as string,
-        }),
-      )
+    const txsForPost = (group.kind === 'individual'
+      ? [group.tx]
+      : group.members
+    ).map((t) =>
+      toTxForPost(t, {
+        // We verified eligibility above; non-null assertions are safe here.
+        walletAccountCode: (t.glAccountOverride ?? t.walletAccountCode) as string,
+        counterpartyGl: (t.counterpartyGlOverride ?? t.counterpartyGlMapValue) as string,
+      }),
+    )
 
-      const je: QbJournalEntry = buildJournalEntry({
-        txs: txsForPost,
-        docNumber,
-        vendorEntityRef,
-        privateNote: pending.id,
-      })
+    const je: QbJournalEntry = buildJournalEntry({
+      txs: txsForPost,
+      docNumber,
+      vendorEntityRef,
+      privateNote: pending.id,
+    })
 
-      const resp = await fetchQboJson<QbJournalEntryResponse>(
+    const resp = await fetchQboJson<QbJournalEntryResponse>(
+      entity,
+      `/v3/company/${getQboRealmId(entity)}/journalentry?minorversion=65`,
+      { method: 'POST', body: JSON.stringify(je) },
+    )
+    const qbJournalEntryId = resp.JournalEntry.Id
+
+    // Inline duplicate scan — the POST already succeeded. Query QB: how many
+    // JEs exist with this exact DocNumber + TxnDate? Expected 1 (the one we
+    // just created). If > 1, a prior attempt also succeeded and the user is
+    // now looking at a duplicate in QB books to manually void.
+    //
+    // We re-derive txnDate the same way buildJournalEntry does (earliest
+    // blockTime across members, UTC YYYY-MM-DD) so the query matches the
+    // JE we just submitted.
+    const txnDateIso = je.TxnDate
+    let duplicateDetected = false
+    try {
+      const safeDoc = docNumber.replace(/'/g, "''")
+      const dupQuery = `SELECT Id FROM JournalEntry WHERE DocNumber = '${safeDoc}' AND TxnDate = '${txnDateIso}'`
+      const dupRes = await fetchQboJson<
+        QbQueryResponse<'JournalEntry', { Id: string }>
+      >(
         entity,
-        `/v3/company/${getQboRealmId(entity)}/journalentry?minorversion=65`,
-        { method: 'POST', body: JSON.stringify(je) },
+        `/v3/company/${getQboRealmId(entity)}/query?query=${encodeURIComponent(dupQuery)}&minorversion=65`,
       )
-      qbJournalEntryId = resp.JournalEntry.Id
+      const matches = dupRes.QueryResponse?.JournalEntry ?? []
+      const matchCount = matches.length
+      duplicateDetected = matchCount > 1
+      if (duplicateDetected) {
+        const otherJeIds = matches
+          .filter((m) => m.Id !== qbJournalEntryId)
+          .map((m) => m.Id)
+        logAudit({
+          userId,
+          action: 'qb_post.duplicate_detected',
+          resourceType: 'qb_post',
+          resourceId: pending.id,
+          metadata: {
+            entity,
+            docNumber,
+            qbJournalEntryId,
+            txnDate: txnDateIso,
+            matchCount,
+            otherJeIds,
+          },
+        }).catch(() => {
+          /* swallow */
+        })
+      }
+    } catch (dupErr) {
+      // Dup-check is best-effort. The POST already succeeded — a network
+      // hiccup on the query side must NOT fail the whole post. Just record
+      // the miss and continue with the normal success path.
+      logAudit({
+        userId,
+        action: 'qb_post.duplicate_check_failed',
+        resourceType: 'qb_post',
+        resourceId: pending.id,
+        metadata: {
+          entity,
+          docNumber,
+          qbJournalEntryId,
+          txnDate: txnDateIso,
+          error: dupErr instanceof Error ? dupErr.message : String(dupErr),
+        },
+      }).catch(() => {
+        /* swallow */
+      })
     }
 
     // Persist success on the pre-allocated row
@@ -476,6 +544,7 @@ async function postOneGroupLocked(
         postingStatus: 'posted',
         postedAt: new Date(),
         postedBy: userId,
+        ...(duplicateDetected ? { duplicateWarningAt: new Date() } : {}),
       })
       .where(eq(qbPost.id, pending.id))
 
@@ -524,7 +593,13 @@ async function postOneGroupLocked(
       /* swallow */
     })
 
-    return { postId: pending.id, docNumber, qbJournalEntryId, memberTxIds }
+    return {
+      postId: pending.id,
+      docNumber,
+      qbJournalEntryId,
+      memberTxIds,
+      ...(duplicateDetected ? { duplicateWarning: true } : {}),
+    }
   })
 }
 
@@ -534,6 +609,13 @@ async function postOneGroupLocked(
 
 // Adopts a prior orphan JE on retry (D11). Returns null if no JE in QB carries
 // the given PrivateNote.
+//
+// NOTE: Currently unused — QB's QBOQL does NOT support `WHERE PrivateNote = …`
+// and returns 400 QueryParserError, which previously blocked the entire post
+// flow (see Wave 2c hotfix). Kept here as scaffolding for the Wave 2d
+// idempotency rework, which will switch to DocNumber-based retry adoption
+// (a field QB DOES support in QBOQL).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function findQbJeByPrivateNote(
   entity: QboEntity,
   note: string,

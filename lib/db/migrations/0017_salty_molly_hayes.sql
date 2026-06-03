@@ -1,0 +1,1 @@
+ALTER TABLE "app"."qb_post" ADD COLUMN "duplicate_warning_at" timestamp with time zone;
