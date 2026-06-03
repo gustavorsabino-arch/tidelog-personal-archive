@@ -37,7 +37,7 @@ export default function WalletsPage() {
   const [error, setError] = useState<string | null>(null)
   const [entityFilter, setEntityFilter] = useState('')
   const [search, setSearch] = useState('')
-  const [showExternal, setShowExternal] = useState(false)
+  const [walletTypeFilter, setWalletTypeFilter] = useState<'internal' | 'external' | 'all'>('internal')
   // Wave 2c — only admin:manage_data roles can flip is_bulk_treasury. Other
   // viewers see the column read-only (disabled checkbox) so they can still
   // tell which wallets are bulk-mode.
@@ -99,7 +99,8 @@ export default function WalletsPage() {
   // derived from this so switching tabs doesn't zero them out.
   const preEntityFiltered = useMemo(() => {
     return walletRegistry.filter((w) => {
-      if (!showExternal && w.type === 'external') return false
+      if (walletTypeFilter === 'internal' && w.type !== 'internal') return false
+      if (walletTypeFilter === 'external' && w.type !== 'external') return false
       if (search) {
         const s = search.toLowerCase()
         if (!w.label.toLowerCase().includes(s) &&
@@ -108,7 +109,7 @@ export default function WalletsPage() {
       }
       return true
     })
-  }, [walletRegistry, search, showExternal])
+  }, [walletRegistry, search, walletTypeFilter])
 
   const filtered = useMemo(() => {
     if (!entityFilter) return preEntityFiltered
@@ -325,7 +326,8 @@ export default function WalletsPage() {
         <div className="page-sub">
           {loading ? 'Loading…' : error ? `Error: ${error}` : (() => {
             const entityCount = new Set(filtered.map((w) => w.entity)).size
-            return `${filtered.length} wallet${filtered.length === 1 ? '' : 's'} across ${entityCount} entit${entityCount === 1 ? 'y' : 'ies'}`
+            const typeLabel = walletTypeFilter === 'all' ? '' : ` ${walletTypeFilter}`
+            return `${filtered.length}${typeLabel} wallet${filtered.length === 1 ? '' : 's'} across ${entityCount} entit${entityCount === 1 ? 'y' : 'ies'}`
           })()}
         </div>
       </div>
@@ -342,10 +344,18 @@ export default function WalletsPage() {
             </button>
           ))}
         </div>
-        <label style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-          <input type="checkbox" checked={showExternal} onChange={e => setShowExternal(e.target.checked)} />
-          Show external
-        </label>
+        <div className="entity-tabs" role="group" aria-label="Wallet type filter">
+          {(['internal', 'external', 'all'] as const).map((t) => (
+            <button
+              key={t}
+              className={`entity-tab${walletTypeFilter === t ? ' active' : ''}`}
+              onClick={() => setWalletTypeFilter(t)}
+              aria-pressed={walletTypeFilter === t}
+            >
+              {t === 'all' ? 'All' : t === 'internal' ? 'Internal' : 'External'}
+            </button>
+          ))}
+        </div>
         <input className="fsearch" placeholder="Search wallets…" value={search} onChange={e => setSearch(e.target.value)} />
         {isAdmin && (
           <button
@@ -564,8 +574,12 @@ export default function WalletsPage() {
               : filtered.map((w) => {
                   const c = ENTITY_COLORS[w.entity] || '#888'
                   const showBackfillButton = w.chain === 'SOL' && w.type === 'internal' && !w.hiddenFromFinance && w.needsBackfill
+                  const tintExternal = walletTypeFilter === 'all' && w.type === 'external'
                   return (
-                    <tr key={w.address}>
+                    <tr
+                      key={w.address}
+                      style={tintExternal ? { background: 'color-mix(in srgb, var(--muted) 6%, transparent)' } : undefined}
+                    >
                       <td>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', fontWeight: 600, color: c }}>
                           {w.entity}
