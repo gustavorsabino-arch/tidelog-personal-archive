@@ -7,10 +7,8 @@ import { getInitialAccess } from '@/lib/auth/server-access'
 const mono = IBM_Plex_Mono({ subsets: ['latin'], weight: ['400', '500', '600', '700'], variable: '--font-mono' })
 const sans = IBM_Plex_Sans({ subsets: ['latin'], weight: ['400', '500', '600', '700'], variable: '--font-sans' })
 
-// Temporary maintenance banner — auto-hides after this timestamp. Update or
-// remove once the underlying issue (AWS OIDC provider re-registration) is
-// resolved and the banner is no longer needed.
-const MAINTENANCE_UNTIL = new Date('2026-06-02T22:00:00Z')
+// Temporary maintenance banner — auto-hides after this timestamp.
+const MAINTENANCE_UNTIL = new Date('2026-06-03T23:00:00Z')
 
 export const metadata = { title: 'Tidelog' }
 
@@ -40,7 +38,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               textAlign: 'center',
             }}
           >
-            tidelog is undergoing maintenance for approximately the next hour. Some features may be unavailable.
+            tidelog is undergoing maintenance until 3 PM PST on June 3rd. Some features may be unavailable.
           </div>
         ) : null}
         <SwrProvider>
