@@ -51,6 +51,11 @@ export const qbPost = app.table(
     walletAddress: text('wallet_address'),
     token: text('token'),
     monthYyyymm: text('month_yyyymm'),
+    // Set when the inline post-POST duplicate scan sees >1 JE in QB with this
+    // DocNumber + TxnDate (i.e. a prior attempt also succeeded). Surfaced in
+    // the UI as a "manually void the extra entry" warning. Hotfix backstop
+    // until proper DocNumber-based idempotency lands in Wave 2d.
+    duplicateWarningAt: timestamp('duplicate_warning_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

@@ -23,6 +23,10 @@ type PostBatchResponse = {
     docNumber: string
     qbJournalEntryId: string
     memberTxIds: string[]
+    // Set when the post-POST duplicate scan saw >1 JE in QB with this
+    // DocNumber + TxnDate. POST itself succeeded — surface as a warning
+    // so the user knows to manually void the extra entry in QB.
+    duplicateWarning?: boolean
   }>
   failures: Array<{
     docNumber: string
@@ -350,6 +354,33 @@ export function PostToQbModal({
               }}
             >
               Post failed: {submitError}
+            </div>
+          )}
+
+          {submitResult && submitResult.successes.some((s) => s.duplicateWarning === true) && (
+            <div
+              style={{
+                padding: '10px 12px',
+                borderRadius: 6,
+                border: '1px solid #f59e0b',
+                background: '#fef3c7',
+                fontSize: '0.74rem',
+                color: '#78350f',
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 4, color: '#92400e' }}>
+                ⚠ {submitResult.successes.filter((s) => s.duplicateWarning === true).length} possible duplicate(s) detected in QuickBooks.
+              </div>
+              <div>
+                Open QB to review and void the extra entries. Details in audit log.
+              </div>
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: '0.7rem', fontFamily: 'var(--mono)' }}>
+                {submitResult.successes
+                  .filter((s) => s.duplicateWarning === true)
+                  .map((s) => (
+                    <li key={s.postId}>{s.docNumber}</li>
+                  ))}
+              </ul>
             </div>
           )}
 

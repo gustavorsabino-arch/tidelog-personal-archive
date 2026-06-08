@@ -798,6 +798,23 @@ export function TransactionsPageClient({
                 {styleForStatus.label}
               </span>
             )}
+            {t.qbDuplicateWarning === true && (
+              <span
+                title="Possible duplicate detected in QuickBooks at post time — review and void the extra entry."
+                style={{
+                  fontSize: '0.62rem',
+                  fontWeight: 600,
+                  color: 'var(--warn, #d97706)',
+                  border: '1px solid var(--warn, #d97706)',
+                  borderRadius: 3,
+                  padding: '0 4px',
+                  marginLeft: 2,
+                  letterSpacing: '0.02em',
+                }}
+              >
+                ⚠ dup
+              </span>
+            )}
 
             {/* Hover actions — Re-post / Void. Rendered for all rows with a post_id;
                 CSS hover toggles visibility (.qb-status-cell:hover .qb-row-actions).

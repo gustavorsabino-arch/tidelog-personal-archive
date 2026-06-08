@@ -64,6 +64,11 @@ export interface Transaction {
   qbPostingStatus?: 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed' | null
   qbDocNumber?: string | null
   qbJournalEntryId?: string | null
+  // Hotfix backstop — true when the post-POST duplicate scan saw >1 JE in QB
+  // with the same DocNumber + TxnDate. Surfaced as a "⚠ dup" badge in the
+  // QB Status column so the user knows to manually void the extra entry.
+  // Derived from qb_post.duplicate_warning_at IS NOT NULL.
+  qbDuplicateWarning?: boolean | null
 }
 
 export interface TransactionSummary {
