@@ -138,12 +138,29 @@ export function TransactionsPageClient({
     }))
   }, [glAccountsData])
 
+  // Tracks the in-flight request so a newer fetch can cancel an older one.
+  // Without this, responses can arrive out of order: e.g. selecting a year
+  // fires a heavy "whole year" request, then selecting a month fires a light
+  // "single month" one — the month response renders first, then the slower
+  // year response lands last and clobbers the table with year-wide data while
+  // the dropdown still says the month. Aborting the prior request prevents
+  // that and cancels the wasted server work.
+  const inFlight = useRef<AbortController | null>(null)
+
+  // Cancel any in-flight request when the component unmounts, so its response
+  // can't fire setState on a torn-down component.
+  useEffect(() => () => inFlight.current?.abort(), [])
+
   // Offset is passed in explicitly — never read from closure — so pagination
   // and filter changes can each fire exactly one fetch with the right offset,
   // with no race between an "offset reset" effect and a "fetch on offset
   // change" effect.
   const fetchTransactions = useCallback(async (off: number) => {
     if (!entity) return
+    // Supersede any request still in flight; its response would be stale.
+    inFlight.current?.abort()
+    const controller = new AbortController()
+    inFlight.current = controller
     setLoading(true)
     try {
       const params = new URLSearchParams({ entity, limit: String(pageSize), offset: String(off) })
@@ -155,15 +172,26 @@ export function TransactionsPageClient({
         params.set('from', range.from)
         params.set('to', range.to)
       }
-      const res = await apiFetch<TransactionsResponse>(`/api/treasury/transactions?${params}`)
+      const res = await apiFetch<TransactionsResponse>(
+        `/api/treasury/transactions?${params}`,
+        { signal: controller.signal },
+      )
       setTransactions(res.transactions)
       setTotal(res.total)
       setSummary(res.summary)
       setError(null)
     } catch (e: unknown) {
+      // Aborted by a newer request — that request now owns the UI state, so
+      // leave error/loading alone and let it finish.
+      if (controller.signal.aborted) return
       setError(e instanceof Error ? e.message : 'Unknown error')
     } finally {
-      setLoading(false)
+      // Only the latest request clears the loading flag; a superseded request
+      // must not flip it off while its replacement is still running.
+      if (inFlight.current === controller) {
+        setLoading(false)
+        inFlight.current = null
+      }
     }
   }, [entity, pageSize, tokenFilter, dirFilter, walletFilter, yearFilter, monthFilter])
 
