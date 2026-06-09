@@ -47,9 +47,19 @@ import type { QbJournalEntry, QbQueryResponse } from '@/lib/qb/types'
 
 const PAGE_SIZE = 1000
 const TXN_DATE_FROM = '2026-01-01'
-// Solana signatures are 86-88 base58 chars; 40+ is a safe floor that won't
-// match short account-code / amount tokens while still catching every sig.
+// Solana signatures are 86-88 base58 chars. We harvest base58 RUNS with a 40+
+// floor (for diagnostic visibility), then probe an indexed Set of real tidelog
+// hashes. Because base58 overlaps ordinary letters, adjacent words can glue
+// onto a hash (e.g. "Execution<88-char hash>" -> one ~97-char run), so an
+// exact lookup of the raw run misses. We instead (a) fast-path direct-check
+// runs of length 86-88, and (b) slide 86/87/88-char windows across longer (or
+// fast-path-missed) runs to recover the embedded hash. Runs < 86 chars cannot
+// contain a full signature and are skipped (no prefix/partial matching — that
+// would risk false positives).
 const BASE58_TOKEN = /[1-9A-HJ-NP-Za-km-z]{40,}/g
+// Valid Solana signature lengths (base58-encoded 64-byte sigs).
+const SIG_LENGTHS = [86, 87, 88] as const
+const SIG_MIN_LEN = 86
 
 // ────────────────────────────────────────────────────────────────────────────
 // Args
@@ -132,6 +142,59 @@ function harvestHashes(je: QbJournalEntry): string[] {
   return [...out]
 }
 
+// Resolve harvested base58 runs against the indexed Set of real tidelog tx
+// hashes for this entity. Returns the distinct hashes that matched, plus the
+// runs from which NO window matched (for the "unmatched" diagnostic), plus a
+// count of sub-86 fragments that were skipped outright.
+//
+// Per run:
+//   - run.length < 86            -> too short to hold a full sig; skip (fragment)
+//   - run.length in {86,87,88}   -> FAST PATH: direct hashSet.has(run) hit ⇒ done
+//   - otherwise (len > 88, or fast-path missed) -> SLIDE: try every 86/87/88
+//     window; each window in the set is a recovered hash (handles glued runs).
+function resolveMatchedHashes(
+  runs: string[],
+  hashSet: Set<string>,
+): { matched: Set<string>; unmatchedRuns: string[]; shortFragments: number } {
+  const matched = new Set<string>()
+  const unmatchedRuns: string[] = []
+  let shortFragments = 0
+
+  for (const run of runs) {
+    if (run.length < SIG_MIN_LEN) {
+      shortFragments += 1
+      continue
+    }
+
+    // Fast path: a clean run that IS exactly a hash (the common case).
+    if (run.length <= 88 && hashSet.has(run)) {
+      matched.add(run)
+      continue
+    }
+
+    // Slide path: recover an embedded hash from a glued/longer run. Also the
+    // fallback when a 86-88 run didn't directly hit (e.g. trailing glue chars).
+    let hitThisRun = false
+    for (const w of SIG_LENGTHS) {
+      if (run.length < w) continue
+      const last = run.length - w
+      for (let i = 0; i <= last; i += 1) {
+        const window = run.slice(i, i + w)
+        if (hashSet.has(window)) {
+          matched.add(window)
+          hitThisRun = true
+        }
+      }
+    }
+
+    // A >=86 run that yielded no in-set window is genuinely unmatched
+    // (other-entity sig, ETH-style hex token, or a tx tidelog lacks).
+    if (!hitThisRun) unmatchedRuns.push(run)
+  }
+
+  return { matched, unmatchedRuns, shortFragments }
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Main
 // ────────────────────────────────────────────────────────────────────────────
@@ -159,38 +222,55 @@ async function main() {
   console.log('Fetching JournalEntries from QB…')
   const jes = await fetchAllJournalEntries(entity)
 
-  // 2. Harvest hashes per JE.
-  let hashlessJeCount = 0
-  let jesWithHash = 0
-  const allHashes = new Set<string>()
-  // hash -> set of JE ids that referenced it (for reporting & matching)
-  const hashToJes = new Map<string, QbJournalEntry[]>()
-  // JE id -> hashes it produced (for the per-JE upsert step)
+  // 2. Build the O(1) lookup index: the Set of every distinct tidelog tx hash
+  //    for this entity. Built ONCE; its size is irrelevant to per-probe cost.
+  //    Tens of thousands of rows is fine — this is an offline one-time script.
+  console.log('Loading tidelog tx-hash index for entity…')
+  const hashRows = await db
+    .selectDistinct({ txHash: transaction.txHash })
+    .from(transaction)
+    .where(eq(transaction.entityId, dbEntity))
+  const entityHashSet = new Set<string>(hashRows.map((r) => r.txHash))
+  console.log(`  indexed ${entityHashSet.size} distinct tidelog tx hashes`)
+
+  // 3. Harvest base58 runs per JE, then resolve each JE to the set of real
+  //    tidelog hashes it references via fast-path + windowed probe.
+  let hashlessJeCount = 0 // JE yielded no base58 run >= 40 chars at all
+  let jesWithHash = 0 // JE yielded >= 1 matched tidelog hash
+  let shortFragmentsSkipped = 0 // sub-86 base58 runs skipped (diagnostics)
+  const allMatchedHashes = new Set<string>() // distinct matched hashes overall
+  // Diagnostic: >=86 runs (or longer runs) from which NO window matched the set.
+  const unmatchedRunSet = new Set<string>()
+  // JE id -> distinct matched tidelog hashes (drives the per-JE upsert step).
   const jeHashes = new Map<string, string[]>()
 
   for (const je of jes) {
-    const hashes = harvestHashes(je)
-    if (hashes.length === 0) {
+    const runs = harvestHashes(je)
+    if (runs.length === 0) {
       hashlessJeCount += 1
       continue
     }
+    const { matched, unmatchedRuns, shortFragments } = resolveMatchedHashes(
+      runs,
+      entityHashSet,
+    )
+    shortFragmentsSkipped += shortFragments
+    for (const run of unmatchedRuns) unmatchedRunSet.add(run)
+
+    if (matched.size === 0) continue
     jesWithHash += 1
-    jeHashes.set(je.Id ?? '', hashes)
-    for (const h of hashes) {
-      allHashes.add(h)
-      const list = hashToJes.get(h)
-      if (list) list.push(je)
-      else hashToJes.set(h, [je])
-    }
+    jeHashes.set(je.Id ?? '', [...matched])
+    for (const h of matched) allMatchedHashes.add(h)
   }
 
-  // 3. Match harvested hashes to tidelog transaction rows for this entity.
-  const hashList = [...allHashes]
+  // 4. Pull tidelog row detail for the matched hashes (we already know they
+  //    exist for this entity; we need wallet/direction/asset to link each leg).
+  const matchedHashList = [...allMatchedHashes]
   const matchedRows: MatchedRow[] = []
   // Batch the IN() to keep the query reasonable.
   const CHUNK = 500
-  for (let i = 0; i < hashList.length; i += CHUNK) {
-    const chunk = hashList.slice(i, i + CHUNK)
+  for (let i = 0; i < matchedHashList.length; i += CHUNK) {
+    const chunk = matchedHashList.slice(i, i + CHUNK)
     if (chunk.length === 0) continue
     const rows = await db
       .select({
@@ -218,8 +298,8 @@ async function main() {
     else hashToRows.set(r.txHash, [r])
   }
 
-  const matchedHashes = hashList.filter((h) => hashToRows.has(h))
-  const unmatchedHashes = hashList.filter((h) => !hashToRows.has(h))
+  const matchedHashes = matchedHashList.filter((h) => hashToRows.has(h))
+  const unmatchedHashes = [...unmatchedRunSet]
   const multiRowHashes = matchedHashes.filter(
     (h) => (hashToRows.get(h)?.length ?? 0) > 1,
   )
@@ -335,15 +415,19 @@ async function main() {
   console.log(`\n──────────────────── REPORT ────────────────────`)
   console.log(`Entity:                 ${entity}  (db: ${dbEntity}, realm: ${realmId})`)
   console.log(`Mode:                   ${commit ? 'COMMIT' : 'DRY-RUN'}`)
-  console.log(`\nJEs scanned:            ${jes.length}`)
-  console.log(`JEs with >= 1 hash:     ${jesWithHash}`)
-  console.log(`Hashless JEs (skipped): ${hashlessJeCount}`)
-  console.log(`\nDistinct hashes harvested: ${allHashes.size}`)
-  console.log(`  matched to tidelog txs:  ${matchedHashes.length}`)
-  console.log(`  unmatched:               ${unmatchedHashes.length}`)
+  console.log(`\nJEs scanned:              ${jes.length}`)
+  console.log(`JEs with >= 1 matched hash: ${jesWithHash}`)
+  console.log(`JEs with no base58 run:   ${hashlessJeCount}`)
+  console.log(`\nTidelog hashes indexed:   ${entityHashSet.size}`)
+  console.log(`Distinct matched hashes:  ${matchedHashes.length}`)
+  console.log(`Short base58 runs skipped (<86 chars): ${shortFragmentsSkipped}`)
+  console.log(`Unmatched >=86 base58 runs:            ${unmatchedHashes.length}`)
 
   if (unmatchedHashes.length > 0) {
-    console.log(`\nFirst ${Math.min(20, unmatchedHashes.length)} unmatched hashes (other entities or txs tidelog lacks):`)
+    console.log(
+      `\nFirst ${Math.min(20, unmatchedHashes.length)} unmatched runs ` +
+        `(>=86 base58 with no in-set window — other entities, ETH-hex tokens, or txs tidelog lacks):`,
+    )
     for (const h of unmatchedHashes.slice(0, 20)) console.log(`    ${h}`)
   }
 
