@@ -69,6 +69,13 @@ export interface Transaction {
   // QB Status column so the user knows to manually void the extra entry.
   // Derived from qb_post.duplicate_warning_at IS NOT NULL.
   qbDuplicateWarning?: boolean | null
+  // Task 10 — effective GL + provenance. effectiveGlAccount is the GL number that
+  // was (or would be) posted: for posted rows this is the faithful immutable
+  // snapshot from tx_qb_state.posted_gl_account; for unposted rows it is the
+  // live resolution of override → per-token → wallet default.
+  effectiveGlAccount?: string | null
+  glSource?: 'override' | 'token' | 'default' | null
+  isPosted?: boolean
 }
 
 export interface TransactionSummary {

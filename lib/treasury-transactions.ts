@@ -1,10 +1,11 @@
 import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
-import { transaction, transactionGain, txQbState, wallet, counterpartyGlMap, qbPost } from '@/lib/db/schema'
+import { transaction, transactionGain, txQbState, wallet, counterpartyGlMap, qbPost, walletTokenAccountCode } from '@/lib/db/schema'
 import { STABLE_TOKENS } from '@/lib/constants'
 import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import { defaultDescription } from '@/lib/qb-state'
+import { resolveWalletGl } from '@/lib/qb/resolve-wallet-gl'
 import type { Transaction, TransactionsResponse } from '@/lib/types'
 
 type GetTreasuryTransactionsParams = {
@@ -40,6 +41,14 @@ type QbStateJoinRow = {
   description: string | null
   glAccountOverride: string | null
   counterpartyGlOverride: string | null
+  postedGlAccount: string | null
+  postedGlSource: 'override' | 'token' | 'default' | null
+}
+
+type PerTokenGlJoinRow = {
+  // D10 marker — walletAddress is notNull on the table (part of PK).
+  _present: string
+  perTokenAccountCode: string | null
 }
 
 type CounterpartyGlJoinRow = {
@@ -66,6 +75,7 @@ export function rowToTransaction(
   walletAccountCode: string | null = null,
   counterpartyGl: CounterpartyGlJoinRow | null = null,
   qbPostRow: QbPostJoinRow | null = null,
+  perTokenGl: PerTokenGlJoinRow | null = null,
 ): Transaction {
   const qty = Number(row.qty)
   const isStable = STABLE_TOKENS.has(row.asset)
@@ -98,6 +108,22 @@ export function rowToTransaction(
     noBasis: gain?.noBasis ?? null,
     lots: (gain?.lots as Transaction['lots']) ?? null,
   }
+  // Effective GL resolution — posted rows use the immutable snapshot written at
+  // post time (postedGlAccount/postedGlSource); unposted rows resolve live from
+  // the three-tier priority chain (override → per-token → wallet default).
+  // isPosted uses postedGlAccount != null as the authoritative signal: we write
+  // that column only on a successful post, so its presence means "was faithfully
+  // posted with this GL". qbPostingStatus could be 'posted' too, but that field
+  // lives on the qb_post row and is null when no post exists — less direct.
+  const isPosted = qbState?.postedGlAccount != null
+  const { code: effectiveGlAccount, source: glSource } = isPosted
+    ? { code: qbState!.postedGlAccount, source: qbState!.postedGlSource }
+    : resolveWalletGl({
+        override: qbState?.glAccountOverride,
+        perToken: perTokenGl?.perTokenAccountCode,
+        default: walletAccountCode,
+      })
+
   return {
     ...base,
     id: row.id,
@@ -118,6 +144,10 @@ export function rowToTransaction(
     qbDocNumber: qbPostRow?.docNumber ?? null,
     qbJournalEntryId: qbPostRow?.qbJournalEntryId ?? null,
     qbDuplicateWarning: qbPostRow?.duplicateWarningAt != null,
+    // Task 10 — effective GL per row + provenance.
+    isPosted,
+    effectiveGlAccount,
+    glSource,
   }
 }
 
@@ -203,6 +233,8 @@ export async function getTreasuryTransactions({
         description: txQbState.description,
         glAccountOverride: txQbState.glAccountOverride,
         counterpartyGlOverride: txQbState.counterpartyGlOverride,
+        postedGlAccount: txQbState.postedGlAccount,
+        postedGlSource: txQbState.postedGlSource,
       },
       counterpartyGl: {
         // D10 marker — counterpartyGlMap.entityId is notNull on the table.
@@ -221,6 +253,13 @@ export async function getTreasuryTransactions({
         docNumber: qbPost.docNumber,
         qbJournalEntryId: qbPost.qbJournalEntryId,
         duplicateWarningAt: qbPost.duplicateWarningAt,
+      },
+      perTokenGl: {
+        // D10 marker — walletAddress is notNull on wallet_token_account_code (part of PK).
+        // accountCode is also notNull on this table, but aliasing walletAddress makes
+        // the marker intent explicit and guards against future schema changes.
+        _present: walletTokenAccountCode.walletAddress,
+        perTokenAccountCode: walletTokenAccountCode.accountCode,
       },
     })
     .from(transaction)
@@ -256,6 +295,15 @@ export async function getTreasuryTransactions({
     // LEFT JOIN tx_qb_state above on the tx's PK columns, so chaining here
     // gives us posting metadata for the row (or null if no qb_post linked).
     .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
+    // Per-(wallet, token) GL mapping. PK is (walletAddress, tokenSymbol) so
+    // each transaction row joins at most one row — no fan-out.
+    .leftJoin(
+      walletTokenAccountCode,
+      and(
+        eq(walletTokenAccountCode.walletAddress, transaction.walletAddress),
+        eq(walletTokenAccountCode.tokenSymbol, transaction.asset),
+      ),
+    )
     .where(where)
     .orderBy(desc(transaction.blockTime))
   const pageQuery = unbounded
@@ -287,6 +335,7 @@ export async function getTreasuryTransactions({
       row.walletAccountCode ?? null,
       row.counterpartyGl ?? null,
       row.qbPost ?? null,
+      row.perTokenGl ?? null,
     ),
   )
 
