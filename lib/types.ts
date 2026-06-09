@@ -61,7 +61,7 @@ export interface Transaction {
   // qbPostId is the FK value itself; null/undefined = unposted. The other three
   // are projected from the qbPost row and are null when no post exists.
   qbPostId?: string | null
-  qbPostingStatus?: 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed' | null
+  qbPostingStatus?: 'unposted' | 'posted' | 'posted_modified' | 'posted_manually' | 'voided' | 'failed' | null
   qbDocNumber?: string | null
   qbJournalEntryId?: string | null
   // Hotfix backstop — true when the post-POST duplicate scan saw >1 JE in QB

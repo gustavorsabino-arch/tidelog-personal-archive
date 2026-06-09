@@ -41,23 +41,6 @@ export const qbReportCache = app.table(
   ],
 )
 
-export const qbAccountMap = app.table(
-  'qb_account_map',
-  {
-    // realmId is an external Intuit identifier, not an FK — multiple
-    // qb_connection rows can now share a realm, and the account map is
-    // per-realm metadata orthogonal to which entity authenticated.
-    realmId: text('realm_id').notNull(),
-    qbAccountId: text('qb_account_id').notNull(),
-    qbAccountNumber: text('qb_account_number'),
-    qbAccountName: text('qb_account_name').notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    primaryKey({ columns: [t.realmId, t.qbAccountId] }),
-  ],
-)
-
 /**
  * Per-entity account catalog refreshed by the cron. Used by the budget drill
  * to translate an account number into QB's internal account ID when building

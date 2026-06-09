@@ -51,7 +51,7 @@ type QbPostJoinRow = {
   // the nested projection collapses to null when only nullable columns (e.g.
   // qbJournalEntryId, postingError) are projected. Same pattern as qbState.
   postId: string
-  postingStatus: 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed'
+  postingStatus: 'unposted' | 'posted' | 'posted_modified' | 'posted_manually' | 'voided' | 'failed'
   docNumber: string
   qbJournalEntryId: string | null
   duplicateWarningAt: Date | null

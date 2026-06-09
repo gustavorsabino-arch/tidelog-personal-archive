@@ -79,6 +79,7 @@ type LoadedTx = {
     | 'unposted'
     | 'posted'
     | 'posted_modified'
+    | 'posted_manually'
     | 'voided'
     | 'failed'
     | null

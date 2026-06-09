@@ -24,7 +24,7 @@ type Props = {
   docNumber: string
   postId: string
   qbJournalEntryId: string | null
-  postingStatus: 'posted' | 'posted_modified' | 'voided' | 'failed' | 'unposted' | null
+  postingStatus: 'posted' | 'posted_modified' | 'posted_manually' | 'voided' | 'failed' | 'unposted' | null
   // All transactions currently loaded on the page that share this postId.
   // Caller filters by `t.qbPostId === postId` and passes the slice here so the
   // panel doesn't need to know about pagination.
@@ -41,6 +41,7 @@ type Props = {
 const STATUS_LABEL: Record<NonNullable<Props['postingStatus']> | 'null', string> = {
   posted: 'Posted',
   posted_modified: 'Modified — needs re-post',
+  posted_manually: 'Posted manually',
   voided: 'Voided',
   failed: 'Failed',
   unposted: 'Unposted',
@@ -50,6 +51,7 @@ const STATUS_LABEL: Record<NonNullable<Props['postingStatus']> | 'null', string>
 const STATUS_COLOR: Record<NonNullable<Props['postingStatus']> | 'null', string> = {
   posted: 'var(--green, #10b981)',
   posted_modified: 'var(--warn, #d97706)',
+  posted_manually: 'var(--green, #10b981)',
   voided: 'var(--muted)',
   failed: 'var(--red, #dc2626)',
   unposted: 'var(--muted)',
