@@ -142,10 +142,11 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ address: 
   }).catch(() => { /* swallow */ })
 
   // Soft-validate accountCode against QB catalog — warn but do not block.
-  const effectiveAccountCode = 'accountCode' in setMap ? (setMap.accountCode as string | null) : existing.accountCode
+  // Only when accountCode is part of THIS patch, so unrelated edits (e.g. a
+  // flag toggle) don't surface a spurious GL warning on a stale stored code.
   const resp: Record<string, unknown> = { ok: true }
-  if (effectiveAccountCode) {
-    const codeExists = await accountNumberExists(existing.entityId, effectiveAccountCode)
+  if ('accountCode' in setMap && typeof setMap.accountCode === 'string' && setMap.accountCode) {
+    const codeExists = await accountNumberExists(existing.entityId, setMap.accountCode)
     if (!codeExists) {
       resp.warning = 'account_code not found in QuickBooks chart of accounts'
     }
