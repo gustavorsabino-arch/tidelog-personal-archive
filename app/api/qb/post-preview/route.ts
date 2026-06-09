@@ -24,6 +24,7 @@ import {
 } from '@/lib/qb/doc-number'
 import { isQboEntity } from '@/lib/qb/config'
 import type { QbJournalEntry } from '@/lib/qb/types'
+import type { GlSource } from '@/lib/qb/resolve-wallet-gl'
 
 const MAX_BATCH_SIZE = 50
 
@@ -33,6 +34,8 @@ export type PostPreviewResult = {
     docNumberPreview: string
     memberTxIds: string[]
     je: QbJournalEntry
+    glSource: GlSource | null
+    token: string | null
   }>
   skipped: Array<{ txId: string; reason: string }>
 }
@@ -109,6 +112,8 @@ export async function POST(req: NextRequest) {
           docNumberPreview,
           memberTxIds: [group.tx.id],
           je,
+          glSource: group.tx.walletGlSource,
+          token: group.tx.asset,
         }
       }
       const docNumberPreview = formatBulkDocNumber(group.token, group.monthDate)
@@ -123,6 +128,8 @@ export async function POST(req: NextRequest) {
         docNumberPreview,
         memberTxIds: group.members.map((m) => m.id),
         je,
+        glSource: group.members[0]?.walletGlSource ?? null,
+        token: group.token,
       }
     })
 
