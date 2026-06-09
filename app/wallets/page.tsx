@@ -72,6 +72,7 @@ export default function WalletsPage() {
   type TokenGlMapping = { tokenSymbol: string; accountCode: string }
   const [tokenGlMappings, setTokenGlMappings] = useState<TokenGlMapping[]>([])
   const [transactedTokens, setTransactedTokens] = useState<string[]>([])
+  const [allTokens, setAllTokens] = useState<{ symbol: string; name: string }[]>([])
   const [tokenGlLoading, setTokenGlLoading] = useState(false)
   const [addTokenValue, setAddTokenValue] = useState('')
 
@@ -207,15 +208,20 @@ export default function WalletsPage() {
     // Reset per-token GL state
     setTokenGlMappings([])
     setTransactedTokens([])
+    setAllTokens([])
     setAddTokenValue('')
     if (isQboEntity(w.entity)) {
       setTokenGlLoading(true)
-      apiFetch<{ mappings: { tokenSymbol: string; accountCode: string }[]; transactedTokens: string[] }>(
-        `/api/wallets/${encodeURIComponent(w.address)}/token-gl`
-      )
-        .then((res) => {
-          setTokenGlMappings(res.mappings)
-          setTransactedTokens(res.transactedTokens)
+      Promise.all([
+        apiFetch<{ mappings: { tokenSymbol: string; accountCode: string }[]; transactedTokens: string[] }>(
+          `/api/wallets/${encodeURIComponent(w.address)}/token-gl`
+        ),
+        apiFetch<{ tokens: { symbol: string; name: string }[] }>('/api/tokens'),
+      ])
+        .then(([glRes, tokensRes]) => {
+          setTokenGlMappings(glRes.mappings)
+          setTransactedTokens(glRes.transactedTokens)
+          setAllTokens(tokensRes.tokens)
         })
         .catch(() => { /* silently ignore — GL rows are optional */ })
         .finally(() => setTokenGlLoading(false))
@@ -228,6 +234,7 @@ export default function WalletsPage() {
     setSavingEdit(false)
     setTokenGlMappings([])
     setTransactedTokens([])
+    setAllTokens([])
     setAddTokenValue('')
   }
 
@@ -873,9 +880,9 @@ export default function WalletsPage() {
                 {tokenGlLoading ? (
                   <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginBottom: 8 }}>Loading token mappings…</div>
                 ) : (() => {
-                  // Union of transacted tokens and mapped tokens, deduplicated
+                  // Union of transacted tokens and mapped tokens, deduplicated — these are the rows shown
                   const mappedSymbols = tokenGlMappings.map(m => m.tokenSymbol)
-                  const allTokens = Array.from(new Set([...mappedSymbols, ...transactedTokens])).sort()
+                  const shownTokens = Array.from(new Set([...mappedSymbols, ...transactedTokens])).sort()
                   const mappingByToken = new Map(tokenGlMappings.map(m => [m.tokenSymbol, m.accountCode]))
 
                   const handleTokenGlChange = async (tokenSymbol: string, v: string | null) => {
@@ -901,17 +908,19 @@ export default function WalletsPage() {
                     }
                   }
 
-                  // Tokens available to add (not yet shown)
-                  const availableToAdd = transactedTokens.filter(t => !allTokens.includes(t))
+                  // Tokens available to add — full token list minus those already shown as rows
+                  const availableToAdd = allTokens
+                    .map(t => t.symbol)
+                    .filter(s => !shownTokens.includes(s))
 
                   return (
                     <>
-                      {allTokens.length > 0 && (
+                      {shownTokens.length > 0 && (
                         <div style={{ marginBottom: 8 }}>
                           <span className="budget-scope-label" style={{ display: 'block', marginBottom: 6 }}>
                             Per-token GL overrides
                           </span>
-                          {allTokens.map(tokenSymbol => {
+                          {shownTokens.map(tokenSymbol => {
                             const mapped = mappingByToken.get(tokenSymbol) ?? null
                             return (
                               <div key={tokenSymbol} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
