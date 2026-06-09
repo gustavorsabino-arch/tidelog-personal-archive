@@ -4,6 +4,7 @@ import { requirePermission } from '@/lib/auth/require-permission'
 import { db } from '@/lib/db'
 import { wallet } from '@/lib/db/schema'
 import { logAudit } from '@/lib/audit'
+import { accountNumberExists } from '@/lib/qb/cache-reads'
 
 // PATCH /api/wallets/[address]
 //   Body: { isBulkTreasury?: boolean; label?: string; accountCode?: string | null; type?: 'internal' | 'external'; hiddenFromFinance?: boolean }
@@ -140,5 +141,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ address: 
     },
   }).catch(() => { /* swallow */ })
 
-  return NextResponse.json({ ok: true })
+  // Soft-validate accountCode against QB catalog — warn but do not block.
+  const effectiveAccountCode = 'accountCode' in setMap ? (setMap.accountCode as string | null) : existing.accountCode
+  const resp: Record<string, unknown> = { ok: true }
+  if (effectiveAccountCode) {
+    const codeExists = await accountNumberExists(existing.entityId, effectiveAccountCode)
+    if (!codeExists) {
+      resp.warning = 'account_code not found in QuickBooks chart of accounts'
+    }
+  }
+
+  return NextResponse.json(resp)
 }
