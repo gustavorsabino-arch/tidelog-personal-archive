@@ -379,3 +379,11 @@ export function buildCachedTransactionPayloadFetcher(
     return record.payload
   }
 }
+
+// True if `accountNumber` exists in the given entity's cached catalog.
+// entityId is the lowercase DB id (e.g. 'opco'), matching qb_account_catalog.
+export async function accountNumberExists(entityId: string, accountNumber: string): Promise<boolean> {
+  const [row] = await db.select({ n: qbAccountCatalog.qbAccountNumber }).from(qbAccountCatalog)
+    .where(and(eq(qbAccountCatalog.entityId, entityId), eq(qbAccountCatalog.qbAccountNumber, accountNumber))).limit(1)
+  return !!row
+}
