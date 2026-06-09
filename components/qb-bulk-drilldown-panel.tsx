@@ -51,7 +51,7 @@ const STATUS_LABEL: Record<NonNullable<Props['postingStatus']> | 'null', string>
 const STATUS_COLOR: Record<NonNullable<Props['postingStatus']> | 'null', string> = {
   posted: 'var(--green, #10b981)',
   posted_modified: 'var(--warn, #d97706)',
-  posted_manually: 'var(--green, #10b981)',
+  posted_manually: '#3b82f6',
   voided: 'var(--muted)',
   failed: 'var(--red, #dc2626)',
   unposted: 'var(--muted)',

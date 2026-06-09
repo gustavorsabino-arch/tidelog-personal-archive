@@ -24,7 +24,7 @@ import type { Transaction, TransactionSummary, TransactionsResponse } from '@/li
 // Status filter values map directly to t.qbPostingStatus (with the addition of
 // 'all' for no filter and 'unposted' which also covers null). Keep this in
 // sync with the dropdown options below.
-type QbStatusFilter = '' | 'unposted' | 'posted' | 'posted_modified' | 'voided' | 'failed'
+type QbStatusFilter = '' | 'unposted' | 'posted' | 'posted_modified' | 'posted_manually' | 'voided' | 'failed'
 
 // Client-side mirror of the server-enforced cap (D13). Disables the post
 // button with a helper note when the user has selected more than this many
@@ -744,6 +744,8 @@ export function TransactionsPageClient({
               return { color: 'var(--green, #10b981)', icon: '✓', label: '' }
             case 'posted_modified':
               return { color: 'var(--warn, #d97706)', icon: '⚠', label: '(modified)' }
+            case 'posted_manually':
+              return { color: '#3b82f6', icon: '✓', label: '(manual)' }
             case 'voided':
               return { color: 'var(--muted)', icon: '⌀', label: '(voided)', strike: true }
             case 'failed':
@@ -767,6 +769,9 @@ export function TransactionsPageClient({
         return (
           <span
             className="qb-status-cell"
+            title={status === 'posted_manually'
+              ? 'Posted to QuickBooks manually (outside this tool) — identified by reconciliation.'
+              : undefined}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
               color: styleForStatus.color,
@@ -1054,6 +1059,7 @@ export function TransactionsPageClient({
                   <option value="">All QB statuses</option>
                   <option value="unposted">Unposted</option>
                   <option value="posted">Posted</option>
+                  <option value="posted_manually">Posted (manual)</option>
                   <option value="posted_modified">Modified</option>
                   <option value="voided">Voided</option>
                   <option value="failed">Failed</option>
@@ -1112,6 +1118,7 @@ export function TransactionsPageClient({
                 // without having to scan the QB Status column.
                 switch (t.qbPostingStatus) {
                   case 'posted':          classes.push('tx-row-posted'); break
+                  case 'posted_manually': classes.push('tx-row-posted-manually'); break
                   case 'posted_modified': classes.push('tx-row-modified'); break
                   case 'voided':          classes.push('tx-row-voided'); break
                   case 'failed':          classes.push('tx-row-failed'); break
