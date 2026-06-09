@@ -669,6 +669,7 @@ th.sortable:hover { color: var(--accent) }
    but not overwhelming when many rows are posted. Tints stack with hover
    (DataTable's row hover styles still apply on top). */
 .tx-row-posted td       { background: rgba(16, 185, 129, 0.06); }
+.tx-row-posted-manually td { background: rgba(59, 130, 246, 0.07); }
 .tx-row-modified td     { background: rgba(217, 119, 6, 0.10); }
 .tx-row-voided td       { background: rgba(107, 114, 128, 0.06); }
 .tx-row-voided td       { color: var(--muted); }

@@ -17,6 +17,8 @@ export const qbPostingStatus = app.enum('qb_posting_status', [
   'unposted',
   'posted',
   'posted_modified',
+  // posted to QB outside this tool (legacy/manual entry), identified by reconciliation backfill — see backfill-manual-qb-posts script
+  'posted_manually',
   'voided',
   'failed',
 ])
