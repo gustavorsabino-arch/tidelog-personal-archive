@@ -24,7 +24,7 @@ export const CreateWalletSchema = z.object({
   label: z.string().min(1).max(80),
   chain: z.enum(['SOL', 'ETH', 'BTC']),
   entityId: z.string().min(1),
-  accountCode: z.string().optional(),
+  accountCode: z.string().max(80).optional(),
   type: z.enum(['internal', 'external']).default('internal'),
   hiddenFromFinance: z.boolean().default(false),
   backfill: z.boolean().optional(),

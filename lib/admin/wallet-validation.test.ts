@@ -151,3 +151,11 @@ test('CreateWalletSchema rejects backfill=true for external wallet', () => {
   })
   expect(result.success).toBe(false)
 })
+
+test('CreateWalletSchema rejects accountCode > 80 chars', () => {
+  expect(CreateWalletSchema.safeParse({ address:'7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', label:'T', chain:'SOL', entityId:'opco', accountCode:'x'.repeat(81) }).success).toBe(false)
+})
+
+test('CreateWalletSchema accepts accountCode of 80 chars', () => {
+  expect(CreateWalletSchema.safeParse({ address:'7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', label:'T', chain:'SOL', entityId:'opco', accountCode:'x'.repeat(80) }).success).toBe(true)
+})
