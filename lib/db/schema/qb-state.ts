@@ -40,6 +40,10 @@ export const txQbState = app.table(
     // truth on its own (it's editable state); the qb_post row itself is the
     // accounting record protected by 'no action' on its FKs.
     postId: uuid('post_id').references(() => qbPost.id, { onDelete: 'set null' }),
+    // Faithful display: the GL number + tier actually used at post time. Null
+    // until posted; immutable snapshot, never re-resolved.
+    postedGlAccount: text('posted_gl_account'),
+    postedGlSource: text('posted_gl_source', { enum: ['override', 'token', 'default'] }),
     // Audit
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     updatedBy: text('updated_by').references(() => user.id),

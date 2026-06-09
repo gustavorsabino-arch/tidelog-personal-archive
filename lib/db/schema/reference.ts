@@ -1,4 +1,4 @@
-import { pgSchema, text, boolean, integer, timestamp, check } from 'drizzle-orm/pg-core'
+import { pgSchema, text, boolean, integer, timestamp, check, primaryKey } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 
 const app = pgSchema('app')
@@ -39,3 +39,18 @@ export const token = app.table('token', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+// Per-(wallet, token) GL mapping — restores v1's GL_CODE_MAP as a table.
+// Stores the QB account NUMBER only; number↔Id lives in qb_account_catalog.
+// wallet.account_code remains the per-wallet default/fallback.
+export const walletTokenAccountCode = app.table(
+  'wallet_token_account_code',
+  {
+    walletAddress: text('wallet_address').notNull().references(() => wallet.address, { onDelete: 'cascade' }),
+    tokenSymbol: text('token_symbol').notNull().references(() => token.symbol),
+    accountCode: text('account_code').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.walletAddress, t.tokenSymbol] })],
+)
