@@ -200,44 +200,34 @@ type QboAccountQueryResponse = {
 
 async function refreshAccountCatalog(entity: QboEntity, entityId: string, now: Date): Promise<void> {
   const [fresh] = await db.select({ fetchedAt: qbAccountCatalog.fetchedAt })
-    .from(qbAccountCatalog)
-    .where(eq(qbAccountCatalog.entityId, entityId))
-    .orderBy(qbAccountCatalog.fetchedAt)
-    .limit(1)
+    .from(qbAccountCatalog).where(eq(qbAccountCatalog.entityId, entityId))
+    .orderBy(qbAccountCatalog.fetchedAt).limit(1)
   if (fresh && now.getTime() - fresh.fetchedAt.getTime() < ACCOUNT_CATALOG_STALE_MS) {
-    console.log(`[qb-reports] ${entityId}: account catalog fresh, skipping`)
-    return
+    console.log(`[qb-reports] ${entityId}: account catalog fresh, skipping`); return
   }
+  await fetchAndStoreAccountCatalog(entity, entityId, now)
+}
 
+// Force-fetch QB Chart of Accounts and replace the entity's catalog rows. No
+// staleness guard — the cron uses refreshAccountCatalog; the route uses this.
+export async function fetchAndStoreAccountCatalog(entity: QboEntity, entityId: string, now: Date): Promise<number> {
   console.log(`[qb-reports] ${entityId}: refreshing account catalog…`)
   const realmId = getQboRealmId(entity)
   const path = `/v3/company/${encodeURIComponent(realmId)}/query?query=${encodeURIComponent('SELECT * FROM Account MAXRESULTS 1000')}&minorversion=65`
   const response = await fetchQboJson<QboAccountQueryResponse>(entity, path)
-
   const accounts = response.QueryResponse?.Account ?? []
-  if (accounts.length === 0) {
-    console.log(`[qb-reports] ${entityId}: account catalog empty`)
-    return
-  }
-
-  const values = accounts
-    .filter((account) => account.Id && account.Name)
-    .map((account) => ({
-      entityId,
-      qbAccountId: String(account.Id),
-      qbAccountNumber: account.AcctNum ? String(account.AcctNum) : null,
-      qbAccountName: String(account.Name),
-      accountType: account.AccountType ? String(account.AccountType) : null,
-      fetchedAt: now,
-    }))
-
-  if (values.length === 0) return
-
+  if (accounts.length === 0) { console.log(`[qb-reports] ${entityId}: account catalog empty`); return 0 }
+  const values = accounts.filter((a) => a.Id && a.Name).map((a) => ({
+    entityId, qbAccountId: String(a.Id), qbAccountNumber: a.AcctNum ? String(a.AcctNum) : null,
+    qbAccountName: String(a.Name), accountType: a.AccountType ? String(a.AccountType) : null, fetchedAt: now,
+  }))
+  if (values.length === 0) return 0
   await db.transaction(async (tx) => {
     await tx.delete(qbAccountCatalog).where(eq(qbAccountCatalog.entityId, entityId))
     await tx.insert(qbAccountCatalog).values(values)
   })
   console.log(`[qb-reports] ${entityId}: account catalog saved (${values.length} accounts)`)
+  return values.length
 }
 
 // ─────────────────────────────────────────────────────────────────────────
