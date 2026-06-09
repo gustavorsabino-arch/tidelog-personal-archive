@@ -10,6 +10,8 @@ type PreviewGroup = {
   docNumberPreview: string
   memberTxIds: string[]
   je: QbJournalEntry
+  glSource: 'override' | 'token' | 'default' | null
+  token: string | null
 }
 
 type PreviewResponse = {
@@ -282,6 +284,23 @@ export function PostToQbModal({
                             <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                               {g.kind === 'individual' ? 'Individual' : `Bulk (${g.memberTxIds.length} members)`}
                             </span>
+                            {g.glSource === 'default' && (
+                              <span
+                                style={{
+                                  fontSize: '0.65rem',
+                                  fontWeight: 600,
+                                  color: 'var(--red, #dc2626)',
+                                  border: '1px solid var(--red, #dc2626)',
+                                  borderRadius: 4,
+                                  padding: '1px 5px',
+                                  whiteSpace: 'nowrap',
+                                  cursor: 'default',
+                                }}
+                                title={`No GL is mapped for ${g.token ?? 'this token'} on this wallet, so its default account code was used. Confirm this is correct for ${g.token ?? 'this token'}, or add a token-specific mapping.`}
+                              >
+                                ⚠ default GL
+                              </span>
+                            )}
                           </div>
                           <span
                             style={{

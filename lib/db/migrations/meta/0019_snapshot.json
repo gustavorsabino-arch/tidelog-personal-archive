@@ -1,6 +1,6 @@
 {
-  "id": "bedb2416-3976-450a-8037-50d2a9e6b557",
-  "prevId": "ccb28adb-7f9b-40e2-b002-04ceb36d0e0b",
+  "id": "497cf607-e693-420b-b33b-48de7f76c234",
+  "prevId": "a7757eef-7455-4a7c-b358-14e27bfa169c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -607,6 +607,88 @@
           "value": "NOT (\"app\".\"wallet\".\"type\" = 'external' AND \"app\".\"wallet\".\"hidden_from_finance\" = true)"
         }
       },
+      "isRLSEnabled": false
+    },
+    "app.wallet_token_account_code": {
+      "name": "wallet_token_account_code",
+      "schema": "app",
+      "columns": {
+        "wallet_address": {
+          "name": "wallet_address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "token_symbol": {
+          "name": "token_symbol",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "account_code": {
+          "name": "account_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "wallet_token_account_code_wallet_address_wallet_address_fk": {
+          "name": "wallet_token_account_code_wallet_address_wallet_address_fk",
+          "tableFrom": "wallet_token_account_code",
+          "tableTo": "wallet",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "wallet_address"
+          ],
+          "columnsTo": [
+            "address"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wallet_token_account_code_token_symbol_token_symbol_fk": {
+          "name": "wallet_token_account_code_token_symbol_token_symbol_fk",
+          "tableFrom": "wallet_token_account_code",
+          "tableTo": "token",
+          "schemaTo": "app",
+          "columnsFrom": [
+            "token_symbol"
+          ],
+          "columnsTo": [
+            "symbol"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "wallet_token_account_code_wallet_address_token_symbol_pk": {
+          "name": "wallet_token_account_code_wallet_address_token_symbol_pk",
+          "columns": [
+            "wallet_address",
+            "token_symbol"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "app.balance_snapshot": {
@@ -1252,58 +1334,6 @@
           "name": "qb_account_catalog_entity_id_qb_account_id_pk",
           "columns": [
             "entity_id",
-            "qb_account_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "app.qb_account_map": {
-      "name": "qb_account_map",
-      "schema": "app",
-      "columns": {
-        "realm_id": {
-          "name": "realm_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "qb_account_id": {
-          "name": "qb_account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "qb_account_number": {
-          "name": "qb_account_number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "qb_account_name": {
-          "name": "qb_account_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "qb_account_map_realm_id_qb_account_id_pk": {
-          "name": "qb_account_map_realm_id_qb_account_id_pk",
-          "columns": [
-            "realm_id",
             "qb_account_id"
           ]
         }
@@ -2276,6 +2306,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "posted_gl_account": {
+          "name": "posted_gl_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "posted_gl_source": {
+          "name": "posted_gl_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "updated_at": {
           "name": "updated_at",
           "type": "timestamp with time zone",
@@ -2480,6 +2522,7 @@
         "unposted",
         "posted",
         "posted_modified",
+        "posted_manually",
         "voided",
         "failed"
       ]

@@ -6,6 +6,7 @@ import { requirePermission } from '@/lib/auth/require-permission'
 import { logAudit } from '@/lib/audit'
 import { CreateWalletSchema, normalizeAddress } from '@/lib/admin/wallet-validation'
 import { fetchTransactionsJob } from '@/lib/cron/fetch-transactions'
+import { accountNumberExists } from '@/lib/qb/cache-reads'
 
 export const maxDuration = 300
 
@@ -146,6 +147,14 @@ export async function POST(req: Request) {
   }
   if (backfillResult !== undefined) {
     responseBody.backfill = backfillResult
+  }
+
+  // Soft-validate accountCode against QB catalog — warn but do not block.
+  if (input.accountCode) {
+    const codeExists = await accountNumberExists(input.entityId, input.accountCode)
+    if (!codeExists) {
+      responseBody.warning = 'account_code not found in QuickBooks chart of accounts'
+    }
   }
 
   return NextResponse.json(responseBody, { status: 201 })

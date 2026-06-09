@@ -8,6 +8,7 @@ import {
   transactionGain,
   wallet,
   counterpartyGlMap,
+  walletTokenAccountCode,
 } from '@/lib/db/schema'
 import { toDbEntity } from '@/lib/entity'
 import { logAudit } from '@/lib/audit'
@@ -25,6 +26,7 @@ import type {
   QbJournalEntryResponse,
   QbQueryResponse,
 } from './types.ts'
+import { resolveWalletGl, type GlSource } from './resolve-wallet-gl'
 
 // D13 — server-enforced hard cap. Mirror of the UI cap in
 // components/transactions-page-client.tsx; rejecting a >50 request here is
@@ -85,6 +87,12 @@ type LoadedTx = {
     | null
   gainStGain: string | null
   gainLtGain: string | null
+  // Populated by loadTxs from wallet_token_account_code for (walletAddress, asset).
+  perTokenAccountCode: string | null
+  // Populated by buildPostPlan eligibility loop — null before that pass.
+  walletGlSource: GlSource | null
+  /** Resolved wallet GL code (number); set on eligible txs by buildPostPlan. Non-null for any tx that passed eligibility. */
+  walletGl: string | null
 }
 
 async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
@@ -149,6 +157,24 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
     .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
     .where(inArray(transaction.id, txIds))
 
+  // Build per-(wallet, token) account code map for these rows.
+  const distinctWallets = [...new Set(rows.map((r) => r.txn.walletAddress))]
+  const perTokenRows =
+    distinctWallets.length > 0
+      ? await db
+          .select({
+            walletAddress: walletTokenAccountCode.walletAddress,
+            tokenSymbol: walletTokenAccountCode.tokenSymbol,
+            accountCode: walletTokenAccountCode.accountCode,
+          })
+          .from(walletTokenAccountCode)
+          .where(inArray(walletTokenAccountCode.walletAddress, distinctWallets))
+      : []
+  const perTokenMap = new Map<string, string>()
+  for (const row of perTokenRows) {
+    perTokenMap.set(`${row.walletAddress}::${row.tokenSymbol}`, row.accountCode)
+  }
+
   return rows.map((r): LoadedTx => ({
     id: r.txn.id,
     txHash: r.txn.txHash,
@@ -172,6 +198,10 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
     existingPostStatus: r.existingPostStatus ?? null,
     gainStGain: r.gain?.stGain ?? null,
     gainLtGain: r.gain?.ltGain ?? null,
+    perTokenAccountCode:
+      perTokenMap.get(`${r.txn.walletAddress}::${r.txn.asset}`) ?? null,
+    walletGlSource: null, // populated by buildPostPlan eligibility loop
+    walletGl: null, // populated by buildPostPlan eligibility loop
   }))
 }
 
@@ -285,11 +315,18 @@ export async function buildPostPlan(args: {
   const skipped: PostBatchResult['skipped'] = []
   const eligible: LoadedTx[] = []
   for (const t of txs) {
-    const effectiveWalletGl = t.glAccountOverride ?? t.walletAccountCode
+    const walletGl = resolveWalletGl({
+      override: t.glAccountOverride,
+      perToken: t.perTokenAccountCode,
+      default: t.walletAccountCode,
+    })
+    const effectiveWalletGl = walletGl.code
     if (!effectiveWalletGl) {
       skipped.push({ txId: t.id, reason: 'wallet has no GL account_code' })
       continue
     }
+    t.walletGlSource = walletGl.source
+    t.walletGl = walletGl.code
     const effectiveCpGl = t.counterpartyGlOverride ?? t.counterpartyGlMapValue
     if (!effectiveCpGl) {
       skipped.push({ txId: t.id, reason: 'no counterparty GL set' })
@@ -333,7 +370,7 @@ export async function buildPostPlan(args: {
 // non-null (i.e. the tx survived buildPostPlan's eligibility filter).
 export function loadedTxToTxForPost(t: LoadedTx): TxForPost {
   return toTxForPost(t, {
-    walletAccountCode: (t.glAccountOverride ?? t.walletAccountCode) as string,
+    walletAccountCode: t.walletGl as string,
     counterpartyGl: (t.counterpartyGlOverride ?? t.counterpartyGlMapValue) as string,
   })
 }
@@ -459,8 +496,9 @@ async function postOneGroupLocked(
       : group.members
     ).map((t) =>
       toTxForPost(t, {
-        // We verified eligibility above; non-null assertions are safe here.
-        walletAccountCode: (t.glAccountOverride ?? t.walletAccountCode) as string,
+        // t.walletGl is set by buildPostPlan's eligibility loop; all txs in
+        // a group passed that loop so the non-null assertion is safe here.
+        walletAccountCode: t.walletGl as string,
         counterpartyGl: (t.counterpartyGlOverride ?? t.counterpartyGlMapValue) as string,
       }),
     )
@@ -571,6 +609,8 @@ async function postOneGroupLocked(
           asset: m.asset,
           entityId: m.entityId,
           postId: pending.id,
+          postedGlAccount: m.walletGl,
+          postedGlSource: m.walletGlSource,
           updatedAt: new Date(),
           updatedBy: userId,
         })
@@ -581,10 +621,16 @@ async function postOneGroupLocked(
             txQbState.direction,
             txQbState.asset,
           ],
-          // Only touch post_id + audit columns — preserve any description /
-          // override fields the user previously set on this tx_qb_state row.
+          // Only touch post_id + posted GL snapshot + audit columns — preserve
+          // any description / override fields the user previously set on this
+          // tx_qb_state row.
+          // Bulk members share one (wallet, token) ⇒ one GL; individual txs each
+          // carry their own resolved value. Either way we read from m.walletGl /
+          // m.walletGlSource (set per-member by buildPostPlan's eligibility loop).
           set: {
             postId: pending.id,
+            postedGlAccount: m.walletGl,
+            postedGlSource: m.walletGlSource,
             updatedAt: new Date(),
             updatedBy: userId,
           },

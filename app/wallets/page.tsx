@@ -9,6 +9,9 @@ import { CopyButton } from '@/components/copy-button'
 import { useSharedAccess } from '@/lib/access-context'
 import { hasPermission } from '@/lib/auth/permissions'
 import type { Wallet } from '@/lib/types'
+import { GlAccountCombobox } from '@/components/gl-account-combobox'
+import { toDisplayEntity } from '@/lib/entity'
+import { isQboEntity } from '@/lib/qb/config'
 
 type AdminEntity = { id: string; name: string; isActive: boolean }
 
@@ -64,6 +67,14 @@ export default function WalletsPage() {
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
+
+  // Per-token GL state for the edit modal
+  type TokenGlMapping = { tokenSymbol: string; accountCode: string }
+  const [tokenGlMappings, setTokenGlMappings] = useState<TokenGlMapping[]>([])
+  const [transactedTokens, setTransactedTokens] = useState<string[]>([])
+  const [allTokens, setAllTokens] = useState<{ symbol: string; name: string }[]>([])
+  const [tokenGlLoading, setTokenGlLoading] = useState(false)
+  const [addTokenValue, setAddTokenValue] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -194,12 +205,37 @@ export default function WalletsPage() {
     })
     setEditError(null)
     setError(null)
+    // Reset per-token GL state
+    setTokenGlMappings([])
+    setTransactedTokens([])
+    setAllTokens([])
+    setAddTokenValue('')
+    if (isQboEntity(w.entity)) {
+      setTokenGlLoading(true)
+      Promise.all([
+        apiFetch<{ mappings: { tokenSymbol: string; accountCode: string }[]; transactedTokens: string[] }>(
+          `/api/wallets/${encodeURIComponent(w.address)}/token-gl`
+        ),
+        apiFetch<{ tokens: { symbol: string; name: string }[] }>('/api/tokens'),
+      ])
+        .then(([glRes, tokensRes]) => {
+          setTokenGlMappings(glRes.mappings)
+          setTransactedTokens(glRes.transactedTokens)
+          setAllTokens(tokensRes.tokens)
+        })
+        .catch(() => { /* silently ignore — GL rows are optional */ })
+        .finally(() => setTokenGlLoading(false))
+    }
   }
 
   const closeEditModal = () => {
     setEditingWallet(null)
     setEditError(null)
     setSavingEdit(false)
+    setTokenGlMappings([])
+    setTransactedTokens([])
+    setAllTokens([])
+    setAddTokenValue('')
   }
 
   const saveEdit = async () => {
@@ -425,8 +461,20 @@ export default function WalletsPage() {
             </label>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <span className="budget-scope-label">Account code (optional)</span>
-              <input type="text" className="fsearch" placeholder="e.g. 1010-OPCO" value={newWallet.accountCode}
-                onChange={(e) => setNewWallet((p) => ({ ...p, accountCode: e.target.value }))} disabled={creatingWallet} />
+              {isQboEntity(toDisplayEntity(newWallet.entityId)) ? (
+                <>
+                  <GlAccountCombobox
+                    value={newWallet.accountCode || null}
+                    entity={toDisplayEntity(newWallet.entityId)}
+                    onChange={(v) => setNewWallet((p) => ({ ...p, accountCode: v ?? '' }))}
+                    disabled={creatingWallet}
+                  />
+                  <span style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>Add per-token GL after creating the wallet.</span>
+                </>
+              ) : (
+                <input type="text" className="fsearch" placeholder="e.g. 1010-OPCO" value={newWallet.accountCode}
+                  onChange={(e) => setNewWallet((p) => ({ ...p, accountCode: e.target.value }))} disabled={creatingWallet} />
+              )}
             </label>
           </div>
 
@@ -601,6 +649,16 @@ export default function WalletsPage() {
                       <td><span className="chain-tag">{w.chain}</span></td>
                       <td style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)' }}>
                         {w.accountCode || '—'}
+                        {w.tokenGls && w.tokenGls.length > 0 && (
+                          <span
+                            title={w.tokenGls.map((g) => `${g.tokenSymbol} → ${g.accountCode}`).join('\n')}
+                            style={{ marginLeft: 6, fontSize: '0.65rem', color: 'var(--muted)', opacity: 0.7 }}
+                          >
+                            {w.accountCode
+                              ? `+${w.tokenGls.length} token GL${w.tokenGls.length === 1 ? '' : 's'}`
+                              : `⟨${w.tokenGls.length} token GL${w.tokenGls.length === 1 ? '' : 's'} · no default⟩`}
+                          </span>
+                        )}
                       </td>
                       <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
                         {getWalletTypeLabel(w)}
@@ -813,20 +871,123 @@ export default function WalletsPage() {
               />
             </label>
 
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 }}>
-              <span className="budget-scope-label">
-                Account code <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(GL mapping — leave blank to unset)</span>
-              </span>
-              <input
-                type="text"
-                className="fsearch"
-                value={editForm.accountCode}
-                onChange={(e) => { setEditForm((p) => ({ ...p, accountCode: e.target.value })); if (editError) setEditError(null) }}
-                disabled={savingEdit}
-                maxLength={80}
-                placeholder="e.g. 1010-OPCO-USDC"
-              />
-            </label>
+            {editingWallet && isQboEntity(editingWallet.entity) && (
+              <div style={{ marginBottom: 18 }}>
+                {/* Default GL */}
+                <div style={{ marginBottom: 12 }}>
+                  <span className="budget-scope-label" style={{ display: 'block', marginBottom: 6 }}>
+                    Default GL <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(used for any token without its own mapping)</span>
+                  </span>
+                  <GlAccountCombobox
+                    value={editForm.accountCode || null}
+                    entity={editingWallet.entity}
+                    onChange={(v) => { setEditForm(p => ({ ...p, accountCode: v ?? '' })); if (editError) setEditError(null) }}
+                    disabled={savingEdit}
+                  />
+                </div>
+
+                {/* Per-token GL rows */}
+                {tokenGlLoading ? (
+                  <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginBottom: 8 }}>Loading token mappings…</div>
+                ) : (() => {
+                  // Union of transacted tokens and mapped tokens, deduplicated — these are the rows shown
+                  const mappedSymbols = tokenGlMappings.map(m => m.tokenSymbol)
+                  const shownTokens = Array.from(new Set([...mappedSymbols, ...transactedTokens])).sort()
+                  const mappingByToken = new Map(tokenGlMappings.map(m => [m.tokenSymbol, m.accountCode]))
+
+                  const handleTokenGlChange = async (tokenSymbol: string, v: string | null) => {
+                    const addr = editingWallet.address
+                    if (v) {
+                      await apiFetch(`/api/wallets/${encodeURIComponent(addr)}/token-gl`, {
+                        method: 'PUT',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ tokenSymbol, accountCode: v }),
+                      })
+                      setTokenGlMappings(prev => {
+                        const next = prev.filter(m => m.tokenSymbol !== tokenSymbol)
+                        next.push({ tokenSymbol, accountCode: v })
+                        return next
+                      })
+                    } else {
+                      await apiFetch(`/api/wallets/${encodeURIComponent(addr)}/token-gl`, {
+                        method: 'DELETE',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ tokenSymbol }),
+                      })
+                      setTokenGlMappings(prev => prev.filter(m => m.tokenSymbol !== tokenSymbol))
+                    }
+                  }
+
+                  // Tokens available to add — full token list minus those already shown as rows
+                  const availableToAdd = allTokens
+                    .map(t => t.symbol)
+                    .filter(s => !shownTokens.includes(s))
+
+                  return (
+                    <>
+                      {shownTokens.length > 0 && (
+                        <div style={{ marginBottom: 8 }}>
+                          <span className="budget-scope-label" style={{ display: 'block', marginBottom: 6 }}>
+                            Per-token GL overrides
+                          </span>
+                          {shownTokens.map(tokenSymbol => {
+                            const mapped = mappingByToken.get(tokenSymbol) ?? null
+                            return (
+                              <div key={tokenSymbol} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', minWidth: 64, flexShrink: 0 }}>{tokenSymbol}</span>
+                                <div style={{ flex: 1 }}>
+                                  <GlAccountCombobox
+                                    value={mapped}
+                                    entity={editingWallet.entity}
+                                    onChange={(v) => handleTokenGlChange(tokenSymbol, v)}
+                                    disabled={savingEdit}
+                                  />
+                                </div>
+                                {!mapped && (
+                                  <span style={{ fontSize: '0.7rem', color: 'var(--muted)', flexShrink: 0 }}>using default</span>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {/* Add token row */}
+                      {availableToAdd.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                          <select
+                            className="fsel"
+                            value={addTokenValue}
+                            onChange={(e) => setAddTokenValue(e.target.value)}
+                            disabled={savingEdit}
+                            style={{ fontSize: '0.78rem' }}
+                          >
+                            <option value="">＋ Add token…</option>
+                            {availableToAdd.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                          {addTokenValue && (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                              onClick={() => {
+                                if (!addTokenValue) return
+                                // Add to transacted list so it shows as a row
+                                setTransactedTokens(prev => Array.from(new Set([...prev, addTokenValue])))
+                                setAddTokenValue('')
+                              }}
+                              disabled={savingEdit}
+                            >
+                              Add
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
+              </div>
+            )}
 
             <div style={{ marginBottom: 14 }}>
               <span className="budget-scope-label" style={{ display: 'block', marginBottom: 6 }}>Type</span>
