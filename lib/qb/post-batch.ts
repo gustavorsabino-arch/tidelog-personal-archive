@@ -91,6 +91,8 @@ type LoadedTx = {
   perTokenAccountCode: string | null
   // Populated by buildPostPlan eligibility loop — null before that pass.
   walletGlSource: GlSource | null
+  /** Resolved wallet GL code (number); set on eligible txs by buildPostPlan. Non-null for any tx that passed eligibility. */
+  walletGl: string | null
 }
 
 async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
@@ -199,6 +201,7 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
     perTokenAccountCode:
       perTokenMap.get(`${r.txn.walletAddress}::${r.txn.asset}`) ?? null,
     walletGlSource: null, // populated by buildPostPlan eligibility loop
+    walletGl: null, // populated by buildPostPlan eligibility loop
   }))
 }
 
@@ -323,6 +326,7 @@ export async function buildPostPlan(args: {
       continue
     }
     t.walletGlSource = walletGl.source
+    t.walletGl = walletGl.code
     const effectiveCpGl = t.counterpartyGlOverride ?? t.counterpartyGlMapValue
     if (!effectiveCpGl) {
       skipped.push({ txId: t.id, reason: 'no counterparty GL set' })
@@ -366,11 +370,7 @@ export async function buildPostPlan(args: {
 // non-null (i.e. the tx survived buildPostPlan's eligibility filter).
 export function loadedTxToTxForPost(t: LoadedTx): TxForPost {
   return toTxForPost(t, {
-    walletAccountCode: resolveWalletGl({
-      override: t.glAccountOverride,
-      perToken: t.perTokenAccountCode,
-      default: t.walletAccountCode,
-    }).code as string,
+    walletAccountCode: t.walletGl as string,
     counterpartyGl: (t.counterpartyGlOverride ?? t.counterpartyGlMapValue) as string,
   })
 }
@@ -496,12 +496,9 @@ async function postOneGroupLocked(
       : group.members
     ).map((t) =>
       toTxForPost(t, {
-        // We verified eligibility above; non-null assertions are safe here.
-        walletAccountCode: resolveWalletGl({
-          override: t.glAccountOverride,
-          perToken: t.perTokenAccountCode,
-          default: t.walletAccountCode,
-        }).code as string,
+        // t.walletGl is set by buildPostPlan's eligibility loop; all txs in
+        // a group passed that loop so the non-null assertion is safe here.
+        walletAccountCode: t.walletGl as string,
         counterpartyGl: (t.counterpartyGlOverride ?? t.counterpartyGlMapValue) as string,
       }),
     )
