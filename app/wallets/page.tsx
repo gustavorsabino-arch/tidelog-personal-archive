@@ -649,6 +649,16 @@ export default function WalletsPage() {
                       <td><span className="chain-tag">{w.chain}</span></td>
                       <td style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)' }}>
                         {w.accountCode || '—'}
+                        {w.tokenGls && w.tokenGls.length > 0 && (
+                          <span
+                            title={w.tokenGls.map((g) => `${g.tokenSymbol} → ${g.accountCode}`).join('\n')}
+                            style={{ marginLeft: 6, fontSize: '0.65rem', color: 'var(--muted)', opacity: 0.7 }}
+                          >
+                            {w.accountCode
+                              ? `+${w.tokenGls.length} token GL${w.tokenGls.length === 1 ? '' : 's'}`
+                              : `⟨${w.tokenGls.length} token GL${w.tokenGls.length === 1 ? '' : 's'} · no default⟩`}
+                          </span>
+                        )}
                       </td>
                       <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
                         {getWalletTypeLabel(w)}

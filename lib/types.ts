@@ -13,6 +13,8 @@ export interface Wallet {
   // Wave 2c — when true, transactions on this wallet are grouped by
   // (token, month) into a single bulk QB journal entry on post.
   isBulkTreasury?: boolean
+  // Task 13b — per-token GL mappings; empty array when none are set.
+  tokenGls?: { tokenSymbol: string; accountCode: string }[]
   createdAt: string
   updatedAt: string
   balances?: Record<string, number>
