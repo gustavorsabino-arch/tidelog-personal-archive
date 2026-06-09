@@ -9,7 +9,9 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function POST(req: NextRequest) {
-  const { deny } = await requirePermission('qb:read', req)
+  // admin:manage_data (not qb:read): this performs a destructive catalog
+  // rewrite, and the only caller is the admin wallet editor's GL combobox.
+  const { deny } = await requirePermission('admin:manage_data', req)
   if (deny) return deny
   const entity = req.nextUrl.searchParams.get('entity')
   if (!entity || !isQboEntity(entity)) return NextResponse.json({ error: 'valid QB entity required' }, { status: 400 })
