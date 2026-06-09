@@ -134,6 +134,13 @@
       "when": 1780964214580,
       "tag": "0018_colossal_gertrude_yorkes",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1781033538889,
+      "tag": "0019_spooky_whirlwind",
+      "breakpoints": true
     }
   ]
 }
