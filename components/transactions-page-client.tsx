@@ -615,8 +615,25 @@ export function TransactionsPageClient({
     const walletGlCol = {
       key: 'walletGl', label: 'Wallet GL', width: '110px', sortable: false,
       render: (t: Transaction) => (
-        <span style={{ fontSize: '0.74rem', color: t.walletGlAccount ? 'inherit' : 'var(--muted)' }}>
-          {t.walletGlAccount ?? '—'}
+        <span style={{ fontSize: '0.74rem', color: t.effectiveGlAccount ? 'inherit' : 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {t.effectiveGlAccount ?? '—'}
+          {t.glSource === 'default' && !t.isPosted && (
+            <span
+              style={{
+                fontSize: '0.65rem',
+                fontWeight: 600,
+                color: 'var(--red, #dc2626)',
+                border: '1px solid var(--red, #dc2626)',
+                borderRadius: 4,
+                padding: '1px 5px',
+                whiteSpace: 'nowrap',
+                cursor: 'default',
+              }}
+              title={`No GL is mapped for ${t.asset ?? 'this token'} on this wallet, so its default account code will be used. Confirm this is correct for ${t.asset ?? 'this token'}, or add a token-specific mapping.`}
+            >
+              ⚠ default GL
+            </span>
+          )}
         </span>
       ),
     }
