@@ -609,6 +609,8 @@ async function postOneGroupLocked(
           asset: m.asset,
           entityId: m.entityId,
           postId: pending.id,
+          postedGlAccount: m.walletGl,
+          postedGlSource: m.walletGlSource,
           updatedAt: new Date(),
           updatedBy: userId,
         })
@@ -619,10 +621,16 @@ async function postOneGroupLocked(
             txQbState.direction,
             txQbState.asset,
           ],
-          // Only touch post_id + audit columns — preserve any description /
-          // override fields the user previously set on this tx_qb_state row.
+          // Only touch post_id + posted GL snapshot + audit columns — preserve
+          // any description / override fields the user previously set on this
+          // tx_qb_state row.
+          // Bulk members share one (wallet, token) ⇒ one GL; individual txs each
+          // carry their own resolved value. Either way we read from m.walletGl /
+          // m.walletGlSource (set per-member by buildPostPlan's eligibility loop).
           set: {
             postId: pending.id,
+            postedGlAccount: m.walletGl,
+            postedGlSource: m.walletGlSource,
             updatedAt: new Date(),
             updatedBy: userId,
           },
