@@ -1,5 +1,6 @@
 // Pure GL resolution. Decides WHICH account number applies to a (wallet, token)
 // movement and which tier it came from. No DB, no QB Ids — number space only.
+// Empty strings are treated as unset (falsy), so a blank tier falls through.
 export type GlSource = 'override' | 'token' | 'default'
 export type ResolveWalletGlInput = {
   override?: string | null  // per-tx glAccountOverride
@@ -8,9 +9,9 @@ export type ResolveWalletGlInput = {
 }
 export type ResolvedGl = { code: string | null; source: GlSource | null }
 
-export function resolveWalletGl(i: ResolveWalletGlInput): ResolvedGl {
-  if (i.override) return { code: i.override, source: 'override' }
-  if (i.perToken) return { code: i.perToken, source: 'token' }
-  if (i.default) return { code: i.default, source: 'default' }
+export function resolveWalletGl(input: ResolveWalletGlInput): ResolvedGl {
+  if (input.override) return { code: input.override, source: 'override' }
+  if (input.perToken) return { code: input.perToken, source: 'token' }
+  if (input.default) return { code: input.default, source: 'default' }
   return { code: null, source: null }
 }
