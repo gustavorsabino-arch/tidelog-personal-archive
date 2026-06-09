@@ -5,6 +5,9 @@ import { isQboEntity } from '@/lib/qb/config'
 import { toDbEntity } from '@/lib/entity'
 import { fetchAndStoreAccountCatalog } from '@/lib/cron/fetch-qb-reports'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 export async function POST(req: NextRequest) {
   const { deny } = await requirePermission('qb:read', req)
   if (deny) return deny
