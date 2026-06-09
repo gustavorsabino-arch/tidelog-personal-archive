@@ -1,4 +1,5 @@
 import type { QbJournalEntry, QbJournalEntryLine } from './types.ts'
+import { STABLE_TOKENS } from '../constants.ts'
 
 // Pure JE construction. NO QB API calls, NO DB. Returns a payload ready to POST
 // to /v3/company/<realm>/journalentry. Tested via lib/qb/post-journal-entry.test.ts.
@@ -31,7 +32,6 @@ export type BuildArgs = {
 }
 
 const GAIN_LOSS_GL = '70150'
-const STABLE_TOKENS = new Set(['USDC', 'USDT', 'PYUSD'])
 const BALANCE_EPSILON = 0.005 // half a cent — JE amounts are rounded to 2 dp
 
 function round2(n: number): number {
