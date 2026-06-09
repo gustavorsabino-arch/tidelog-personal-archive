@@ -295,6 +295,13 @@ export async function buildPostPlan(args: {
       skipped.push({ txId: t.id, reason: 'no counterparty GL set' })
       continue
     }
+    if (t.postId && t.existingPostStatus === 'posted_manually') {
+      // Backfill-identified manual post: the JE already exists in QB, posted
+      // outside this tool. There's no re-post flow for these; skip to avoid
+      // creating a duplicate JE (the whole point of the backfill).
+      skipped.push({ txId: t.id, reason: 'already posted manually in QuickBooks' })
+      continue
+    }
     if (
       t.postId &&
       (t.existingPostStatus === 'posted' ||
