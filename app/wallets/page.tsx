@@ -67,6 +67,8 @@ export default function WalletsPage() {
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
+  // Wallet-list: which wallets have their per-token GL breakdown expanded inline.
+  const [expandedGl, setExpandedGl] = useState<Set<string>>(new Set())
 
   // Per-token GL state for the edit modal
   type TokenGlMapping = { tokenSymbol: string; accountCode: string }
@@ -650,14 +652,35 @@ export default function WalletsPage() {
                       <td style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)' }}>
                         {w.accountCode || '—'}
                         {w.tokenGls && w.tokenGls.length > 0 && (
-                          <span
-                            title={w.tokenGls.map((g) => `${g.tokenSymbol} → ${g.accountCode}`).join('\n')}
-                            style={{ marginLeft: 6, fontSize: '0.65rem', color: 'var(--muted)', opacity: 0.7 }}
-                          >
-                            {w.accountCode
-                              ? `+${w.tokenGls.length} token GL${w.tokenGls.length === 1 ? '' : 's'}`
-                              : `⟨${w.tokenGls.length} token GL${w.tokenGls.length === 1 ? '' : 's'} · no default⟩`}
-                          </span>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedGl((prev) => {
+                                const next = new Set(prev)
+                                if (next.has(w.address)) next.delete(w.address)
+                                else next.add(w.address)
+                                return next
+                              })}
+                              style={{ marginLeft: 6, fontSize: '0.66rem', color: 'var(--accent)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'inherit' }}
+                              title={expandedGl.has(w.address) ? 'Hide per-token GL codes' : 'Show per-token GL codes'}
+                            >
+                              {expandedGl.has(w.address) ? '▾ ' : '▸ '}
+                              {w.accountCode
+                                ? `${w.tokenGls.length} token GL${w.tokenGls.length === 1 ? '' : 's'}`
+                                : `${w.tokenGls.length} token GL${w.tokenGls.length === 1 ? '' : 's'} · no default`}
+                            </button>
+                            {expandedGl.has(w.address) && (
+                              <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                {[...w.tokenGls]
+                                  .sort((a, b) => a.tokenSymbol.localeCompare(b.tokenSymbol))
+                                  .map((g) => (
+                                    <span key={g.tokenSymbol} style={{ fontSize: '0.68rem' }}>
+                                      <span style={{ color: 'var(--muted)' }}>{g.tokenSymbol}</span> → {g.accountCode}
+                                    </span>
+                                  ))}
+                              </div>
+                            )}
+                          </>
                         )}
                       </td>
                       <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
