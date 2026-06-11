@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requirePermission } from '@/lib/auth/require-permission'
-import { getTreasuryTransactions } from '@/lib/treasury-transactions'
+import { getTreasuryTransactions, type QbStatusFilter } from '@/lib/treasury-transactions'
+
+const QB_STATUS_VALUES: readonly QbStatusFilter[] = [
+  'unposted', 'posted', 'posted_modified', 'posted_manually', 'voided', 'failed',
+]
 
 // GET /api/treasury/transactions?entity=Opco&from=1710000000&to=1711000000&asset=SOL&limit=500&offset=0
 export async function GET(req: NextRequest) {
@@ -14,6 +18,10 @@ export async function GET(req: NextRequest) {
   const asset = searchParams.get('asset')
   const direction = searchParams.get('direction')
   const wallet = searchParams.get('wallet')
+  const rawQbStatus = searchParams.get('qbStatus')
+  const qbStatus = QB_STATUS_VALUES.includes(rawQbStatus as QbStatusFilter)
+    ? (rawQbStatus as QbStatusFilter)
+    : null
   const rawLimit = searchParams.get('limit')
   // `limit=all` or `limit=0` → unbounded (internal callers with FIFO-style
   // computations need the full history). Any positive int is honored. Missing
@@ -33,6 +41,7 @@ export async function GET(req: NextRequest) {
       asset,
       direction,
       wallet,
+      qbStatus,
       limit,
       offset: off,
     })
