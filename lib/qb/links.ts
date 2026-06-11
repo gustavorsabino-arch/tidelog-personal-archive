@@ -8,8 +8,12 @@
 // — opens the JE detail view directly. (The path is `journal`, not
 // `journalentry`.) If Intuit changes this we expect a noisy redirect rather
 // than a silent break.
-
-import { getQboRealmId, type QboEntity } from './config'
+//
+// We deliberately do NOT append `realmId`: QuickBooks opens a deep link in
+// whichever company is ACTIVE in the user's session, and a `realmId` param does
+// not switch companies — it bounces to an all-entities chooser instead. The JE
+// id resolves against the active company, so callers must tell the user which
+// company the link targets and let them switch first.
 
 /**
  * Build a clickable URL to a specific QuickBooks Online journal entry.
@@ -17,22 +21,13 @@ import { getQboRealmId, type QboEntity } from './config'
  * @param qbJournalEntryId QB's internal numeric Id for the JournalEntry record
  *   (from `qb_post.qb_journal_entry_id`). Returns null when missing so callers
  *   can render an inert label instead of a broken link.
- * @param entity Optional — adds `realmId` to the URL as a hint. NOTE: QuickBooks
- *   opens a deep link in whichever company is ACTIVE in the user's session;
- *   `realmId` in the URL does NOT reliably switch companies (a JE id resolves
- *   against the active company, so a wrong-company click 404s). Callers should
- *   tell the user which company the link targets so they switch first.
  */
 export function qbJeUrl(
   qbJournalEntryId: string | null | undefined,
-  entity?: QboEntity,
 ): string | null {
   if (!qbJournalEntryId) return null
-  const realmId = entity ? getQboRealmId(entity) : null
-  const base = 'https://app.qbo.intuit.com/app/journal'
   const params = new URLSearchParams({ txnId: qbJournalEntryId })
-  if (realmId) params.set('realmId', realmId)
-  return `${base}?${params.toString()}`
+  return `https://app.qbo.intuit.com/app/journal?${params.toString()}`
 }
 
 /**

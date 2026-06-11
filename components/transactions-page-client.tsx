@@ -395,7 +395,7 @@ export function TransactionsPageClient({
     }
     // Individual JE → external link. Fall back to a no-op when we have no
     // qbJournalEntryId (failed post never populated it).
-    const url = qbJeUrl(t.qbJournalEntryId, isQboEntity(t.entity) ? t.entity : undefined)
+    const url = qbJeUrl(t.qbJournalEntryId)
     if (url) window.open(url, '_blank', 'noopener,noreferrer')
   }, [isBulkPost])
 

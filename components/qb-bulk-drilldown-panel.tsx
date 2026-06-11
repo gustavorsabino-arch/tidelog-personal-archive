@@ -172,7 +172,7 @@ export function QbBulkDrilldownPanel({
 
   if (!open) return null
 
-  const qbUrl = qbJeUrl(qbJournalEntryId, entity)
+  const qbUrl = qbJeUrl(qbJournalEntryId)
 
   return (
     <>
