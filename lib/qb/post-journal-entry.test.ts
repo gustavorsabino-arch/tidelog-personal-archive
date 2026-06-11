@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { buildJournalEntry, type TxForPost } from './post-journal-entry'
+import { buildJournalEntry, UnresolvedAccountError, type TxForPost } from './post-journal-entry'
 
 // Common fields shared by all fixture txs. Each test overrides the specifics.
 const baseTx = {
@@ -284,6 +284,46 @@ describe('buildJournalEntry', () => {
         privateNote: 'uuid-d',
       })
       expect(je.TxnDate).toBe('2026-02-15')
+    })
+  })
+
+  describe('resolveAccount (number → QB account Id)', () => {
+    it('emits resolved Ids + names when a resolver is provided', () => {
+      const known: Record<string, { value: string; name: string }> = {
+        '1010': { value: '42', name: 'Cash' },
+        '4010': { value: '77', name: 'Revenue' },
+      }
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010' })],
+        docNumber: 'TL-Feb-JE07', vendorEntityRef: null, privateNote: 'uuid-r',
+        resolveAccount: (n) => known[n],
+      })
+      expect(je.Line[0].JournalEntryLineDetail.AccountRef.value).toBe('42')
+      expect(je.Line[0].JournalEntryLineDetail.AccountRef.name).toBe('Cash')
+      expect(je.Line[1].JournalEntryLineDetail.AccountRef.value).toBe('77')
+      expect(je.Line[1].JournalEntryLineDetail.AccountRef.name).toBe('Revenue')
+    })
+
+    it('resolves the gain/loss account (70150) through the same resolver', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'out', asset: 'SOL', qty: 1, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010', gain: { stGain: 20, ltGain: null } })],
+        docNumber: 'TL-Feb-JE08', vendorEntityRef: null, privateNote: 'uuid-g',
+        resolveAccount: (n) => ({ value: `id:${n}` }),
+      })
+      const refs = je.Line.map((l) => l.JournalEntryLineDetail.AccountRef.value)
+      expect(refs).toContain('id:70150')
+      expect(refs.every((v) => v.startsWith('id:'))).toBe(true)
+    })
+
+    it('throws UnresolvedAccountError when a code is missing from the catalog', () => {
+      const known: Record<string, { value: string }> = { '4010': { value: '77' } }
+      expect(() =>
+        buildJournalEntry({
+          txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '9999', counterpartyGl: '4010' })],
+          docNumber: 'TL-Feb-JE09', vendorEntityRef: null, privateNote: 'uuid-x',
+          resolveAccount: (n) => { const a = known[n]; if (!a) throw new UnresolvedAccountError(n); return a },
+        }),
+      ).toThrow(UnresolvedAccountError)
     })
   })
 })
