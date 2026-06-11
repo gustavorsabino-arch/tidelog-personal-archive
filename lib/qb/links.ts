@@ -4,9 +4,10 @@
 // route through these helpers so a future correction is a one-file change
 // rather than a scattered grep-and-replace.
 //
-// Current format (QBO web app): https://app.qbo.intuit.com/app/journalentry?txnId=<id>
-// — opens the JE detail view directly. If Intuit changes this we expect a
-// noisy redirect rather than a silent break.
+// Current format (QBO web app): https://app.qbo.intuit.com/app/journal?txnId=<id>
+// — opens the JE detail view directly. (The path is `journal`, not
+// `journalentry`.) If Intuit changes this we expect a noisy redirect rather
+// than a silent break.
 
 import { getQboRealmId, type QboEntity } from './config'
 
@@ -16,9 +17,11 @@ import { getQboRealmId, type QboEntity } from './config'
  * @param qbJournalEntryId QB's internal numeric Id for the JournalEntry record
  *   (from `qb_post.qb_journal_entry_id`). Returns null when missing so callers
  *   can render an inert label instead of a broken link.
- * @param entity Optional — when provided, scopes the URL to that company's
- *   realm so users logged into multiple QB companies land in the right one.
- *   Without it QB falls back to whichever realm the user opened most recently.
+ * @param entity Optional — adds `realmId` to the URL as a hint. NOTE: QuickBooks
+ *   opens a deep link in whichever company is ACTIVE in the user's session;
+ *   `realmId` in the URL does NOT reliably switch companies (a JE id resolves
+ *   against the active company, so a wrong-company click 404s). Callers should
+ *   tell the user which company the link targets so they switch first.
  */
 export function qbJeUrl(
   qbJournalEntryId: string | null | undefined,
@@ -26,7 +29,7 @@ export function qbJeUrl(
 ): string | null {
   if (!qbJournalEntryId) return null
   const realmId = entity ? getQboRealmId(entity) : null
-  const base = 'https://app.qbo.intuit.com/app/journalentry'
+  const base = 'https://app.qbo.intuit.com/app/journal'
   const params = new URLSearchParams({ txnId: qbJournalEntryId })
   if (realmId) params.set('realmId', realmId)
   return `${base}?${params.toString()}`

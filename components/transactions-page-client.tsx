@@ -823,7 +823,9 @@ export function TransactionsPageClient({
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); handleDocNumberClick(t) }}
-                title={isBulk ? 'View bulk JE members' : 'Open in QuickBooks'}
+                title={isBulk
+                  ? 'View bulk JE members'
+                  : `Open in QuickBooks — make sure QuickBooks is set to the ${t.entity} company first (deep links open in your active company, not the one in the link)`}
                 style={{
                   background: 'none', border: 'none', padding: 0,
                   color: 'inherit', cursor: 'pointer',
