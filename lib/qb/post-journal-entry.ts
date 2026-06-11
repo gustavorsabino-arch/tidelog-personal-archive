@@ -24,11 +24,27 @@ export type TxForPost = {
   gain: { stGain: number | null; ltGain: number | null }
 }
 
+// Resolves a GL account NUMBER to a QB AccountRef. The real post path passes a
+// resolver so AccountRef.value is the internal QB account Id — which the QB API
+// requires; posting the bare account number is rejected. When omitted (dry-run
+// preview), the raw number is used so the JE stays human-readable.
+export type AccountResolver = (accountNumber: string) => { value: string; name?: string }
+
+export class UnresolvedAccountError extends Error {
+  constructor(public readonly accountNumber: string) {
+    super(`GL account ${accountNumber} not found in the QuickBooks account catalog — refresh the catalog or fix the code`)
+    this.name = 'UnresolvedAccountError'
+  }
+}
+
 export type BuildArgs = {
   txs: TxForPost[] // 1 element for individual; many for bulk
   docNumber: string
   vendorEntityRef: { type: 'Vendor'; value: string } | null
   privateNote: string // idempotency UUID — D11
+  // When provided, every AccountRef value is resolved number → QB account Id
+  // (throws UnresolvedAccountError on a missing code). Omitted → raw numbers.
+  resolveAccount?: AccountResolver
 }
 
 const GAIN_LOSS_GL = '70150'
@@ -76,6 +92,7 @@ function aggregateMainLines(txs: TxForPost[]): Aggregated[] {
 function buildMainPair(
   agg: Aggregated,
   vendorEntityRef: BuildArgs['vendorEntityRef'],
+  resolve: AccountResolver,
 ): QbJournalEntryLine[] {
   // Inflow: Debit Wallet GL, Credit Counterparty GL.
   // Outflow: Debit Counterparty GL (AP-side, may carry vendor ref), Credit Wallet GL.
@@ -84,12 +101,12 @@ function buildMainPair(
     Amount: agg.usd,
     JournalEntryLineDetail: {
       PostingType: agg.direction === 'in' ? 'Debit' : 'Credit',
-      AccountRef: { value: agg.walletAccountCode },
+      AccountRef: resolve(agg.walletAccountCode),
     },
   }
   const cpDetail: QbJournalEntryLine['JournalEntryLineDetail'] = {
     PostingType: agg.direction === 'in' ? 'Credit' : 'Debit',
-    AccountRef: { value: agg.counterpartyGl },
+    AccountRef: resolve(agg.counterpartyGl),
   }
   // Vendor ref attaches ONLY to the AP-side of an outflow (the counterparty
   // line where PostingType=Debit). Inflows never carry a vendor ref.
@@ -109,7 +126,7 @@ function buildMainPair(
   return agg.direction === 'in' ? [walletLine, cpLine] : [cpLine, walletLine]
 }
 
-function buildGainPair(walletAccountCode: string, gain: number): QbJournalEntryLine[] {
+function buildGainPair(walletAccountCode: string, gain: number, resolve: AccountResolver): QbJournalEntryLine[] {
   // gain > 0 (profit): Credit 70150 + Debit Wallet GL (reduces net asset credit
   //                    to cost basis; records realized gain).
   // gain < 0 (loss):   Debit 70150 + Credit Wallet GL (records realized loss).
@@ -121,7 +138,7 @@ function buildGainPair(walletAccountCode: string, gain: number): QbJournalEntryL
       Amount: abs,
       JournalEntryLineDetail: {
         PostingType: isProfit ? 'Credit' : 'Debit',
-        AccountRef: { value: GAIN_LOSS_GL },
+        AccountRef: resolve(GAIN_LOSS_GL),
       },
     },
     {
@@ -129,7 +146,7 @@ function buildGainPair(walletAccountCode: string, gain: number): QbJournalEntryL
       Amount: abs,
       JournalEntryLineDetail: {
         PostingType: isProfit ? 'Debit' : 'Credit',
-        AccountRef: { value: walletAccountCode },
+        AccountRef: resolve(walletAccountCode),
       },
     },
   ]
@@ -163,9 +180,13 @@ export function buildJournalEntry(args: BuildArgs): QbJournalEntry {
 
   const lines: QbJournalEntryLine[] = []
 
+  // Real posts pass resolveAccount (number → QB account Id); preview omits it
+  // and the raw number is used verbatim.
+  const resolve: AccountResolver = args.resolveAccount ?? ((n) => ({ value: n }))
+
   // 1. Main debit/credit pairs (aggregated across bulk members).
   for (const agg of aggregateMainLines(args.txs)) {
-    lines.push(...buildMainPair(agg, args.vendorEntityRef))
+    lines.push(...buildMainPair(agg, args.vendorEntityRef, resolve))
   }
 
   // 2. Gain/loss splits — only for outflows of non-stable tokens with non-zero
@@ -185,8 +206,8 @@ export function buildJournalEntry(args: BuildArgs): QbJournalEntry {
   for (const [walletAccountCode, { stGain, ltGain }] of gainBuckets) {
     const stRounded = round2(stGain)
     const ltRounded = round2(ltGain)
-    if (stRounded !== 0) lines.push(...buildGainPair(walletAccountCode, stRounded))
-    if (ltRounded !== 0) lines.push(...buildGainPair(walletAccountCode, ltRounded))
+    if (stRounded !== 0) lines.push(...buildGainPair(walletAccountCode, stRounded, resolve))
+    if (ltRounded !== 0) lines.push(...buildGainPair(walletAccountCode, ltRounded, resolve))
   }
 
   const je: QbJournalEntry = {

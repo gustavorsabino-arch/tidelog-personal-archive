@@ -167,6 +167,7 @@ export function TransactionsPageClient({
       if (tokenFilter) params.set('asset', tokenFilter)
       if (dirFilter) params.set('direction', dirFilter)
       if (walletFilter) params.set('wallet', walletFilter)
+      if (qbStatusFilter) params.set('qbStatus', qbStatusFilter)
       const range = monthFilter ? monthToRange(monthFilter) : yearToRange(yearFilter)
       if (range) {
         params.set('from', range.from)
@@ -193,7 +194,7 @@ export function TransactionsPageClient({
         inFlight.current = null
       }
     }
-  }, [entity, pageSize, tokenFilter, dirFilter, walletFilter, yearFilter, monthFilter])
+  }, [entity, pageSize, tokenFilter, dirFilter, walletFilter, yearFilter, monthFilter, qbStatusFilter])
 
   // One-way flag: flips true the first time state moves away from SSR initial
   // values, and stays true. Skips the redundant initial fetch (state already
@@ -205,7 +206,7 @@ export function TransactionsPageClient({
   useEffect(() => {
     const atInitialState =
       entity === initialEntity &&
-      !tokenFilter && !dirFilter && !yearFilter && !monthFilter && !walletFilter
+      !tokenFilter && !dirFilter && !yearFilter && !monthFilter && !walletFilter && !qbStatusFilter
     if (!atInitialState) hasInteracted.current = true
     if (!hasInteracted.current && atInitialState) return
     setOffset(0)
@@ -214,7 +215,7 @@ export function TransactionsPageClient({
     // they're certainly not what the user meant to post. Always clear.
     setSelectedIds(new Set())
     if (entity) fetchTransactions(0)
-  }, [entity, initialEntity, tokenFilter, dirFilter, yearFilter, monthFilter, walletFilter, fetchTransactions])
+  }, [entity, initialEntity, tokenFilter, dirFilter, yearFilter, monthFilter, walletFilter, qbStatusFilter, fetchTransactions])
 
   // Pagination is an explicit user action, not derived state. Calling fetch
   // directly avoids the effect-driven double-fetch race entirely.
@@ -290,28 +291,19 @@ export function TransactionsPageClient({
     [postIdCount],
   )
 
-  // Client-side filters narrow the current page only. All server filters
-  // (token / dir / wallet / date) operate across the whole dataset.
+  // `search` is the only client-side filter (narrows the current page). Token /
+  // dir / wallet / date / qbStatus are all server filters that operate across
+  // the whole dataset (so e.g. "Posted (manual)" finds rows on any page).
   const filtered = useMemo(() => {
-    return transactions.filter((t) => {
-      if (qbStatusFilter) {
-        // Treat null / undefined as 'unposted' so the filter is consistent
-        // with the column rendering.
-        const status = t.qbPostingStatus ?? 'unposted'
-        if (status !== qbStatusFilter) return false
-      }
-      if (search) {
-        const s = search.toLowerCase()
-        const hit =
-          (t.txHash || '').toLowerCase().includes(s) ||
-          (t.wallet || '').toLowerCase().includes(s) ||
-          (t.walletAddr || '').toLowerCase().includes(s) ||
-          (t.asset || '').toLowerCase().includes(s)
-        if (!hit) return false
-      }
-      return true
-    })
-  }, [transactions, search, qbStatusFilter])
+    if (!search) return transactions
+    const s = search.toLowerCase()
+    return transactions.filter((t) =>
+      (t.txHash || '').toLowerCase().includes(s) ||
+      (t.wallet || '').toLowerCase().includes(s) ||
+      (t.walletAddr || '').toLowerCase().includes(s) ||
+      (t.asset || '').toLowerCase().includes(s),
+    )
+  }, [transactions, search])
 
   // Per-row Re-post handler. For posted / posted_modified rows: void the
   // current QB JE then re-post. For voided rows: skip the void (already done)
@@ -613,11 +605,41 @@ export function TransactionsPageClient({
       ),
     }
     const walletGlCol = {
-      key: 'walletGl', label: 'Wallet GL', width: '110px', sortable: false,
+      key: 'walletGl', label: 'Wallet GL', width: '200px', sortable: false,
       render: (t: Transaction) => (
-        <span style={{ fontSize: '0.74rem', color: t.effectiveGlAccount ? 'inherit' : 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          {t.effectiveGlAccount ?? '—'}
-          {t.glSource === 'default' && !t.isPosted && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <EditableSelectCell
+            // value = the per-tx override; null → show the resolved effective GL
+            // (per-token or wallet default) as the memorized default.
+            value={t.glAccountOverride ?? null}
+            defaultValue={t.effectiveGlAccount ?? undefined}
+            options={glOptions}
+            onSave={async (next) => {
+              if (!t.id) {
+                console.error('cannot save: transaction has no id', t)
+                return
+              }
+              // Per-tx override ONLY — writes tx_qb_state.gl_account_override.
+              // It never touches the wallet's account_code default or its
+              // wallet_token_account_code per-token mappings; it just picks the
+              // GL this single transaction posts with. Posted rows get the
+              // re-post confirm (T9 flips the JE to 'posted_modified').
+              if (t.qbPostingStatus === 'posted') {
+                const ok = window.confirm(
+                  'This row is posted to QuickBooks. Changing the Wallet GL will '
+                  + 'mark the journal entry stale and require re-posting. Continue?',
+                )
+                if (!ok) throw new Error('Save cancelled')
+              }
+              await apiFetch(`/api/treasury/transactions/${t.id}/qb-state`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ glAccountOverride: next }),
+              })
+              fetchTransactions(offset)
+            }}
+          />
+          {t.glSource === 'default' && !t.isPosted && t.glAccountOverride == null && (
             <span
               style={{
                 fontSize: '0.65rem',
@@ -629,7 +651,7 @@ export function TransactionsPageClient({
                 whiteSpace: 'nowrap',
                 cursor: 'default',
               }}
-              title={`No GL is mapped for ${t.asset ?? 'this token'} on this wallet, so its default account code will be used. Confirm this is correct for ${t.asset ?? 'this token'}, or add a token-specific mapping.`}
+              title={`No GL is mapped for ${t.asset ?? 'this token'} on this wallet, so its default account code will be used. Confirm this is correct for ${t.asset ?? 'this token'}, or pick a GL here just for this transaction.`}
             >
               ⚠ default GL
             </span>

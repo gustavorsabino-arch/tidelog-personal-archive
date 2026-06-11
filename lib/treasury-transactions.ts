@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, exists, gte, lte, ne, notExists, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
 import { transaction, transactionGain, txQbState, wallet, counterpartyGlMap, qbPost, walletTokenAccountCode } from '@/lib/db/schema'
@@ -8,6 +8,9 @@ import { defaultDescription } from '@/lib/qb-state'
 import { resolveWalletGl } from '@/lib/qb/resolve-wallet-gl'
 import type { Transaction, TransactionsResponse } from '@/lib/types'
 
+export type QbStatusFilter =
+  | 'unposted' | 'posted' | 'posted_modified' | 'posted_manually' | 'voided' | 'failed'
+
 type GetTreasuryTransactionsParams = {
   entity: string
   from?: string | null
@@ -15,6 +18,9 @@ type GetTreasuryTransactionsParams = {
   asset?: string | null
   direction?: string | null
   wallet?: string | null
+  // Server-side filter on the row's QB posting status. 'unposted' matches rows
+  // with no post (or an 'unposted' qb_post), consistent with the UI.
+  qbStatus?: QbStatusFilter | null
   limit?: number | null
   offset?: number
 }
@@ -158,6 +164,7 @@ export async function getTreasuryTransactions({
   asset,
   direction,
   wallet: walletAddr,
+  qbStatus,
   limit = 50,
   offset = 0,
 }: GetTreasuryTransactionsParams): Promise<TransactionsResponse> {
@@ -183,6 +190,39 @@ export async function getTreasuryTransactions({
   // queries directly without this clause so genesis flows into FIFO and the
   // dedicated ledger UI.
   conditions.push(sql`${transaction.priceSource} IS DISTINCT FROM 'genesis'`)
+
+  // QB posting-status filter. The posting status lives on qb_post (reached via
+  // tx_qb_state.post_id), which the count/summary queries don't join — so we
+  // express it as a correlated EXISTS against `transaction` (aliased so it
+  // doesn't collide with the page query's own tx_qb_state/qb_post joins). This
+  // keeps page + count + summary consistent under the single shared `where`.
+  if (qbStatus) {
+    const s = alias(txQbState, 'tx_qb_state_sf')
+    const p = alias(qbPost, 'qb_post_sf')
+    const corr = and(
+      eq(s.txHash, transaction.txHash),
+      eq(s.walletAddress, transaction.walletAddress),
+      eq(s.direction, transaction.direction),
+      eq(s.asset, transaction.asset),
+    )
+    if (qbStatus === 'unposted') {
+      // Unposted = no linked qb_post with a non-'unposted' status (the UI renders
+      // null and 'unposted' identically).
+      conditions.push(
+        notExists(
+          db.select({ x: sql`1` }).from(s).innerJoin(p, eq(p.id, s.postId))
+            .where(and(corr, ne(p.postingStatus, 'unposted'))),
+        ),
+      )
+    } else {
+      conditions.push(
+        exists(
+          db.select({ x: sql`1` }).from(s).innerJoin(p, eq(p.id, s.postId))
+            .where(and(corr, eq(p.postingStatus, qbStatus))),
+        ),
+      )
+    }
+  }
 
   const where = and(...conditions)
   // `limit == null` means "unbounded" — FIFO-style internal callers rely on

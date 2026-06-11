@@ -14,7 +14,8 @@ import { toDbEntity } from '@/lib/entity'
 import { logAudit } from '@/lib/audit'
 import { fetchQboJson } from './client.ts'
 import { getQboRealmId, type QboEntity } from './config.ts'
-import { buildJournalEntry, type TxForPost } from './post-journal-entry.ts'
+import { buildJournalEntry, UnresolvedAccountError, type TxForPost, type AccountResolver } from './post-journal-entry.ts'
+import { readCachedAccountCatalogByNumber } from './cache-reads.ts'
 import {
   formatBulkDocNumber,
   formatIndividualDocNumber,
@@ -391,6 +392,18 @@ export async function postBatch(args: {
     txIds: args.txIds,
   })
 
+  // Resolve GL account NUMBERS → QB account Ids at post time. QB rejects a bare
+  // account number in AccountRef; the catalog (synced from QB) holds number↔Id.
+  // A code missing from the catalog throws UnresolvedAccountError, which the
+  // per-group catch below turns into a failure (with the rollback of that
+  // group's pre-allocated qb_post row) — never a post with a bad ref.
+  const catalog = await readCachedAccountCatalogByNumber(args.entity)
+  const resolveAccount: AccountResolver = (accountNumber) => {
+    const account = catalog.get(accountNumber)
+    if (!account) throw new UnresolvedAccountError(accountNumber)
+    return { value: account.qbAccountId, name: account.qbAccountName }
+  }
+
   const successes: PostBatchResult['successes'] = []
   const failures: PostBatchResult['failures'] = []
 
@@ -398,7 +411,7 @@ export async function postBatch(args: {
   // per JE. Successful groups commit independently of failed ones.
   for (const group of groups) {
     try {
-      const result = await postOneGroupLocked(group, args.entity, args.userId)
+      const result = await postOneGroupLocked(group, args.entity, args.userId, resolveAccount)
       successes.push(result)
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -434,6 +447,7 @@ async function postOneGroupLocked(
   group: GroupSpec,
   entity: QboEntity,
   userId: string,
+  resolveAccount: AccountResolver,
 ): Promise<PostBatchResult['successes'][number]> {
   const yyyymm = monthKeyOf(group)
   // D6 — lock scoped per (entity, year-month) so concurrent users posting to
@@ -508,6 +522,7 @@ async function postOneGroupLocked(
       docNumber,
       vendorEntityRef,
       privateNote: pending.id,
+      resolveAccount,
     })
 
     const resp = await fetchQboJson<QbJournalEntryResponse>(
