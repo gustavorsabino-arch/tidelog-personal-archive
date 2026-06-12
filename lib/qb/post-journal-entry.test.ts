@@ -30,13 +30,15 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010' })],
         docNumber: 'TL-Feb-JE07',
         vendorEntityRef: null,
-        privateNote: 'uuid-1',
+        description:'uuid-1',
       })
 
       expect(je.DocNumber).toBe('TL-Feb-JE07')
+      // Description → Memo (PrivateNote) AND every line's Description.
       expect(je.PrivateNote).toBe('uuid-1')
       expect(je.TxnDate).toBe('2026-02-15')
       expect(je.Line).toHaveLength(2)
+      expect(je.Line.every((l) => l.Description === 'uuid-1')).toBe(true)
 
       const debit = je.Line[0]
       const credit = je.Line[1]
@@ -59,7 +61,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 50, usd: 50, walletAccountCode: '1010', counterpartyGl: '4010' })],
         docNumber: 'TL-Feb-JE99',
         vendorEntityRef: { type: 'Vendor', value: 'V42' },
-        privateNote: 'uuid-x',
+        description:'uuid-x',
       })
       // Inflows have no AP-side line, so vendor must not appear anywhere.
       expect(je.Line.every((l) => l.JournalEntryLineDetail.Entity === undefined)).toBe(true)
@@ -72,7 +74,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'out', asset: 'USDC', qty: 50, usd: 50, walletAccountCode: '1010', counterpartyGl: '6010' })],
         docNumber: 'TL-Feb-JE08',
         vendorEntityRef: null,
-        privateNote: 'uuid-2',
+        description:'uuid-2',
       })
       expect(je.Line).toHaveLength(2)
       expect(je.Line[0].JournalEntryLineDetail.AccountRef.value).toBe('6010')
@@ -88,7 +90,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'out', asset: 'USDC', qty: 50, usd: 50, walletAccountCode: '1010', counterpartyGl: '6010' })],
         docNumber: 'TL-Feb-JE09',
         vendorEntityRef: { type: 'Vendor', value: 'V42' },
-        privateNote: 'uuid-3',
+        description:'uuid-3',
       })
       const apLine = je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '6010')!
       const cashLine = je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '1010')!
@@ -106,7 +108,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'out', asset: 'ORCA', qty: 10, usd: 100, walletAccountCode: '1300', counterpartyGl: '6010', gain: { stGain: 20, ltGain: null } })],
         docNumber: 'TL-Feb-JE10',
         vendorEntityRef: null,
-        privateNote: 'uuid-4',
+        description:'uuid-4',
       })
       // Expect a credit-line on 70150 of $20 (gain)
       const gainCredit = je.Line.find(
@@ -137,7 +139,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'out', asset: 'ORCA', qty: 10, usd: 100, walletAccountCode: '1300', counterpartyGl: '6010', gain: { stGain: null, ltGain: -15 } })],
         docNumber: 'TL-Feb-JE11',
         vendorEntityRef: null,
-        privateNote: 'uuid-5',
+        description:'uuid-5',
       })
       const lossDebit = je.Line.find(
         (l) =>
@@ -154,7 +156,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'out', asset: 'ORCA', qty: 10, usd: 100, walletAccountCode: '1300', counterpartyGl: '6010', gain: { stGain: 25, ltGain: -5 } })],
         docNumber: 'TL-Feb-JE12',
         vendorEntityRef: null,
-        privateNote: 'uuid-6',
+        description:'uuid-6',
       })
       const gainCredit = je.Line.find(
         (l) => l.JournalEntryLineDetail.AccountRef.value === '70150' && l.JournalEntryLineDetail.PostingType === 'Credit' && l.Amount === 25,
@@ -172,7 +174,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'out', asset: 'ORCA', qty: 10, usd: 100, walletAccountCode: '1300', counterpartyGl: '6010', gain: { stGain: 0, ltGain: 0 } })],
         docNumber: 'TL-Feb-JE13',
         vendorEntityRef: null,
-        privateNote: 'uuid-7',
+        description:'uuid-7',
       })
       expect(je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '70150')).toBeUndefined()
       expect(je.Line).toHaveLength(2)
@@ -183,7 +185,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'out', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '1010', counterpartyGl: '6010', gain: { stGain: 5, ltGain: null } })],
         docNumber: 'TL-Feb-JE14',
         vendorEntityRef: null,
-        privateNote: 'uuid-8',
+        description:'uuid-8',
       })
       // No 70150 lines for stable-token transactions
       expect(je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '70150')).toBeUndefined()
@@ -195,7 +197,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'in', asset: 'ORCA', qty: 10, usd: 100, walletAccountCode: '1300', counterpartyGl: '4010', gain: { stGain: 50, ltGain: 50 } })],
         docNumber: 'TL-Feb-JE15',
         vendorEntityRef: null,
-        privateNote: 'uuid-9',
+        description:'uuid-9',
       })
       expect(je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '70150')).toBeUndefined()
       expect(je.Line).toHaveLength(2)
@@ -212,7 +214,7 @@ describe('buildJournalEntry', () => {
         ],
         docNumber: 'BULK-USDC-2026-02',
         vendorEntityRef: null,
-        privateNote: 'uuid-bulk',
+        description:'uuid-bulk',
       })
       expect(je.Line).toHaveLength(2)
       expect(je.Line[0].Amount).toBe(350)
@@ -229,7 +231,7 @@ describe('buildJournalEntry', () => {
         ],
         docNumber: 'BULK-USDC-2026-02',
         vendorEntityRef: null,
-        privateNote: 'uuid-bulk2',
+        description:'uuid-bulk2',
       })
       // Two credit lines (one per CP GL) + summed Wallet debit OR
       // per-pair debit/credit lines — either way: balanced and 70150 absent.
@@ -251,7 +253,7 @@ describe('buildJournalEntry', () => {
         ],
         docNumber: 'BULK-USDC-2026-02',
         vendorEntityRef: null,
-        privateNote: 'uuid-bulk-date',
+        description:'uuid-bulk-date',
       })
       expect(je.TxnDate).toBe('2026-02-05')
     })
@@ -260,7 +262,7 @@ describe('buildJournalEntry', () => {
   describe('balance', () => {
     it('throws on empty txs (defensive)', () => {
       expect(() =>
-        buildJournalEntry({ txs: [], docNumber: 'X', vendorEntityRef: null, privateNote: 'u' }),
+        buildJournalEntry({ txs: [], docNumber: 'X', vendorEntityRef: null, description:'u' }),
       ).toThrow()
     })
 
@@ -269,9 +271,35 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'out', asset: 'ORCA', qty: 10, usd: 123.45, walletAccountCode: '1300', counterpartyGl: '6010', gain: { stGain: 12.34, ltGain: -5.67 } })],
         docNumber: 'TL-Feb-JE99',
         vendorEntityRef: null,
-        privateNote: 'uuid-bal',
+        description:'uuid-bal',
       })
       expect(sumByPostingType(je, 'Debit')).toBeCloseTo(sumByPostingType(je, 'Credit'), 2)
+    })
+  })
+
+  describe('description → Memo + every line', () => {
+    it('copies the description onto gain/loss lines too', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'out', asset: 'SOL', qty: 1, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010', gain: { stGain: 20, ltGain: null } })],
+        docNumber: 'TL-Feb-JE10',
+        vendorEntityRef: null,
+        description: 'Out - SOL - 1 - $100 - 0xabc',
+      })
+      // gain on a non-stable outflow → more than the 2 main lines
+      expect(je.Line.length).toBeGreaterThan(2)
+      expect(je.PrivateNote).toBe('Out - SOL - 1 - $100 - 0xabc')
+      expect(je.Line.every((l) => l.Description === 'Out - SOL - 1 - $100 - 0xabc')).toBe(true)
+    })
+
+    it('falls back to `Tidelog · <txHash>` when description is empty', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 1, usd: 1, walletAccountCode: '1010', counterpartyGl: '4010' })],
+        docNumber: 'TL-Feb-JE11',
+        vendorEntityRef: null,
+        description: '',
+      })
+      expect(je.PrivateNote).toBe('Tidelog · 0xabc')
+      expect(je.Line.every((l) => l.Description === 'Tidelog · 0xabc')).toBe(true)
     })
   })
 
@@ -281,7 +309,7 @@ describe('buildJournalEntry', () => {
         txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 1, usd: 1, walletAccountCode: '1010', counterpartyGl: '4010', blockTime: new Date('2026-02-15T23:59:59Z') })],
         docNumber: 'TL-Feb-JE01',
         vendorEntityRef: null,
-        privateNote: 'uuid-d',
+        description:'uuid-d',
       })
       expect(je.TxnDate).toBe('2026-02-15')
     })
@@ -295,7 +323,7 @@ describe('buildJournalEntry', () => {
       }
       const je = buildJournalEntry({
         txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010' })],
-        docNumber: 'TL-Feb-JE07', vendorEntityRef: null, privateNote: 'uuid-r',
+        docNumber: 'TL-Feb-JE07', vendorEntityRef: null, description:'uuid-r',
         resolveAccount: (n) => known[n],
       })
       expect(je.Line[0].JournalEntryLineDetail.AccountRef.value).toBe('42')
@@ -307,7 +335,7 @@ describe('buildJournalEntry', () => {
     it('resolves the gain/loss account (70150) through the same resolver', () => {
       const je = buildJournalEntry({
         txs: [makeTx({ direction: 'out', asset: 'SOL', qty: 1, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010', gain: { stGain: 20, ltGain: null } })],
-        docNumber: 'TL-Feb-JE08', vendorEntityRef: null, privateNote: 'uuid-g',
+        docNumber: 'TL-Feb-JE08', vendorEntityRef: null, description:'uuid-g',
         resolveAccount: (n) => ({ value: `id:${n}` }),
       })
       const refs = je.Line.map((l) => l.JournalEntryLineDetail.AccountRef.value)
@@ -320,7 +348,7 @@ describe('buildJournalEntry', () => {
       expect(() =>
         buildJournalEntry({
           txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '9999', counterpartyGl: '4010' })],
-          docNumber: 'TL-Feb-JE09', vendorEntityRef: null, privateNote: 'uuid-x',
+          docNumber: 'TL-Feb-JE09', vendorEntityRef: null, description:'uuid-x',
           resolveAccount: (n) => { const a = known[n]; if (!a) throw new UnresolvedAccountError(n); return a },
         }),
       ).toThrow(UnresolvedAccountError)

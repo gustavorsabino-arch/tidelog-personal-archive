@@ -1,4 +1,3 @@
-import type { Transaction } from './types'
 import { fmtUSD, fmtNum } from './format'
 
 /**
@@ -14,7 +13,13 @@ import { fmtUSD, fmtNum } from './format'
  * Pure — no DB, no I/O. Called from rowToTransaction (server-side) AND can be
  * safely re-called on the client if needed.
  */
-export function defaultDescription(t: Transaction): string {
+export function defaultDescription(t: {
+  dir: string
+  asset: string
+  qty: number
+  usd: number | null
+  txHash: string
+}): string {
   // SOL/decimals tokens deserve 4 decimal places; everything else 2.
   const qty = fmtNum(t.qty, t.asset === 'SOL' ? 4 : 2)
   const amount = t.usd != null ? fmtUSD(t.usd) : '(no price)'

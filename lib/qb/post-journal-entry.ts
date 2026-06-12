@@ -41,7 +41,11 @@ export type BuildArgs = {
   txs: TxForPost[] // 1 element for individual; many for bulk
   docNumber: string
   vendorEntityRef: { type: 'Vendor'; value: string } | null
-  privateNote: string // idempotency UUID — D11
+  // The transaction's (or bulk group's) description. v1 parity: it is set as
+  // QB's PrivateNote — which QB renders as the "Memo" — AND copied onto every
+  // line's Description. One description per JE, the same string everywhere.
+  // Falls back to `Tidelog · <txHash>` if somehow blank (mirrors v1's guard).
+  description: string
   // When provided, every AccountRef value is resolved number → QB account Id
   // (throws UnresolvedAccountError on a missing code). Omitted → raw numbers.
   resolveAccount?: AccountResolver
@@ -210,10 +214,18 @@ export function buildJournalEntry(args: BuildArgs): QbJournalEntry {
     if (ltRounded !== 0) lines.push(...buildGainPair(walletAccountCode, ltRounded, resolve))
   }
 
+  // Description → the Memo (PrivateNote) AND every line's Description. v1 used
+  // one description across the whole JE; we match that. Fallback keeps a
+  // breadcrumb if the description is blank (txs is non-empty by the guard above).
+  const memo = args.description || `Tidelog · ${args.txs[0].txHash}`
+  for (const line of lines) {
+    line.Description = memo
+  }
+
   const je: QbJournalEntry = {
     DocNumber: args.docNumber,
     TxnDate: txnDate,
-    PrivateNote: args.privateNote,
+    PrivateNote: memo,
     Line: lines,
   }
 

@@ -69,7 +69,7 @@ export type QbJournalEntry = {
   Id?: string
   DocNumber: string
   TxnDate: string // YYYY-MM-DD
-  PrivateNote: string // idempotency UUID — D11
+  PrivateNote: string // shown as "Memo" in QB; set to the tx/bulk description
   Line: QbJournalEntryLine[]
 }
 

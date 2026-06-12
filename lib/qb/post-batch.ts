@@ -28,6 +28,9 @@ import type {
   QbQueryResponse,
 } from './types.ts'
 import { resolveWalletGl, type GlSource } from './resolve-wallet-gl'
+import { defaultDescription } from '@/lib/qb-state'
+import { fmtNum } from '@/lib/format'
+import { STABLE_TOKENS } from '../constants.ts'
 
 // D13 — server-enforced hard cap. Mirror of the UI cap in
 // components/transactions-page-client.tsx; rejecting a >50 request here is
@@ -94,6 +97,13 @@ type LoadedTx = {
   walletGlSource: GlSource | null
   /** Resolved wallet GL code (number); set on eligible txs by buildPostPlan. Non-null for any tx that passed eligibility. */
   walletGl: string | null
+  /**
+   * Effective description: the user's tx_qb_state.description override, or the
+   * computed default. Becomes the JE Memo + every line's Description at post
+   * time. Computed identically to the transactions list (lib/qb-state) so the
+   * posted value matches what the user saw/edited.
+   */
+  description: string
 }
 
 async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
@@ -119,6 +129,7 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
         _present: txQbState.txHash,
         glAccountOverride: txQbState.glAccountOverride,
         counterpartyGlOverride: txQbState.counterpartyGlOverride,
+        description: txQbState.description,
         postId: txQbState.postId,
       },
       counterpartyGl: {
@@ -203,6 +214,21 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
       perTokenMap.get(`${r.txn.walletAddress}::${r.txn.asset}`) ?? null,
     walletGlSource: null, // populated by buildPostPlan eligibility loop
     walletGl: null, // populated by buildPostPlan eligibility loop
+    // Override → computed default. Default mirrors lib/treasury-transactions
+    // exactly (dir capitalized, qty abs, stable-token usd falls back to |qty|)
+    // so the posted description equals the list's descriptionDefault.
+    description: r.qbState?.description ?? defaultDescription({
+      dir: r.txn.direction === 'in' ? 'In' : 'Out',
+      asset: r.txn.asset,
+      qty: Math.abs(Number(r.txn.qty)),
+      usd:
+        STABLE_TOKENS.has(r.txn.asset) && r.txn.usd == null
+          ? Math.abs(Number(r.txn.qty))
+          : r.txn.usd != null
+            ? Number(r.txn.usd)
+            : null,
+      txHash: r.txn.txHash,
+    }),
   }))
 }
 
@@ -268,6 +294,44 @@ function memberTxIdsOf(group: GroupSpec): string[] {
   return group.kind === 'individual'
     ? [group.tx.id]
     : group.members.map((m) => m.id)
+}
+
+// Bulk description, e.g.
+//   `IN - USDC - 23,024.13 USDC - $23,024.13 - 2026-05 - 4 txs`
+//   `MIXED (2 in/1 out) - SOL - 12.50 SOL - $1,250.00 - 2026-05 - 3 txs`
+// A bulk JE aggregates many txs into shared lines, so there's no single per-tx
+// description to copy — we synthesize a group-level one (v1 shape, but
+// direction-aware: a V2 bulk group can hold both inflows and outflows of the
+// same wallet+token+month). The prefix is IN / OUT / MIXED from the members'
+// directions; MIXED spells out the in/out tx counts in parentheses so the gross
+// totals aren't ambiguous. Totals are gross (sum of absolute qty/usd). Stable
+// tokens show the token quantity as the dollar figure; others show summed USD.
+// Used as the JE Memo + every line's Description.
+function bulkDescription(group: BulkGroup): string {
+  const totalQty = group.members.reduce((s, m) => s + Math.abs(m.qty), 0)
+  const totalUsd = group.members.reduce((s, m) => s + Math.abs(m.usd), 0)
+  const dispAmt = STABLE_TOKENS.has(group.token)
+    ? fmtNum(totalQty, 2)
+    : fmtNum(totalUsd, 2)
+  const inCount = group.members.filter((m) => m.direction === 'in').length
+  const outCount = group.members.length - inCount
+  const dirLabel =
+    inCount > 0 && outCount > 0
+      ? `MIXED (${inCount} in/${outCount} out)`
+      : inCount > 0
+        ? 'IN'
+        : 'OUT'
+  return `${dirLabel} - ${group.token} - ${fmtNum(totalQty, 2)} ${group.token} - $${dispAmt} - ${group.monthYyyymm} - ${group.members.length} txs`
+}
+
+// The description that becomes the JE Memo + every line's Description.
+// Individual: the tx's effective description (override → default). Bulk: the
+// synthesized group-level description. Shared by the real post + the preview
+// route so both render the same memo.
+export function groupDescription(group: GroupSpec): string {
+  return group.kind === 'individual'
+    ? group.tx.description
+    : bulkDescription(group)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -497,8 +561,8 @@ async function postOneGroupLocked(
     // idempotency to be implemented in Wave 2d using DocNumber-based detection
     // (pre-allocate qb_post with status='posting' + DocNumber, retry-adopt by
     // DocNumber query). Until then, the duplicate-scan immediately after POST
-    // (below) is our detection layer. PrivateNote is still set on outbound JEs
-    // (in buildJournalEntry) as a manual-audit trail in QB's UI.
+    // (below) is our detection layer. (PrivateNote now carries the human
+    // description/memo — not the qb_post id; that id stays in our DB only.)
     //
     // Resolve vendor refs (out-direction members with a labelled counterparty
     // get matched against QB's vendor list; matches attach EntityRef to the
@@ -521,7 +585,7 @@ async function postOneGroupLocked(
       txs: txsForPost,
       docNumber,
       vendorEntityRef,
-      privateNote: pending.id,
+      description: groupDescription(group),
       resolveAccount,
     })
 

@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requirePermission } from '@/lib/auth/require-permission'
 import {
   buildPostPlan,
+  groupDescription,
   loadedTxToTxForPost,
   type GroupSpec,
 } from '@/lib/qb/post-batch'
@@ -105,7 +106,7 @@ export async function POST(req: NextRequest) {
           // Preview doesn't resolve vendor refs — that requires hitting QB.
           // The modal shows the shape; vendor attachment is decided at post time.
           vendorEntityRef: null,
-          privateNote: 'preview',
+          description: groupDescription(group),
         })
         return {
           kind: 'individual',
@@ -121,7 +122,7 @@ export async function POST(req: NextRequest) {
         txs: group.members.map(loadedTxToTxForPost),
         docNumber: docNumberPreview,
         vendorEntityRef: null,
-        privateNote: 'preview',
+        description: groupDescription(group),
       })
       return {
         kind: 'bulk',
