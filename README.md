@@ -40,6 +40,12 @@ Controlled by `AUTH_MODE` (env var):
 
 See [docs/superpowers/specs/2026-04-22-auth-mode-toggle-design.md](docs/superpowers/specs/2026-04-22-auth-mode-toggle-design.md) for the design and [docs/dev-with-cf-access.md](docs/dev-with-cf-access.md) for the Cloudflare-Access-via-tunnel workflow.
 
+## Pricing
+
+USD prices come from Birdeye by default, with DeFiLlama as a per-token fallback.
+
+- `BIRDEYE_API_KEY` — Birdeye API key. **Optional**: when unset, pricing falls back to DeFiLlama only.
+
 ## Useful scripts
 
 | Command | Purpose |
