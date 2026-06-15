@@ -1206,14 +1206,19 @@ export function TransactionsPageClient({
           entity={postEntity}
           selectedTxIds={selectedIdsArray}
           open={postModalOpen}
-          onClose={() => setPostModalOpen(false)}
+          onClose={() => {
+            setPostModalOpen(false)
+            clearSelection()
+          }}
           onSuccess={() => {
             // Refresh the table so newly-posted rows show their badges
-            // (T12 surfaces the qbPostingStatus column). Selection is left as
-            // the user explicitly clicks Close — they may want to read the
-            // success/failure summary first.
+            // (T12 surfaces the qbPostingStatus column). Selection is left
+            // intact until the user clicks Close — they may want to read the
+            // success/failure summary first. We must NOT clear it here: the
+            // modal is still open and bound to selectedTxIds, so clearing would
+            // empty its props and re-fire the preview fetch with [] → a
+            // spurious "txIds required" 400. Cleared in onClose instead.
             fetchTransactions(offset)
-            clearSelection()
           }}
         />
       )}

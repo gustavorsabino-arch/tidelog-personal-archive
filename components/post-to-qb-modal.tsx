@@ -104,6 +104,12 @@ export function PostToQbModal({
       setShowFailureDetail(false)
       return
     }
+    // Defense-in-depth: don't (re)fetch the preview once a post has completed,
+    // or if the selection is empty. The parent clears the selection on close,
+    // but should anything empty selectedTxIds while we're still open, a re-fetch
+    // with [] would 400 ("txIds required") and clobber the result summary with a
+    // spurious error. The result summary is what matters at that point.
+    if (submitResult || selectedTxIds.length === 0) return
     let cancelled = false
     setPreviewLoading(true)
     setPreviewError(null)
@@ -126,7 +132,7 @@ export function PostToQbModal({
     return () => {
       cancelled = true
     }
-  }, [open, entity, selectedTxIds])
+  }, [open, entity, selectedTxIds, submitResult])
 
   const eligibleCount = preview?.groups.reduce((n, g) => n + g.memberTxIds.length, 0) ?? 0
 
