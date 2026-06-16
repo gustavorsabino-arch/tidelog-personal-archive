@@ -3,6 +3,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { db } from '@/lib/db'
 import { transaction, txQbState, qbPost } from '@/lib/db/schema'
+import { logAudit } from '@/lib/audit'
 
 const MAX_BULK = 50
 
@@ -93,62 +94,76 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ updated: 0, skipped })
   }
 
-  // Process each found transaction: upsert tx_qb_state + flip posted_modified
-  for (const t of txRows) {
-    // Build upsert — same pattern as single route
-    const setMap: Record<string, unknown> = { updatedAt: now, updatedBy }
-    for (const p of providedFields) {
-      setMap[p.key] = p.value
-    }
+  const foundTxIds = txRows.map(r => r.id)
+  const providedFieldKeys = providedFields.map(p => p.key)
+  let flippedCount = 0
 
-    const insertValues: Record<string, unknown> = {
-      txHash: t.txHash,
-      walletAddress: t.walletAddress,
-      direction: t.direction,
-      asset: t.asset,
-      entityId: t.entityId,
-      description: null,
-      glAccountOverride: null,
-      counterpartyGlOverride: null,
-      vendorOverride: null,
-      classOverride: null,
-      updatedAt: now,
-      updatedBy,
-    }
-    for (const p of providedFields) {
-      insertValues[p.key] = p.value
-    }
+  // Wrap all per-row writes in a single transaction so the bulk op is all-or-nothing
+  await db.transaction(async (tx) => {
+    for (const t of txRows) {
+      // Build upsert — same pattern as single route
+      const setMap: Record<string, unknown> = { updatedAt: now, updatedBy }
+      for (const p of providedFields) {
+        setMap[p.key] = p.value
+      }
 
-    await db.insert(txQbState)
-      .values(insertValues as typeof txQbState.$inferInsert)
-      .onConflictDoUpdate({
-        target: [txQbState.txHash, txQbState.walletAddress, txQbState.direction, txQbState.asset],
-        set: setMap,
-      })
+      const insertValues: Record<string, unknown> = {
+        txHash: t.txHash,
+        walletAddress: t.walletAddress,
+        direction: t.direction,
+        asset: t.asset,
+        entityId: t.entityId,
+        description: null,
+        glAccountOverride: null,
+        counterpartyGlOverride: null,
+        vendorOverride: null,
+        classOverride: null,
+        updatedAt: now,
+        updatedBy,
+      }
+      for (const p of providedFields) {
+        insertValues[p.key] = p.value
+      }
 
-    // Material edit: flip any linked posted qb_post to posted_modified
-    // vendorOverride + classOverride are always material (same rule as single route)
-    const [row] = await db
-      .select({ postId: txQbState.postId, postingStatus: qbPost.postingStatus })
-      .from(txQbState)
-      .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
-      .where(
-        and(
-          eq(txQbState.txHash, t.txHash),
-          eq(txQbState.walletAddress, t.walletAddress),
-          eq(txQbState.direction, t.direction),
-          eq(txQbState.asset, t.asset),
-        ),
-      )
-      .limit(1)
+      await tx.insert(txQbState)
+        .values(insertValues as typeof txQbState.$inferInsert)
+        .onConflictDoUpdate({
+          target: [txQbState.txHash, txQbState.walletAddress, txQbState.direction, txQbState.asset],
+          set: setMap,
+        })
 
-    if (row?.postId && row.postingStatus === 'posted') {
-      await db
-        .update(qbPost)
-        .set({ postingStatus: 'posted_modified' })
-        .where(and(eq(qbPost.id, row.postId), eq(qbPost.postingStatus, 'posted')))
+      // Material edit: flip any linked posted qb_post to posted_modified
+      // vendorOverride + classOverride are always material (same rule as single route)
+      const [row] = await tx
+        .select({ postId: txQbState.postId, postingStatus: qbPost.postingStatus })
+        .from(txQbState)
+        .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
+        .where(
+          and(
+            eq(txQbState.txHash, t.txHash),
+            eq(txQbState.walletAddress, t.walletAddress),
+            eq(txQbState.direction, t.direction),
+            eq(txQbState.asset, t.asset),
+          ),
+        )
+        .limit(1)
+
+      if (row?.postId && row.postingStatus === 'posted') {
+        await tx
+          .update(qbPost)
+          .set({ postingStatus: 'posted_modified' })
+          .where(and(eq(qbPost.id, row.postId), eq(qbPost.postingStatus, 'posted')))
+        flippedCount++
+      }
     }
-  }
+  })
+
+  logAudit({
+    userId: user?.id ?? null,
+    action: 'tx_qb_state.bulk_update',
+    resourceType: 'transaction',
+    metadata: { fields: providedFieldKeys, txIds: foundTxIds, updated: foundTxIds.length, flipped: flippedCount },
+  }).catch(() => { /* swallow */ })
 
   return NextResponse.json({ updated: txRows.length, skipped })
 }
