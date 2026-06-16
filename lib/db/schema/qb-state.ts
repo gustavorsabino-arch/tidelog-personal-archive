@@ -34,6 +34,9 @@ export const txQbState = app.table(
     // Wave 2b — per-tx GL overrides
     glAccountOverride: text('gl_account_override'),
     counterpartyGlOverride: text('counterparty_gl_override'),
+    // Phase 4 — per-tx vendor/class overrides (null = use the counterparty wallet's value)
+    vendorOverride: text('vendor_override'),
+    classOverride: text('class_override'),
     // Wave 2c — link to the qb_post row this tx is a member of. Null = unposted.
     // onDelete: 'set null' — if a posting is hard-deleted (rare, admin-only),
     // keep this row alive but mark it unposted. tx_qb_state isn't accounting
@@ -44,6 +47,9 @@ export const txQbState = app.table(
     // until posted; immutable snapshot, never re-resolved.
     postedGlAccount: text('posted_gl_account'),
     postedGlSource: text('posted_gl_source', { enum: ['override', 'token', 'default'] }),
+    // Faithful display: the vendor/class actually sent to QB at post time (Phase 5 writes these)
+    postedVendor: text('posted_vendor'),
+    postedClass: text('posted_class'),
     // Audit
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     updatedBy: text('updated_by').references(() => user.id),
