@@ -28,11 +28,13 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   }
   const b = body as Record<string, unknown>
 
-  type FieldSpec = { key: 'description' | 'glAccountOverride' | 'counterpartyGlOverride'; max: number }
+  type FieldSpec = { key: 'description' | 'glAccountOverride' | 'counterpartyGlOverride' | 'vendorOverride' | 'classOverride'; max: number }
   const FIELDS: FieldSpec[] = [
     { key: 'description', max: 4000 },
     { key: 'glAccountOverride', max: 64 },
     { key: 'counterpartyGlOverride', max: 64 },
+    { key: 'vendorOverride', max: 256 },
+    { key: 'classOverride', max: 256 },
   ]
 
   // Parse + validate each provided field. Distinguish "not in body" from "in body as null".
@@ -87,6 +89,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     description: null,
     glAccountOverride: null,
     counterpartyGlOverride: null,
+    vendorOverride: null,
+    classOverride: null,
     updatedAt: now,
     updatedBy,
   }
@@ -115,7 +119,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   // are completely unaffected — the original PATCH semantics are preserved.
   const editedFields = parsed.filter(p => p.provided).map(p => p.key)
   const isMaterialEdit = editedFields.some(
-    f => f === 'glAccountOverride' || f === 'counterpartyGlOverride',
+    f => f === 'glAccountOverride' || f === 'counterpartyGlOverride' || f === 'vendorOverride' || f === 'classOverride',
   )
   const isDescriptionOnly = editedFields.length > 0 && !isMaterialEdit
 
