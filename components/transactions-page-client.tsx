@@ -109,6 +109,7 @@ export function TransactionsPageClient({
   // currently in-flight.
   const [rowBusy, setRowBusy] = useState<Record<string, 'repost' | 'void' | undefined>>({})
   const [rowError, setRowError] = useState<string | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
 
   // Drill-down panel for bulk JEs. Holds the post we want to inspect; null = closed.
   type DrilldownTarget = {
@@ -1168,6 +1169,7 @@ export function TransactionsPageClient({
                       className="fsel"
                       value=""
                       title="Set vendor on selected rows"
+                      disabled={bulkBusy}
                       onChange={async (e) => {
                         const next = e.target.value || null
                         const txIds = Array.from(selectedIds)
@@ -1181,12 +1183,20 @@ export function TransactionsPageClient({
                           )
                           if (!ok) return
                         }
-                        await apiFetch('/api/treasury/transactions/bulk-qb-state', {
-                          method: 'PATCH',
-                          headers: { 'content-type': 'application/json' },
-                          body: JSON.stringify({ txIds, vendorOverride: next }),
-                        })
-                        fetchTransactions(offset)
+                        setBulkBusy(true)
+                        try {
+                          await apiFetch('/api/treasury/transactions/bulk-qb-state', {
+                            method: 'PATCH',
+                            headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ txIds, vendorOverride: next }),
+                          })
+                          setRowError(null)
+                          fetchTransactions(offset)
+                        } catch (err) {
+                          setRowError(`Bulk vendor update failed: ${err instanceof Error ? err.message : String(err)}`)
+                        } finally {
+                          setBulkBusy(false)
+                        }
                       }}
                     >
                       <option value="">Set vendor…</option>
@@ -1198,6 +1208,7 @@ export function TransactionsPageClient({
                       className="fsel"
                       value=""
                       title="Set class on selected rows"
+                      disabled={bulkBusy}
                       onChange={async (e) => {
                         const next = e.target.value || null
                         const txIds = Array.from(selectedIds)
@@ -1211,12 +1222,20 @@ export function TransactionsPageClient({
                           )
                           if (!ok) return
                         }
-                        await apiFetch('/api/treasury/transactions/bulk-qb-state', {
-                          method: 'PATCH',
-                          headers: { 'content-type': 'application/json' },
-                          body: JSON.stringify({ txIds, classOverride: next }),
-                        })
-                        fetchTransactions(offset)
+                        setBulkBusy(true)
+                        try {
+                          await apiFetch('/api/treasury/transactions/bulk-qb-state', {
+                            method: 'PATCH',
+                            headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ txIds, classOverride: next }),
+                          })
+                          setRowError(null)
+                          fetchTransactions(offset)
+                        } catch (err) {
+                          setRowError(`Bulk class update failed: ${err instanceof Error ? err.message : String(err)}`)
+                        } finally {
+                          setBulkBusy(false)
+                        }
                       }}
                     >
                       <option value="">Set class…</option>
