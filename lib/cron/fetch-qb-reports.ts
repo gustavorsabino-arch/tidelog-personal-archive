@@ -2,6 +2,8 @@ import { and, eq, gte, inArray, or, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import {
   qbAccountCatalog,
+  qbClassCatalog,
+  qbVendorCatalog,
   qbConnection,
   qbReportCache,
   qbTransactionCache,
@@ -9,6 +11,7 @@ import {
 } from '@/lib/db/schema'
 import { QboHttpError, fetchQboJson, qbFetchReport, type QbReportType } from '@/lib/qb/client'
 import { getQboRealmId, isQboEntity, type QboEntity } from '@/lib/qb/config'
+import { mapQbClassesToRows, mapQbVendorsToRows } from '@/lib/qb/catalog-map'
 import { buildGlAccountList } from './gl-account-list.ts'
 
 /**
@@ -228,6 +231,69 @@ export async function fetchAndStoreAccountCatalog(entity: QboEntity, entityId: s
   })
   console.log(`[qb-reports] ${entityId}: account catalog saved (${values.length} accounts)`)
   return values.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Class catalog refresh
+// ─────────────────────────────────────────────────────────────────────────
+
+type QboClassQueryResponse = {
+  QueryResponse?: { Class?: Array<{ Id?: string; Name?: string; FullyQualifiedName?: string; Active?: boolean }> }
+}
+type QboVendorQueryResponse = {
+  QueryResponse?: { Vendor?: Array<{ Id?: string; DisplayName?: string; Active?: boolean }> }
+}
+
+// Force-fetch QB Classes and replace the entity's catalog rows. No staleness
+// guard — the cron uses refreshClassCatalog; the route uses this directly.
+export async function fetchAndStoreClassCatalog(entity: QboEntity, entityId: string, now: Date): Promise<number> {
+  console.log(`[qb-reports] ${entityId}: refreshing class catalog…`)
+  const realmId = getQboRealmId(entity)
+  const path = `/v3/company/${encodeURIComponent(realmId)}/query?query=${encodeURIComponent('SELECT * FROM Class MAXRESULTS 1000')}&minorversion=65`
+  const response = await fetchQboJson<QboClassQueryResponse>(entity, path)
+  const rows = mapQbClassesToRows(entityId, response.QueryResponse?.Class ?? [], now)
+  if (rows.length === 0) { console.log(`[qb-reports] ${entityId}: class catalog empty`); return 0 }
+  await db.transaction(async (tx) => {
+    await tx.delete(qbClassCatalog).where(eq(qbClassCatalog.entityId, entityId))
+    await tx.insert(qbClassCatalog).values(rows)
+  })
+  console.log(`[qb-reports] ${entityId}: class catalog saved (${rows.length} classes)`)
+  return rows.length
+}
+
+export async function fetchAndStoreVendorCatalog(entity: QboEntity, entityId: string, now: Date): Promise<number> {
+  console.log(`[qb-reports] ${entityId}: refreshing vendor catalog…`)
+  const realmId = getQboRealmId(entity)
+  const path = `/v3/company/${encodeURIComponent(realmId)}/query?query=${encodeURIComponent('SELECT Id, DisplayName, Active FROM Vendor MAXRESULTS 1000')}&minorversion=65`
+  const response = await fetchQboJson<QboVendorQueryResponse>(entity, path)
+  const rows = mapQbVendorsToRows(entityId, response.QueryResponse?.Vendor ?? [], now)
+  if (rows.length === 0) { console.log(`[qb-reports] ${entityId}: vendor catalog empty`); return 0 }
+  await db.transaction(async (tx) => {
+    await tx.delete(qbVendorCatalog).where(eq(qbVendorCatalog.entityId, entityId))
+    await tx.insert(qbVendorCatalog).values(rows)
+  })
+  console.log(`[qb-reports] ${entityId}: vendor catalog saved (${rows.length} vendors)`)
+  return rows.length
+}
+
+async function refreshClassCatalog(entity: QboEntity, entityId: string, now: Date): Promise<void> {
+  const [fresh] = await db.select({ fetchedAt: qbClassCatalog.fetchedAt })
+    .from(qbClassCatalog).where(eq(qbClassCatalog.entityId, entityId))
+    .orderBy(qbClassCatalog.fetchedAt).limit(1)
+  if (fresh && now.getTime() - fresh.fetchedAt.getTime() < ACCOUNT_CATALOG_STALE_MS) {
+    console.log(`[qb-reports] ${entityId}: class catalog fresh, skipping`); return
+  }
+  await fetchAndStoreClassCatalog(entity, entityId, now)
+}
+
+async function refreshVendorCatalog(entity: QboEntity, entityId: string, now: Date): Promise<void> {
+  const [fresh] = await db.select({ fetchedAt: qbVendorCatalog.fetchedAt })
+    .from(qbVendorCatalog).where(eq(qbVendorCatalog.entityId, entityId))
+    .orderBy(qbVendorCatalog.fetchedAt).limit(1)
+  if (fresh && now.getTime() - fresh.fetchedAt.getTime() < ACCOUNT_CATALOG_STALE_MS) {
+    console.log(`[qb-reports] ${entityId}: vendor catalog fresh, skipping`); return
+  }
+  await fetchAndStoreVendorCatalog(entity, entityId, now)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -621,6 +687,18 @@ export async function fetchQbReportsJob(
     } catch (err) {
       failures.push(`account_catalog: ${(err as Error).message}`)
       console.warn(`[qb-reports] ${entityId}: account catalog failed: ${(err as Error).message}`)
+    }
+    try {
+      await refreshClassCatalog(qboEntity, entityId, now)
+    } catch (err) {
+      failures.push(`class_catalog: ${(err as Error).message}`)
+      console.warn(`[qb-reports] ${entityId}: class catalog failed: ${(err as Error).message}`)
+    }
+    try {
+      await refreshVendorCatalog(qboEntity, entityId, now)
+    } catch (err) {
+      failures.push(`vendor_catalog: ${(err as Error).message}`)
+      console.warn(`[qb-reports] ${entityId}: vendor catalog failed: ${(err as Error).message}`)
     }
 
     // Build specs after the catalog refresh so GL specs can resolve account

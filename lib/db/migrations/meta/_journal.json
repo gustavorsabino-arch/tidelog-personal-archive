@@ -141,6 +141,13 @@
       "when": 1781033538889,
       "tag": "0019_spooky_whirlwind",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1781636111619,
+      "tag": "0020_thick_maverick",
+      "breakpoints": true
     }
   ]
 }

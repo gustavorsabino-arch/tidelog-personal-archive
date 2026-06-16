@@ -82,6 +82,45 @@ export const qbTransactionCache = app.table(
 )
 
 /**
+ * Per-entity QuickBooks Class catalog (active classes only), refreshed by the
+ * cron. `name` is the fully-qualified name (e.g. "Ops" or
+ * "Ops:Ops - Global Colo") so sub-classes are unambiguous. Used to populate
+ * class dropdowns and resolve a class name → QB class Id at post time.
+ */
+export const qbClassCatalog = app.table(
+  'qb_class_catalog',
+  {
+    entityId: text('entity_id').notNull().references(() => entity.id),
+    qbClassId: text('qb_class_id').notNull(),
+    qbClassName: text('qb_class_name').notNull(),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.entityId, t.qbClassId] }),
+    index('qb_class_catalog_name_idx').on(t.entityId, t.qbClassName),
+  ],
+)
+
+/**
+ * Per-entity QuickBooks Vendor catalog (active vendors only), refreshed by the
+ * cron. Resolves a vendor name → QB vendor Id at post time and powers the
+ * vendor dropdown.
+ */
+export const qbVendorCatalog = app.table(
+  'qb_vendor_catalog',
+  {
+    entityId: text('entity_id').notNull().references(() => entity.id),
+    qbVendorId: text('qb_vendor_id').notNull(),
+    displayName: text('display_name').notNull(),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.entityId, t.qbVendorId] }),
+    index('qb_vendor_catalog_name_idx').on(t.entityId, t.displayName),
+  ],
+)
+
+/**
  * Tracks admin-initiated QuickBooks force-refresh runs. One row per dispatch.
  *
  * The partial unique index on status='running' is the concurrency lock:

@@ -12,10 +12,13 @@ import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import {
   qbAccountCatalog,
+  qbClassCatalog,
   qbReportCache,
   qbTransactionCache,
+  qbVendorCatalog,
 } from '@/lib/db/schema/quickbooks'
 import { type QboEntity } from './config'
+import { classByName, vendorByName, type QbClassRow, type QbVendorRow } from './catalog-map'
 
 type QbReportType = 'balance_sheet' | 'profit_and_loss' | 'general_ledger'
 
@@ -307,6 +310,34 @@ export async function readCachedAccountCatalogByNumber(
     byNumber.set(row.qbAccountNumber, row)
   }
   return byNumber
+}
+
+export async function readCachedClassCatalog(entity: QboEntity): Promise<QbClassRow[]> {
+  return db.select({
+    entityId: qbClassCatalog.entityId,
+    qbClassId: qbClassCatalog.qbClassId,
+    qbClassName: qbClassCatalog.qbClassName,
+    fetchedAt: qbClassCatalog.fetchedAt,
+  }).from(qbClassCatalog).where(eq(qbClassCatalog.entityId, entityToId(entity)))
+}
+
+/** Map<class name → row> for resolving a stored class name → QB class Id. */
+export async function readCachedClassCatalogByName(entity: QboEntity): Promise<Map<string, QbClassRow>> {
+  return classByName(await readCachedClassCatalog(entity))
+}
+
+export async function readCachedVendorCatalog(entity: QboEntity): Promise<QbVendorRow[]> {
+  return db.select({
+    entityId: qbVendorCatalog.entityId,
+    qbVendorId: qbVendorCatalog.qbVendorId,
+    displayName: qbVendorCatalog.displayName,
+    fetchedAt: qbVendorCatalog.fetchedAt,
+  }).from(qbVendorCatalog).where(eq(qbVendorCatalog.entityId, entityToId(entity)))
+}
+
+/** Map<vendor display name → row> for resolving a stored vendor name → QB vendor Id. */
+export async function readCachedVendorCatalogByName(entity: QboEntity): Promise<Map<string, QbVendorRow>> {
+  return vendorByName(await readCachedVendorCatalog(entity))
 }
 
 export type CachedTransactionPayload<T = unknown> = {
