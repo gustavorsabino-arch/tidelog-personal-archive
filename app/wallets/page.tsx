@@ -10,6 +10,7 @@ import { useSharedAccess } from '@/lib/access-context'
 import { hasPermission } from '@/lib/auth/permissions'
 import type { Wallet } from '@/lib/types'
 import { GlAccountCombobox } from '@/components/gl-account-combobox'
+import { WalletQbFields } from '@/components/wallet-qb-fields'
 import { toDisplayEntity } from '@/lib/entity'
 import { isQboEntity } from '@/lib/qb/config'
 
@@ -24,11 +25,14 @@ type NewWalletForm = {
   type: 'internal' | 'external'
   hiddenFromFinance: boolean
   backfill: boolean
+  qbVendorName: string
+  qbClassName: string
 }
 
 const EMPTY_NEW_WALLET: NewWalletForm = {
   chain: 'SOL', address: '', label: '', entityId: '', accountCode: '',
   type: 'internal' as const, hiddenFromFinance: false, backfill: true,
+  qbVendorName: '', qbClassName: '',
 }
 
 export default function WalletsPage() {
@@ -63,7 +67,9 @@ export default function WalletsPage() {
     accountCode: string
     type: 'internal' | 'external'
     hiddenFromFinance: boolean
-  }>({ label: '', accountCode: '', type: 'internal', hiddenFromFinance: false })
+    qbVendorName: string
+    qbClassName: string
+  }>({ label: '', accountCode: '', type: 'internal', hiddenFromFinance: false, qbVendorName: '', qbClassName: '' })
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
@@ -144,7 +150,18 @@ export default function WalletsPage() {
       const res = await fetch('/api/admin/wallets', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(newWallet),
+        body: JSON.stringify((() => {
+          const qbExternal = newWallet.type === 'external'
+          return {
+            ...newWallet,
+            // Backfill only applies to internal SOL wallets; the schema rejects
+            // backfill=true on external (or non-SOL) wallets, and the form's
+            // default is true — so coerce it to false when not eligible.
+            backfill: newWallet.type === 'internal' && newWallet.chain === 'SOL' ? newWallet.backfill : false,
+            qbVendorName: qbExternal ? (newWallet.qbVendorName.trim() || undefined) : undefined,
+            qbClassName: qbExternal ? (newWallet.qbClassName.trim() || undefined) : undefined,
+          }
+        })()),
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -204,6 +221,8 @@ export default function WalletsPage() {
       accountCode: w.accountCode ?? '',
       type: w.type,
       hiddenFromFinance: w.hiddenFromFinance,
+      qbVendorName: w.qbVendorName ?? '',
+      qbClassName: w.qbClassName ?? '',
     })
     setEditError(null)
     setError(null)
@@ -255,6 +274,11 @@ export default function WalletsPage() {
     if (newAccountCode !== oldAccountCode) patch.accountCode = newAccountCode
     if (editForm.type !== editingWallet.type) patch.type = editForm.type
     if (editForm.hiddenFromFinance !== editingWallet.hiddenFromFinance) patch.hiddenFromFinance = editForm.hiddenFromFinance
+    const isExternal = editForm.type === 'external'
+    const newVendor = !isExternal || editForm.qbVendorName.trim() === '' ? null : editForm.qbVendorName.trim()
+    if (newVendor !== (editingWallet.qbVendorName ?? null)) patch.qbVendorName = newVendor
+    const newClass = !isExternal || editForm.qbClassName.trim() === '' ? null : editForm.qbClassName.trim()
+    if (newClass !== (editingWallet.qbClassName ?? null)) patch.qbClassName = newClass
 
     if (Object.keys(patch).length === 0) {
       closeEditModal()
@@ -479,6 +503,18 @@ export default function WalletsPage() {
               )}
             </label>
           </div>
+
+          {newWallet.type === 'external' && (
+            <div style={{ marginTop: 12 }}>
+              <WalletQbFields
+                vendorName={newWallet.qbVendorName || null}
+                qbClassName={newWallet.qbClassName || null}
+                disabled={creatingWallet}
+                onVendorChange={(v) => setNewWallet((p) => ({ ...p, qbVendorName: v ?? '' }))}
+                onClassChange={(v) => setNewWallet((p) => ({ ...p, qbClassName: v ?? '' }))}
+              />
+            </div>
+          )}
 
           <div className="admin-access-restricted-section active" style={{ marginTop: 16 }}>
             <div className="section-title">Flags</div>
@@ -1009,7 +1045,18 @@ export default function WalletsPage() {
                     </>
                   )
                 })()}
+
               </div>
+            )}
+
+            {editForm.type === 'external' && (
+              <WalletQbFields
+                vendorName={editForm.qbVendorName || null}
+                qbClassName={editForm.qbClassName || null}
+                disabled={savingEdit}
+                onVendorChange={(v) => { setEditForm((p) => ({ ...p, qbVendorName: v ?? '' })); if (editError) setEditError(null) }}
+                onClassChange={(v) => { setEditForm((p) => ({ ...p, qbClassName: v ?? '' })); if (editError) setEditError(null) }}
+              />
             )}
 
             <div style={{ marginBottom: 14 }}>

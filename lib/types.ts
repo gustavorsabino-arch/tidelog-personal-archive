@@ -6,6 +6,8 @@ export interface Wallet {
   chain: string
   entity: string
   accountCode: string | null
+  qbVendorName?: string | null
+  qbClassName?: string | null
   type: 'internal' | 'external'
   hiddenFromFinance: boolean
   needsBackfill: boolean

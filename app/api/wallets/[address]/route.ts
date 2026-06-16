@@ -67,6 +67,25 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ address: 
     setMap.accountCode = b.accountCode === '' ? null : b.accountCode
   }
 
+  if ('qbVendorName' in b) {
+    if (b.qbVendorName !== null && typeof b.qbVendorName !== 'string') {
+      return NextResponse.json({ error: 'qbVendorName must be a string or null' }, { status: 400 })
+    }
+    if (typeof b.qbVendorName === 'string' && b.qbVendorName.length > 200) {
+      return NextResponse.json({ error: 'qbVendorName must be 200 chars or fewer' }, { status: 400 })
+    }
+    setMap.qbVendorName = b.qbVendorName === '' ? null : b.qbVendorName
+  }
+  if ('qbClassName' in b) {
+    if (b.qbClassName !== null && typeof b.qbClassName !== 'string') {
+      return NextResponse.json({ error: 'qbClassName must be a string or null' }, { status: 400 })
+    }
+    if (typeof b.qbClassName === 'string' && b.qbClassName.length > 200) {
+      return NextResponse.json({ error: 'qbClassName must be 200 chars or fewer' }, { status: 400 })
+    }
+    setMap.qbClassName = b.qbClassName === '' ? null : b.qbClassName
+  }
+
   if ('type' in b) {
     if (b.type !== 'internal' && b.type !== 'external') {
       return NextResponse.json({ error: 'type must be "internal" or "external"' }, { status: 400 })

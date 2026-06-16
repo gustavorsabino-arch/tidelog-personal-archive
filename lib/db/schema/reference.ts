@@ -20,6 +20,8 @@ export const wallet = app.table('wallet', {
   chain: text('chain').notNull(),
   entityId: text('entity_id').notNull().references(() => entity.id),
   accountCode: text('account_code'),
+  qbVendorName: text('qb_vendor_name'),
+  qbClassName: text('qb_class_name'),
   type: walletType('type').notNull().default('internal'),
   hiddenFromFinance: boolean('hidden_from_finance').notNull().default(false),
   needsBackfill: boolean('needs_backfill').notNull().default(false),

@@ -39,6 +39,8 @@ export async function GET(req: Request) {
     chain: w.chain,
     entity: toDisplayEntity(w.entityId),
     accountCode: w.accountCode,
+    qbVendorName: w.qbVendorName ?? null,
+    qbClassName: w.qbClassName ?? null,
     type: w.type,
     hiddenFromFinance: w.hiddenFromFinance,
     needsBackfill: w.needsBackfill,

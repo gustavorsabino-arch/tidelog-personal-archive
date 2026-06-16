@@ -74,6 +74,8 @@ export async function POST(req: Request) {
       chain: input.chain,
       entityId: input.entityId,
       accountCode: input.accountCode,
+      qbVendorName: input.qbVendorName ?? null,
+      qbClassName: input.qbClassName ?? null,
       type: input.type ?? 'internal',
       hiddenFromFinance: input.hiddenFromFinance ?? false,
       needsBackfill: needsBackfill,
