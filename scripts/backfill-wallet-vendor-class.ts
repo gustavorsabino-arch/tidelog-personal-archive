@@ -20,7 +20,7 @@
  *   DB_MODE=local DATABASE_URL=<url> bun run scripts/backfill-wallet-vendor-class.ts --apply --force  # overwrite existing
  */
 
-import { eq, isNotNull, or } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { wallet, budgetTeamMember } from '@/lib/db/schema'
 import { matchTeamMember, type RosterMember } from '@/lib/qb/match-team-member'
