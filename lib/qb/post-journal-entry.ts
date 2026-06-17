@@ -140,9 +140,12 @@ function buildMainPair(
   }
   if (classRef !== undefined) cpDetail.ClassRef = classRef
 
-  // Vendor ref attaches ONLY to the AP-side of an outflow (counterparty Debit).
-  // Inflows never carry a vendor ref.
-  if (agg.direction === 'out' && agg.vendorName != null) {
+  // Vendor ref attaches to the counterparty line regardless of direction — this
+  // is the line that hits the counterparty/AP account (Debit on an outflow,
+  // Credit on an inflow). Matches V1 (selector is `lineAcctId === cpId`, not
+  // gated on direction or posting type) and satisfies QB's requirement that
+  // A/P-account lines carry an Entity. Never attaches to the wallet line.
+  if (agg.vendorName != null) {
     const resolved = resolveVendor(agg.vendorName)
     if (resolved !== null) {
       cpDetail.Entity = { Type: 'Vendor', EntityRef: { value: resolved.value } }
