@@ -354,4 +354,179 @@ describe('buildJournalEntry', () => {
       ).toThrow(UnresolvedAccountError)
     })
   })
+
+  // ── CLASS / VENDOR REFS (Task 1) ─────────────────────────────────────────────
+
+  describe('ClassRef + per-tx vendor EntityRef', () => {
+    const classMap: Record<string, { value: string; name?: string }> = {
+      Ops: { value: '5', name: 'Ops' },
+      Finance: { value: '8', name: 'Finance' },
+    }
+    const vendorMap: Record<string, { value: string }> = {
+      AWS: { value: 'V10' },
+      GCP: { value: 'V20' },
+    }
+    const resolveClass = (n: string) => classMap[n] ?? null
+    const resolveVendor = (n: string) => vendorMap[n] ?? null
+
+    it('individual inflow with className: both lines carry ClassRef; no vendor on any line', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010', className: 'Ops' })],
+        docNumber: 'TL-CLASS-01',
+        vendorEntityRef: null,
+        description: 'inflow-class',
+        resolveClass,
+        resolveVendor,
+      })
+      expect(je.Line).toHaveLength(2)
+      // Both lines should have ClassRef resolved to {value:'5', name:'Ops'}
+      for (const line of je.Line) {
+        expect(line.JournalEntryLineDetail.ClassRef).toEqual({ value: '5', name: 'Ops' })
+      }
+      // No vendor on any line for inflows
+      for (const line of je.Line) {
+        expect(line.JournalEntryLineDetail.Entity).toBeUndefined()
+      }
+      // Balance
+      expect(sumByPostingType(je, 'Debit')).toBeCloseTo(sumByPostingType(je, 'Credit'))
+    })
+
+    it('individual outflow with className + vendorName: all lines have ClassRef; AP-side Debit has vendor Entity; wallet Credit does not', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'out', asset: 'USDC', qty: 50, usd: 50, walletAccountCode: '1010', counterpartyGl: '6010', className: 'Ops', vendorName: 'AWS' })],
+        docNumber: 'TL-CLASS-02',
+        vendorEntityRef: null,
+        description: 'outflow-class-vendor',
+        resolveClass,
+        resolveVendor,
+      })
+      expect(je.Line).toHaveLength(2)
+      // Both lines have ClassRef
+      for (const line of je.Line) {
+        expect(line.JournalEntryLineDetail.ClassRef).toEqual({ value: '5', name: 'Ops' })
+      }
+      // AP line (counterparty Debit on 6010) has vendor Entity
+      const apLine = je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '6010')!
+      expect(apLine.JournalEntryLineDetail.Entity).toEqual({ Type: 'Vendor', EntityRef: { value: 'V10' } })
+      // Wallet Credit line (1010) has NO vendor
+      const walletLine = je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '1010')!
+      expect(walletLine.JournalEntryLineDetail.Entity).toBeUndefined()
+      // Balance
+      expect(sumByPostingType(je, 'Debit')).toBeCloseTo(sumByPostingType(je, 'Credit'))
+    })
+
+    it('outflow with gain (non-stable): gain pair lines also carry ClassRef', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'out', asset: 'ORCA', qty: 10, usd: 100, walletAccountCode: '1300', counterpartyGl: '6010', gain: { stGain: 20, ltGain: null }, className: 'Ops' })],
+        docNumber: 'TL-CLASS-03',
+        vendorEntityRef: null,
+        description: 'outflow-gain-class',
+        resolveClass,
+        resolveVendor,
+      })
+      // 2 main lines + 2 gain lines = 4 total
+      expect(je.Line).toHaveLength(4)
+      // Every single line has ClassRef
+      for (const line of je.Line) {
+        expect(line.JournalEntryLineDetail.ClassRef).toEqual({ value: '5', name: 'Ops' })
+      }
+      // Balance
+      expect(sumByPostingType(je, 'Debit')).toBeCloseTo(sumByPostingType(je, 'Credit'))
+    })
+
+    it('bulk: same direction/wallet/counterpartyGl but different className → two separate debit/credit pairs with correct ClassRefs', () => {
+      const je = buildJournalEntry({
+        txs: [
+          makeTx({ id: 't1', direction: 'out', asset: 'USDC', qty: 50, usd: 50, walletAccountCode: '1010', counterpartyGl: '6010', className: 'Ops' }),
+          makeTx({ id: 't2', direction: 'out', asset: 'USDC', qty: 30, usd: 30, walletAccountCode: '1010', counterpartyGl: '6010', className: 'Finance' }),
+        ],
+        docNumber: 'TL-CLASS-04',
+        vendorEntityRef: null,
+        description: 'bulk-diff-class',
+        resolveClass,
+        resolveVendor,
+      })
+      // Different className → different buckets → 4 lines (2 pairs)
+      expect(je.Line).toHaveLength(4)
+      // Find the two AP (Debit on 6010) lines
+      const apLines = je.Line.filter((l) => l.JournalEntryLineDetail.AccountRef.value === '6010' && l.JournalEntryLineDetail.PostingType === 'Debit')
+      expect(apLines).toHaveLength(2)
+      const classRefs = apLines.map((l) => l.JournalEntryLineDetail.ClassRef?.value).sort()
+      expect(classRefs).toEqual(['5', '8'])
+      // Balance
+      expect(sumByPostingType(je, 'Debit')).toBeCloseTo(sumByPostingType(je, 'Credit'))
+    })
+
+    it('className: null → no ClassRef on any line; vendorName: null with legacy vendorEntityRef → AP line still gets vendor (back-compat)', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'out', asset: 'USDC', qty: 50, usd: 50, walletAccountCode: '1010', counterpartyGl: '6010', className: null, vendorName: null })],
+        docNumber: 'TL-CLASS-05',
+        vendorEntityRef: { type: 'Vendor', value: 'V42' },
+        description: 'null-class-legacy-vendor',
+        resolveClass,
+        resolveVendor,
+      })
+      // No ClassRef anywhere
+      for (const line of je.Line) {
+        expect(line.JournalEntryLineDetail.ClassRef).toBeUndefined()
+      }
+      // AP line gets legacy vendor
+      const apLine = je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '6010')!
+      expect(apLine.JournalEntryLineDetail.Entity).toEqual({ Type: 'Vendor', EntityRef: { value: 'V42' } })
+      // Balance
+      expect(sumByPostingType(je, 'Debit')).toBeCloseTo(sumByPostingType(je, 'Credit'))
+    })
+
+    it('resolveClass returning null (name not in catalog) → ClassRef omitted on all lines', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010', className: 'UnknownClass' })],
+        docNumber: 'TL-CLASS-06',
+        vendorEntityRef: null,
+        description: 'unknown-class',
+        resolveClass,
+        resolveVendor,
+      })
+      for (const line of je.Line) {
+        expect(line.JournalEntryLineDetail.ClassRef).toBeUndefined()
+      }
+    })
+
+    it('resolveVendor returning null (name not in catalog) → Entity omitted on AP line', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'out', asset: 'USDC', qty: 50, usd: 50, walletAccountCode: '1010', counterpartyGl: '6010', vendorName: 'UnknownVendor' })],
+        docNumber: 'TL-CLASS-07',
+        vendorEntityRef: null,
+        description: 'unknown-vendor',
+        resolveClass,
+        resolveVendor,
+      })
+      const apLine = je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '6010')!
+      expect(apLine.JournalEntryLineDetail.Entity).toBeUndefined()
+    })
+
+    it('no resolvers provided (preview mode) → ClassRef.value is the raw class name string', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 100, usd: 100, walletAccountCode: '1010', counterpartyGl: '4010', className: 'Ops' })],
+        docNumber: 'TL-CLASS-08',
+        vendorEntityRef: null,
+        description: 'preview-class',
+        // No resolveClass or resolveVendor provided
+      })
+      for (const line of je.Line) {
+        expect(line.JournalEntryLineDetail.ClassRef).toEqual({ value: 'Ops' })
+      }
+    })
+
+    it('balance holds in all class/vendor cases (outflow with class+vendor+gain)', () => {
+      const je = buildJournalEntry({
+        txs: [makeTx({ direction: 'out', asset: 'ORCA', qty: 5, usd: 80, walletAccountCode: '1300', counterpartyGl: '6010', gain: { stGain: 10, ltGain: -3 }, className: 'Ops', vendorName: 'AWS' })],
+        docNumber: 'TL-CLASS-09',
+        vendorEntityRef: null,
+        description: 'full-balance',
+        resolveClass,
+        resolveVendor,
+      })
+      expect(sumByPostingType(je, 'Debit')).toBeCloseTo(sumByPostingType(je, 'Credit'))
+    })
+  })
 })
