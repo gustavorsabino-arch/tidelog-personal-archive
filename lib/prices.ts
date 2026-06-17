@@ -96,15 +96,15 @@ export async function getDailyPrices(
 }
 
 // ⚠️ CLOSING-PRICE INVARIANT — DO NOT REGRESS TO THE MIDNIGHT (00:00) VALUE.
-// The finance-confirmed daily close is the price at 23:59:55 UTC
-// (CLOSE_SECONDS_INTO_DAY = 86395), i.e. END of the UTC day. NEVER price a
-// day's close at 00:00 — via historical_price_unix(day 00:00), by flooring a
-// timestamp to day-start (e.g. getDayTs), or by reading a daily candle's 00:00
-// timestamp as the price time. Day-start is the OPEN, which misstates
-// end-of-period valuations (open→close gaps of 20%+ occur on ORCA/SOL).
-// Verified 2026-06: SOL 06-13 open 66.80 / close 68.90. The B1a regression
-// test asserts the returned close != the day's open.
-export const CLOSE_SECONDS_INTO_DAY = 86_395 // 23:59:55 UTC
+// The finance-confirmed daily close is the price at 23:59:59 UTC
+// (CLOSE_SECONDS_INTO_DAY = 86399), the last second of the UTC day — equal to
+// the Birdeye type=1D candle close. NEVER price a day's close at 00:00 — via
+// historical_price_unix(day 00:00), by flooring a timestamp to day-start (e.g.
+// getDayTs), or by reading a daily candle's 00:00 timestamp as the price time.
+// Day-start is the OPEN, which misstates end-of-period valuations (open→close
+// gaps of 20%+ occur on ORCA/SOL). Verified 2026-06: SOL 06-13 open 66.80 /
+// close 68.90. The B1a regression test asserts the returned close != the open.
+export const CLOSE_SECONDS_INTO_DAY = 86_399 // 23:59:59 UTC
 
 const SECONDS_PER_DAY = 86_400
 
@@ -114,7 +114,7 @@ export async function getClosingPrice(
 ): Promise<{ price: number; source: PriceSource } | null> {
   const dayStart = Math.floor(dayTs / SECONDS_PER_DAY) * SECONDS_PER_DAY
   const closeTs = dayStart + CLOSE_SECONDS_INTO_DAY
-  // Current/future UTC day: 23:59:55 hasn't happened, so there is no final
+  // Current/future UTC day: 23:59:59 hasn't happened, so there is no final
   // close. Callers fall back to the live price for the in-progress day.
   if (closeTs > Math.floor(Date.now() / 1000)) return null
   return getHistoricalPrice(token, closeTs)

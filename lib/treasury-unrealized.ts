@@ -118,7 +118,7 @@ async function fetchPricesForAssets(
     return { prices, missing }
   }
 
-  // Historical = the day's close (23:59:55 UTC). getClosingPrice returns null
+  // Historical = the day's close (23:59:59 UTC). getClosingPrice returns null
   // for the in-progress current day; the caller patches live prices there.
   const results = await Promise.all(assets.map((a) => getClosingPrice(a, timestamp)))
   results.forEach((r, i) => {
