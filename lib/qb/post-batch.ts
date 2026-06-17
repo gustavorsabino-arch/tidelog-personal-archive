@@ -617,7 +617,6 @@ async function postOneGroupLocked(
     const je: QbJournalEntry = buildJournalEntry({
       txs: txsForPost,
       docNumber,
-      vendorEntityRef: null,
       description: groupDescription(group),
       resolveAccount,
       resolveClass,

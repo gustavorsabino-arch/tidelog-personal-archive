@@ -44,7 +44,6 @@ export class UnresolvedAccountError extends Error {
 export type BuildArgs = {
   txs: TxForPost[] // 1 element for individual; many for bulk
   docNumber: string
-  vendorEntityRef: { type: 'Vendor'; value: string } | null
   // The transaction's (or bulk group's) description. v1 parity: it is set as
   // QB's PrivateNote — which QB renders as the "Memo" — AND copied onto every
   // line's Description. One description per JE, the same string everywhere.
@@ -113,7 +112,6 @@ function aggregateMainLines(txs: TxForPost[]): Aggregated[] {
 
 function buildMainPair(
   agg: Aggregated,
-  vendorEntityRef: BuildArgs['vendorEntityRef'],
   resolve: AccountResolver,
   resolveClass: (name: string) => { value: string; name?: string } | null,
   resolveVendor: (name: string) => { value: string } | null,
@@ -143,17 +141,11 @@ function buildMainPair(
   if (classRef !== undefined) cpDetail.ClassRef = classRef
 
   // Vendor ref attaches ONLY to the AP-side of an outflow (counterparty Debit).
-  // Prefer per-tx vendorName (resolved via resolveVendor); fall back to the
-  // legacy BuildArgs.vendorEntityRef so existing callers remain unchanged.
   // Inflows never carry a vendor ref.
-  if (agg.direction === 'out') {
-    if (agg.vendorName != null) {
-      const resolved = resolveVendor(agg.vendorName)
-      if (resolved !== null) {
-        cpDetail.Entity = { Type: 'Vendor', EntityRef: { value: resolved.value } }
-      }
-    } else if (vendorEntityRef) {
-      cpDetail.Entity = { Type: 'Vendor', EntityRef: { value: vendorEntityRef.value } }
+  if (agg.direction === 'out' && agg.vendorName != null) {
+    const resolved = resolveVendor(agg.vendorName)
+    if (resolved !== null) {
+      cpDetail.Entity = { Type: 'Vendor', EntityRef: { value: resolved.value } }
     }
   }
 
@@ -234,7 +226,7 @@ export function buildJournalEntry(args: BuildArgs): QbJournalEntry {
 
   // 1. Main debit/credit pairs (aggregated across bulk members).
   for (const agg of aggregateMainLines(args.txs)) {
-    lines.push(...buildMainPair(agg, args.vendorEntityRef, resolve, resolveClass, resolveVendor))
+    lines.push(...buildMainPair(agg, resolve, resolveClass, resolveVendor))
   }
 
   // 2. Gain/loss splits — only for outflows of non-stable tokens with non-zero
