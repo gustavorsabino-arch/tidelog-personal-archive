@@ -35,6 +35,20 @@ export function pctOf(value: number, total: number): string {
   return ((value / total) * 100).toFixed(1)
 }
 
+/**
+ * Spot price ($/token) formatter. Thousands separators, adaptive precision,
+ * rounded display. e-notation only for the genuinely tiny (< $0.001) where a
+ * plain decimal would be a long string of leading zeros. Zero/null → em dash.
+ */
+export function fmtPrice(n: number | null | undefined): string {
+  if (n == null || isNaN(n) || n === 0) return '—'
+  const a = Math.abs(n)
+  const sign = n < 0 ? '-' : ''
+  if (a >= 1000) return sign + '$' + a.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  if (a >= 0.001) return sign + '$' + a.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })
+  return sign + '$' + a.toExponential(2)
+}
+
 export function fmtAddr(addr: string, chars = 4): string {
   if (!addr || addr.length < chars * 2 + 2) return addr || '—'
   return `${addr.slice(0, chars)}…${addr.slice(-chars)}`

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS } from '@/lib/constants'
-import { fmtUSD, fmtNum, fmtDate, MONTH_SHORT_NAMES } from '@/lib/format'
+import { fmtUSD, fmtNum, fmtDate, fmtPrice, MONTH_SHORT_NAMES } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
 import { CopyButton } from '@/components/copy-button'
 import { exportUnrealizedXLSX } from '@/lib/unrealized-export'
@@ -303,10 +303,10 @@ function PositionRow({ p, isOpen, hasMultipleLots, onToggle, isSnapshot, showEnt
         <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: `${c}18`, color: c }}>{p.asset}</span>
       </td>
       <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>{fmtAcqRange(p.acqDateMin, p.acqDateMax)}</td>
-      <td className="num" style={{ color: 'var(--muted)' }}>${p.avgCostPerUnit.toFixed(p.asset === 'ORCA' ? 4 : 2)}</td>
+      <td className="num" style={{ color: 'var(--muted)' }}>{fmtPrice(p.avgCostPerUnit)}</td>
       <td className="num">{fmtNum(p.qty, p.asset === 'SOL' ? 4 : 2)}</td>
       <td className="num">{fmtUSD(p.costBasis)}</td>
-      <td className="num"><PriceWithSource value={p.currentPrice} source={p.currentPriceSource} kind="live" decimals={p.asset === 'ORCA' ? 4 : 2} /></td>
+      <td className="num"><PriceWithSource value={p.currentPrice} source={p.currentPriceSource} kind="live" /></td>
       <td className="num">{p.currentValue == null ? '—' : fmtUSD(p.currentValue)}</td>
       {isSnapshot && <td className="num">{p.priorValue == null ? '—' : fmtUSD(p.priorValue)}</td>}
       {isSnapshot && <td className={`num ${(p.deltaMonth ?? 0) >= 0 ? 'gain-pos' : 'gain-neg'}`}>{p.deltaMonth == null ? '—' : `${p.deltaMonth >= 0 ? '+' : ''}${fmtUSD(p.deltaMonth)}`}</td>}
@@ -326,10 +326,10 @@ function LotRow({ lot, isSnapshot, showEntity }: { lot: UnrealizedLot; isSnapsho
       {showEntity && <td></td>}
       <td></td>
       <td style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>{fmtDate(lot.acqDate)}</td>
-      <td className="num" style={{ color: 'var(--muted)' }}>${lot.costPerUnit.toFixed(lot.asset === 'ORCA' ? 4 : 2)}</td>
+      <td className="num" style={{ color: 'var(--muted)' }}>{fmtPrice(lot.costPerUnit)}</td>
       <td className="num">{fmtNum(lot.qty, lot.asset === 'SOL' ? 4 : 2)}</td>
       <td className="num">{fmtUSD(lot.costBasis)}</td>
-      <td className="num" style={{ color: noPrice ? 'var(--red)' : 'var(--muted)' }}>{noPrice ? 'no price' : `$${lot.currentPrice!.toFixed(lot.asset === 'ORCA' ? 4 : 2)}`}</td>
+      <td className="num" style={{ color: noPrice ? 'var(--red)' : 'var(--muted)' }}>{noPrice ? 'no price' : fmtPrice(lot.currentPrice)}</td>
       <td className="num">{lot.currentValue == null ? '—' : fmtUSD(lot.currentValue)}</td>
       {isSnapshot && <td className="num" style={{ color: 'var(--muted)' }}>—</td>}
       {isSnapshot && <td className="num" style={{ color: 'var(--muted)' }}>—</td>}

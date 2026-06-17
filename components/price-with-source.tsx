@@ -1,4 +1,5 @@
 import type { PriceSourceTag, PriceKind } from '@/lib/types'
+import { fmtPrice } from '@/lib/format'
 
 const SOURCE_LABEL: Record<PriceSourceTag, string> = {
   birdeye: 'Birdeye',
@@ -16,13 +17,11 @@ export function PriceWithSource({
   value,
   source,
   kind,
-  decimals = 2,
   asOfDate = null,
 }: {
   value: number | null
   source: PriceSourceTag
   kind: PriceKind
-  decimals?: number
   asOfDate?: string | null
 }) {
   if (value == null) return <span style={{ color: 'var(--red)' }}>no price</span>
@@ -32,7 +31,7 @@ export function PriceWithSource({
   // native `title` attribute has a ~1s browser delay, too slow for this.
   return (
     <span className={tip ? 'price-tip' : undefined} data-tip={tip} style={style}>
-      ${value.toFixed(decimals)}
+      {fmtPrice(value)}
     </span>
   )
 }

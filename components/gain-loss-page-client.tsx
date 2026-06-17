@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
-import { fmtUSD, fmtNum, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
+import { fmtUSD, fmtNum, fmtPrice, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
 import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
 import { useGainLossMonths } from '@/lib/hooks/use-gain-loss-months'
 import { Skeleton } from '@/components/skeleton'
@@ -173,11 +173,11 @@ export function GainLossPageClient({
     },
     {
       key: 'buyPrice', label: 'Avg In', numeric: true, width: '90px',
-      render: (g: GainLossEntry) => <span style={{ color: 'var(--muted)' }}>${g.buyPrice.toFixed(4)}</span>,
+      render: (g: GainLossEntry) => <span style={{ color: 'var(--muted)' }}>{fmtPrice(g.buyPrice)}</span>,
     },
     {
       key: 'sellPrice', label: 'Sold At', numeric: true, width: '90px',
-      render: (g: GainLossEntry) => <span>${g.sellPrice.toFixed(4)}</span>,
+      render: (g: GainLossEntry) => <span>{fmtPrice(g.sellPrice)}</span>,
     },
     {
       key: 'gain', label: 'Gain/Loss', numeric: true, width: '120px',

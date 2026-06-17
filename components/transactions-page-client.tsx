@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
-import { fmtUSD, fmtNum, fmtAddr, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
+import { fmtUSD, fmtNum, fmtAddr, fmtPrice, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
 import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
 import { useTransactionMonths } from '@/lib/hooks/use-transaction-months'
 import { useAllQbVendors } from '@/lib/hooks/use-qb-vendors'
@@ -609,7 +609,7 @@ export function TransactionsPageClient({
       key: 'price', label: 'Price', numeric: true, width: '90px',
       render: (t: Transaction) => (
         <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>
-          {t.price ? `$${t.price.toFixed(t.asset === 'ORCA' ? 4 : 2)}` : '—'}
+          {fmtPrice(t.price)}
         </span>
       ),
     }

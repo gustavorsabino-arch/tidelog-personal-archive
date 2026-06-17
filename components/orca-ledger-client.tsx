@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES } from '@/lib/constants'
-import { fmtUSD, fmtNum, fmtAddr, MONTH_SHORT_NAMES } from '@/lib/format'
+import { fmtUSD, fmtNum, fmtAddr, fmtPrice, MONTH_SHORT_NAMES } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
 import { OrcaLedgerDrawer } from '@/components/orca-ledger-drawer'
 import { CopyButton } from '@/components/copy-button'
@@ -282,7 +282,7 @@ function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: str
       </td>
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ fontWeight: 700, textAlign: 'center', fontSize: '1rem' }}>{row.dir === 'In' ? '↑' : '↓'}</td>
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{row.dir === 'In' ? '+' : '-'}{fmtNum(row.qty, 2)}</td>
-      <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{row.price ? `$${row.price.toFixed(4)}` : '—'}</td>
+      <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{fmtPrice(row.price)}</td>
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{row.usd != null ? fmtUSD(row.usd) : '—'}</td>
       <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem', color: row.balanceAfter < 0 ? 'var(--red)' : 'var(--text)' }}>{fmtNum(row.balanceAfter, 2)}</td>
       <td style={{ lineHeight: 1.4 }}>
@@ -334,13 +334,13 @@ function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: str
 
 function LotsCell({ row }: { row: OrcaLedgerRow }) {
   if (row.dir === 'Out' && row.noBasis) return <span style={{ color: 'var(--red)' }}>⚠ no basis</span>
-  if (row.dir === 'In' && row.internal) return <span style={{ color: '#6af' }}>↤ {fmtNum(row.lots[0]?.qty ?? 0, 2)} @ ${row.lots[0]?.costPerUnit?.toFixed(4) ?? '—'}</span>
-  if (row.dir === 'In') return <span style={{ color: 'var(--green)' }}>+ lot @ ${row.lots[0]?.costPerUnit?.toFixed(4) ?? '—'}</span>
+  if (row.dir === 'In' && row.internal) return <span style={{ color: '#6af' }}>↤ {fmtNum(row.lots[0]?.qty ?? 0, 2)} @ {row.lots[0]?.costPerUnit != null ? fmtPrice(row.lots[0].costPerUnit) : '—'}</span>
+  if (row.dir === 'In') return <span style={{ color: 'var(--green)' }}>+ lot @ {row.lots[0]?.costPerUnit != null ? fmtPrice(row.lots[0].costPerUnit) : '—'}</span>
   if (row.internal) return <span style={{ color: '#6af' }}>↦ {fmtNum(row.qty, 2)}</span>
-  if (row.lots.length <= 2) return <span style={{ color: 'var(--muted)' }}>{row.lots.map(l => `${fmtNum(l.qty, 2)}@$${l.costPerUnit.toFixed(4)}`).join(' · ')}</span>
+  if (row.lots.length <= 2) return <span style={{ color: 'var(--muted)' }}>{row.lots.map((l, i) => <span key={i}>{i > 0 ? ' · ' : ''}{fmtNum(l.qty, 2)}@{fmtPrice(l.costPerUnit)}</span>)}</span>
   const totalQty = row.lots.reduce((s, l) => s + l.qty, 0)
   const totalCost = row.lots.reduce((s, l) => s + l.qty * l.costPerUnit, 0)
-  return <span style={{ color: 'var(--muted)' }}>{row.lots.length} lots · avg ${(totalQty > 0 ? totalCost / totalQty : 0).toFixed(4)}</span>
+  return <span style={{ color: 'var(--muted)' }}>{row.lots.length} lots · avg {fmtPrice(totalQty > 0 ? totalCost / totalQty : 0)}</span>
 }
 
 function SummaryFooterRow({ summary }: { summary: import('@/lib/types').OrcaWalletSummary }) {
@@ -349,7 +349,7 @@ function SummaryFooterRow({ summary }: { summary: import('@/lib/types').OrcaWall
       <td colSpan={2} style={{ fontSize: '0.65rem', color: 'var(--muted)', padding: '4px 8px', fontStyle: 'italic' }}>remaining balance · {summary.wallet}</td>
       <td></td>
       <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem', fontWeight: 700, color: summary.noBasis ? 'var(--red)' : 'var(--green)' }}>{fmtNum(summary.totalQty, 2)}</td>
-      <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.7rem', color: 'var(--muted)' }}>{summary.noBasis ? '—' : `$${summary.avgCostPerUnit.toFixed(4)} avg`}</td>
+      <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.7rem', color: 'var(--muted)' }}>{summary.noBasis ? '—' : `${fmtPrice(summary.avgCostPerUnit)} avg`}</td>
       <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.7rem', color: 'var(--muted)' }}>{summary.noBasis ? '—' : fmtUSD(summary.totalQty * summary.avgCostPerUnit)}</td>
       <td colSpan={3}></td>
       <td style={{ fontSize: '0.63rem', color: 'var(--muted)' }}>{summary.remainingLots.length} open lot{summary.remainingLots.length === 1 ? '' : 's'}</td>

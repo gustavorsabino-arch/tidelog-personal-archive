@@ -266,7 +266,6 @@ export default function AccountingPage() {
                           value={missingPrice ? null : t.priceUsd}
                           source={t.source}
                           kind={data?.onchain?.kind ?? 'live'}
-                          decimals={4}
                           asOfDate={data?.onchain?.snapshotDate ?? null}
                         />
                       </td>

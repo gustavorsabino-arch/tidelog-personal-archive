@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS, STABLE_TOKENS } from '@/lib/constants'
-import { fmtUSD, fmtNum, pctOf } from '@/lib/format'
+import { fmtUSD, fmtNum, fmtPrice, pctOf } from '@/lib/format'
 import { OverviewTrendModal } from '@/components/overview-trend-modal'
 import { PriceWithSource } from '@/components/price-with-source'
 import { Skeleton } from '@/components/skeleton'
@@ -74,7 +74,7 @@ export default function OverviewPage() {
   const priceSummary = activeTokens
     .filter(token => typeof prices[token] === 'number' && !STABLE_TOKENS.has(token))
     .slice(0, 3)
-    .map(token => `${token} $${Number(prices[token]).toFixed(token === 'ORCA' ? 4 : 2)}`)
+    .map(token => `${token} ${fmtPrice(Number(prices[token]))}`)
     .join(' · ')
   const drilldown = useMemo(
     () => (data && drilldownKey ? buildOverviewDrilldown(data, drilldownKey) : null),
@@ -212,7 +212,6 @@ export default function OverviewPage() {
                     value={typeof price === 'number' ? price : null}
                     source={data?.priceMeta?.[token]?.source ?? 'birdeye'}
                     kind={data?.priceMeta?.[token]?.kind ?? 'live'}
-                    decimals={token === 'ORCA' ? 4 : 2}
                   />
                 </div>
                 <div className="card-bar">
