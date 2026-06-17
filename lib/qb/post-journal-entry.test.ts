@@ -55,15 +55,23 @@ describe('buildJournalEntry', () => {
       expect(credit.JournalEntryLineDetail.Entity).toBeUndefined()
     })
 
-    it('inflow with vendorName set: vendor does not appear on any line (inflows never carry vendor)', () => {
+    it('inflow with vendorName set: vendor attaches to the counterparty (Credit) line, not the wallet line (matches V1)', () => {
       const je = buildJournalEntry({
         txs: [makeTx({ direction: 'in', asset: 'USDC', qty: 50, usd: 50, walletAccountCode: '1010', counterpartyGl: '4010', vendorName: 'AWS' })],
         docNumber: 'TL-Feb-JE99',
         description:'uuid-x',
         resolveVendor: (n) => n === 'AWS' ? { value: 'V42' } : null,
       })
-      // Inflows have no AP-side line, so vendor must not appear anywhere.
-      expect(je.Line.every((l) => l.JournalEntryLineDetail.Entity === undefined)).toBe(true)
+      // V1 selector is the counterparty-account line regardless of direction;
+      // on an inflow that's the Credit line. QB requires Entity on A/P lines.
+      const cpLine = je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '4010')!
+      const walletLine = je.Line.find((l) => l.JournalEntryLineDetail.AccountRef.value === '1010')!
+      expect(cpLine.JournalEntryLineDetail.PostingType).toBe('Credit')
+      expect(cpLine.JournalEntryLineDetail.Entity).toEqual({
+        Type: 'Vendor',
+        EntityRef: { value: 'V42' },
+      })
+      expect(walletLine.JournalEntryLineDetail.Entity).toBeUndefined()
     })
   })
 
