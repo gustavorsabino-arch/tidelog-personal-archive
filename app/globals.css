@@ -5,6 +5,11 @@
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
+/* Instant price-source tooltip (PriceWithSource) — native `title` has a ~1s delay. */
+.price-tip{position:relative;cursor:help}
+.price-tip::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);white-space:nowrap;background:var(--text);color:var(--surface);font-family:var(--mono);font-size:0.6rem;padding:4px 8px;border-radius:4px;opacity:0;pointer-events:none;transition:opacity .08s ease;z-index:1000}
+.price-tip:hover::after{opacity:1}
+
 :root {
   /* Core colors */
   --bg: #f7f8fa;
@@ -27,6 +32,8 @@
   --red-bg: #fde8e6;
   --orange: #D4A017;
   --orange-bg: #FFF8E6;
+  --fallback: #6366f1;
+  --fallback-bg: #eef0fe;
 
   /* Token colors */
   --sol: #9945ff;

@@ -7,6 +7,7 @@ import { fmtUSD, fmtNum, fmtDate, MONTH_SHORT_NAMES } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
 import { CopyButton } from '@/components/copy-button'
 import { exportUnrealizedXLSX } from '@/lib/unrealized-export'
+import { PriceWithSource } from '@/components/price-with-source'
 import type {
   UnrealizedResponse,
   UnrealizedPosition,
@@ -282,7 +283,6 @@ function PositionRow({ p, isOpen, hasMultipleLots, onToggle, isSnapshot, showEnt
 }) {
   const c = TOKEN_COLORS[p.asset] || '#888'
   const ec = ENTITY_COLORS[p.entity] || 'var(--muted)'
-  const noPrice = p.currentPrice == null
   return (
     <tr style={{ cursor: hasMultipleLots ? 'pointer' : 'default' }} onClick={hasMultipleLots ? onToggle : undefined}>
       <td className="label sticky-first" style={{ maxWidth: 220 }}>
@@ -306,7 +306,7 @@ function PositionRow({ p, isOpen, hasMultipleLots, onToggle, isSnapshot, showEnt
       <td className="num" style={{ color: 'var(--muted)' }}>${p.avgCostPerUnit.toFixed(p.asset === 'ORCA' ? 4 : 2)}</td>
       <td className="num">{fmtNum(p.qty, p.asset === 'SOL' ? 4 : 2)}</td>
       <td className="num">{fmtUSD(p.costBasis)}</td>
-      <td className="num" style={{ color: noPrice ? 'var(--red)' : 'var(--muted)' }}>{noPrice ? 'no price' : `$${p.currentPrice!.toFixed(p.asset === 'ORCA' ? 4 : 2)}`}</td>
+      <td className="num"><PriceWithSource value={p.currentPrice} source={p.currentPriceSource} kind="live" decimals={p.asset === 'ORCA' ? 4 : 2} /></td>
       <td className="num">{p.currentValue == null ? '—' : fmtUSD(p.currentValue)}</td>
       {isSnapshot && <td className="num">{p.priorValue == null ? '—' : fmtUSD(p.priorValue)}</td>}
       {isSnapshot && <td className={`num ${(p.deltaMonth ?? 0) >= 0 ? 'gain-pos' : 'gain-neg'}`}>{p.deltaMonth == null ? '—' : `${p.deltaMonth >= 0 ? '+' : ''}${fmtUSD(p.deltaMonth)}`}</td>}

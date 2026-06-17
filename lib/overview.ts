@@ -46,7 +46,7 @@ export function buildTreasuryOverview(
   snapshot: BalanceSnapshot,
   prices: Prices,
   entityFilter?: string | null
-): TreasuryOverview {
+): Omit<TreasuryOverview, 'priceMeta'> {
   const wallets: TreasuryOverviewWallet[] = []
   const entityTotals: Record<string, TreasuryOverviewEntityTotal> = {}
   const tokenTotals: Record<string, TreasuryOverviewTokenTotal> = {}

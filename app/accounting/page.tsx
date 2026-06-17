@@ -5,6 +5,7 @@ import { apiFetch } from '@/lib/api'
 import { ENTITIES, ENTITY_COLORS, STABLE_TOKENS, TOKEN_COLORS } from '@/lib/constants'
 import { fmtDate, fmtNum, fmtUSD } from '@/lib/format'
 import { Skeleton } from '@/components/skeleton'
+import { PriceWithSource } from '@/components/price-with-source'
 import type { BsAccount, BsSection, BsTree } from '@/lib/qb/balance-sheet'
 import type { OnchainSummary } from '@/lib/accounting/onchain-summary'
 
@@ -258,11 +259,16 @@ export default function AccountingPage() {
                       <td
                         style={{
                           padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)',
-                          color: missingPrice ? 'var(--red)' : 'var(--muted)',
                         }}
                         title={missingPrice ? 'No price available — USD treated as 0' : undefined}
                       >
-                        {missingPrice ? 'no price' : fmtUSD(t.priceUsd, 4)}
+                        <PriceWithSource
+                          value={missingPrice ? null : t.priceUsd}
+                          source={t.source}
+                          kind={data?.onchain?.kind ?? 'live'}
+                          decimals={4}
+                          asOfDate={data?.onchain?.snapshotDate ?? null}
+                        />
                       </td>
                       <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtUSD(t.usd, 0)}</td>
                     </tr>

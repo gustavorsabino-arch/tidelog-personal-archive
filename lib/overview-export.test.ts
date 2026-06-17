@@ -68,6 +68,7 @@ const fixture: TreasuryOverview = {
   tokenTotals: {},
   grandTotalUSD: 1_987_544.67,
   prices: {},
+  priceMeta: {},
 }
 
 function sheetRows(ws: XLSX.WorkSheet): unknown[][] {

@@ -115,6 +115,13 @@ export interface Prices {
   [key: string]: number | undefined
 }
 
+export type PriceSourceTag = 'birdeye' | 'defillama' | 'stable'
+export type PriceKind = 'close' | 'live'
+export interface PriceMeta {
+  source: PriceSourceTag
+  kind: PriceKind
+}
+
 export interface BalanceSnapshot {
   date: string
   fetchedAt: string
@@ -175,10 +182,12 @@ export interface TreasuryOverviewTrendResponse {
   points: TreasuryOverviewTrendPoint[]
   firstDate: string | null
   lastDate: string | null
+  source: PriceSourceTag
 }
 
 export interface TreasuryOverview {
   prices: Prices
+  priceMeta: Record<string, PriceMeta>
   wallets: TreasuryOverviewWallet[]
   entityTotals: Record<string, TreasuryOverviewEntityTotal>
   tokenTotals: Record<string, TreasuryOverviewTokenTotal>
@@ -452,6 +461,8 @@ export interface UnrealizedPosition {
   acqDateMax: string
   lotCount: number
   priorPrice: number | null
+  currentPriceSource: PriceSourceTag
+  priorPriceSource: PriceSourceTag
   priorValue: number | null
   deltaMonth: number | null
 }

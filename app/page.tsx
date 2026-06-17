@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/api'
 import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS, STABLE_TOKENS } from '@/lib/constants'
 import { fmtUSD, fmtNum, pctOf } from '@/lib/format'
 import { OverviewTrendModal } from '@/components/overview-trend-modal'
+import { PriceWithSource } from '@/components/price-with-source'
 import { Skeleton } from '@/components/skeleton'
 import { buildOverviewDrilldown, getSortedActiveTokens } from '@/lib/overview'
 import type { TreasuryOverview } from '@/lib/types'
@@ -207,7 +208,12 @@ export default function OverviewPage() {
                 <div className="card-label">{token} <span style={{ color, fontSize: '0.6rem' }}>▾</span></div>
                 <div className="card-value">{fmtUSD(usd)}</div>
                 <div className="card-sub">
-                  {pct(usd)}% · {fmtNum(amount, token === 'SOL' ? 2 : 0)} {token} · ${typeof price === 'number' ? price.toFixed(token === 'ORCA' ? 4 : 2) : '—'}
+                  {pct(usd)}% · {fmtNum(amount, token === 'SOL' ? 2 : 0)} {token} · <PriceWithSource
+                    value={typeof price === 'number' ? price : null}
+                    source={data?.priceMeta?.[token]?.source ?? 'birdeye'}
+                    kind={data?.priceMeta?.[token]?.kind ?? 'live'}
+                    decimals={token === 'ORCA' ? 4 : 2}
+                  />
                 </div>
                 <div className="card-bar">
                   <div className="card-bar-fill" style={{ width: `${pct(usd)}%`, background: color }} />
