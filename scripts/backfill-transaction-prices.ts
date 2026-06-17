@@ -18,7 +18,7 @@ import { and, eq, isNull, asc, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { transaction } from '@/lib/db/schema'
 import { STABLE_TOKENS } from '@/lib/constants'
-import { hydrateTransactionPrices, primeLatestPrices } from '@/lib/transaction-pricing'
+import { hydrateTransactionPrices } from '@/lib/transaction-pricing'
 import { rowToTransaction } from '@/lib/treasury-transactions'
 import { logAudit } from '@/lib/audit'
 import { confirmDestructive, looksLikeProd } from './cron/args'
@@ -65,11 +65,6 @@ async function main() {
   const txs = rows.map((row) => rowToTransaction(row, ''))
 
   const priceCache: Record<string, unknown> = {}
-  try {
-    await primeLatestPrices(priceCache)
-  } catch (err) {
-    console.warn(`[backfill] warning: failed to prime latest prices: ${(err as Error).message}`)
-  }
 
   const { transactions: hydrated } = await hydrateTransactionPrices(txs, {
     priceCache,

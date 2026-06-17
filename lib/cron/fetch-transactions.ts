@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { wallet, transaction } from '@/lib/db/schema'
 import { heliusRpc, heliusEnhanced, heliusGetTokenAccountsByOwner } from '@/lib/helius'
 import { FOCUS_SET, STABLE_TOKENS, getSym } from '@/lib/constants'
-import { hydrateTransactionPrices, primeLatestPrices } from '@/lib/transaction-pricing'
+import { hydrateTransactionPrices } from '@/lib/transaction-pricing'
 import { recomputeEntityGains } from '@/lib/orca-gains-writer'
 import { toDisplayEntity } from '@/lib/entity'
 import type { Transaction } from '@/lib/types'
@@ -416,15 +416,9 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
   let failed = 0
   const entitiesWithInserts = new Set<string>()
 
-  // Per-run price cache, shared across all wallets and pages.
-  // Pre-populate the `<token>::latest` keys so hydrateTransactionPrices' 3-day
-  // fallback can resolve very recent transactions without an extra API call.
+  // Per-run price cache, shared across all wallets and pages. Keyed by
+  // `${asset}::${blockTimeSec}` — point-in-time prices deduped within the run.
   const priceCache: Record<string, unknown> = {}
-  try {
-    await primeLatestPrices(priceCache)
-  } catch (err) {
-    console.warn(`[fetch-tx] warning: failed to prime latest prices: ${(err as Error).message}`)
-  }
 
   const scopeNote = opts.walletAddr ? ` scope=single-wallet(${shortAddr(opts.walletAddr)})` : ''
   console.log(`[fetch-tx] job start: ${wallets.length} wallets, mode=${opts.full ? 'full' : 'incremental'}${opts.beforeSig ? ` beforeSig=${opts.beforeSig.slice(0, 8)}…` : ''}${scopeNote}`)
