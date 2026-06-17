@@ -7,10 +7,13 @@
  * Symbols with no mint (e.g. ETH/BTC) are skipped so the wrapper can fall back
  * to DeFiLlama for them.
  */
+import { RateLimiter } from '@/lib/rate-limiter'
 import { PRICE_MINTS } from '@/lib/constants'
 
 const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY || ''
 const BASE = 'https://public-api.birdeye.so'
+const BIRDEYE_RPS = Math.max(1, Number.parseInt(process.env.BIRDEYE_RPS || '8', 10) || 8)
+const limiter = new RateLimiter(BIRDEYE_RPS, BIRDEYE_RPS)
 
 /** True when an API key is configured; lib/prices.ts gates Birdeye on this. */
 export const hasBirdeyeKey = BIRDEYE_API_KEY.length > 0
@@ -33,6 +36,7 @@ export async function getCurrentPrices(
 ): Promise<Record<string, number>> {
   const mints = tokens.map((t) => PRICE_MINTS[t]).filter(Boolean)
   if (mints.length === 0) return {}
+  await limiter.acquire()
   const r = await fetch(`${BASE}/defi/multi_price?list_address=${mints.join(',')}`, {
     headers: headers(),
     next: { revalidate: 300 },
@@ -52,6 +56,7 @@ export async function getCurrentPrices(
 export async function getHistoricalPrice(token: string, timestamp: number): Promise<number | null> {
   const mint = PRICE_MINTS[token]
   if (!mint) return null
+  await limiter.acquire()
   const r = await fetch(
     `${BASE}/defi/historical_price_unix?address=${mint}&unixtime=${timestamp}`,
     { headers: headers(), next: { revalidate: 3600 } },
@@ -73,6 +78,7 @@ export async function getDailyPrices(
   // Birdeye's time_to is inclusive, so N points spans (N-1) day-steps.
   const span = Math.min(Math.max(1, days), 1000)
   const timeTo = startTs + (span - 1) * 86400
+  await limiter.acquire()
   const r = await fetch(
     `${BASE}/defi/history_price?address=${mint}&address_type=token&type=1D&time_from=${startTs}&time_to=${timeTo}`,
     { headers: headers(), next: { revalidate: 3600 } },
