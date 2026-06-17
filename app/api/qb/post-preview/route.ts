@@ -103,9 +103,9 @@ export async function POST(req: NextRequest) {
         const je = buildJournalEntry({
           txs: [loadedTxToTxForPost(group.tx)],
           docNumber: docNumberPreview,
-          // Preview doesn't resolve vendor refs — that requires hitting QB.
-          // The modal shows the shape; vendor attachment is decided at post time.
-          vendorEntityRef: null,
+          // Preview omits catalog resolvers — vendor/class names come from the
+          // per-tx catalog and are shown verbatim in the modal. Real posting
+          // supplies resolvers that map names → QB Ids.
           description: groupDescription(group),
         })
         return {
@@ -121,7 +121,6 @@ export async function POST(req: NextRequest) {
       const je = buildJournalEntry({
         txs: group.members.map(loadedTxToTxForPost),
         docNumber: docNumberPreview,
-        vendorEntityRef: null,
         description: groupDescription(group),
       })
       return {

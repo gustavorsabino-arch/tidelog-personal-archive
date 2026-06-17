@@ -14,14 +14,13 @@ import { toDbEntity } from '@/lib/entity'
 import { logAudit } from '@/lib/audit'
 import { fetchQboJson } from './client.ts'
 import { getQboRealmId, type QboEntity } from './config.ts'
-import { buildJournalEntry, UnresolvedAccountError, type TxForPost, type AccountResolver } from './post-journal-entry.ts'
-import { readCachedAccountCatalogByNumber } from './cache-reads.ts'
+import { buildJournalEntry, UnresolvedAccountError, type TxForPost, type AccountResolver, type BuildArgs } from './post-journal-entry.ts'
+import { readCachedAccountCatalogByNumber, readCachedClassCatalogByName, readCachedVendorCatalogByName } from './cache-reads.ts'
 import {
   formatBulkDocNumber,
   formatIndividualDocNumber,
   getNextIndividualSequence,
 } from './doc-number.ts'
-import { getQbVendors, matchVendorByLabel } from './vendor-match.ts'
 import type {
   QbJournalEntry,
   QbJournalEntryResponse,
@@ -104,6 +103,16 @@ type LoadedTx = {
    * posted value matches what the user saw/edited.
    */
   description: string
+  // Raw fields from the JOIN — counterparty wallet's QB-assigned names.
+  counterpartyVendorName: string | null
+  counterpartyClassName: string | null
+  // Per-tx overrides from tx_qb_state (null = fall through to counterparty wallet).
+  vendorOverride: string | null
+  classOverride: string | null
+  // Effective value: override → counterparty wallet → null.
+  // Resolved to QB Ids at post time via the catalog maps.
+  effectiveVendor: string | null
+  effectiveClass: string | null
 }
 
 async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
@@ -117,6 +126,8 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
       walletAccountCode: wallet.accountCode,
       walletIsBulkTreasury: wallet.isBulkTreasury,
       counterpartyLabel: cpWallet.label,
+      counterpartyVendorName: cpWallet.qbVendorName,
+      counterpartyClassName: cpWallet.qbClassName,
       gain: {
         // Presence marker (notNull) so Drizzle keeps the gain projection alive
         // even when both gain numbers are null. Same lesson as Wave 2b's
@@ -131,6 +142,8 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
         counterpartyGlOverride: txQbState.counterpartyGlOverride,
         description: txQbState.description,
         postId: txQbState.postId,
+        vendorOverride: txQbState.vendorOverride,
+        classOverride: txQbState.classOverride,
       },
       counterpartyGl: {
         _present: counterpartyGlMap.entityId,
@@ -214,6 +227,14 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
       perTokenMap.get(`${r.txn.walletAddress}::${r.txn.asset}`) ?? null,
     walletGlSource: null, // populated by buildPostPlan eligibility loop
     walletGl: null, // populated by buildPostPlan eligibility loop
+    counterpartyVendorName: r.counterpartyVendorName ?? null,
+    counterpartyClassName: r.counterpartyClassName ?? null,
+    vendorOverride: r.qbState?.vendorOverride ?? null,
+    classOverride: r.qbState?.classOverride ?? null,
+    // Effective vendor/class: tx override → counterparty wallet → null.
+    // Resolved to QB Ids at post time via catalog maps in postBatch.
+    effectiveVendor: r.qbState?.vendorOverride ?? r.counterpartyVendorName ?? null,
+    effectiveClass: r.qbState?.classOverride ?? r.counterpartyClassName ?? null,
     // Override → computed default. Default mirrors lib/treasury-transactions
     // exactly (dir capitalized, qty abs, stable-token usd falls back to |qty|)
     // so the posted description equals the list's descriptionDefault.
@@ -468,6 +489,21 @@ export async function postBatch(args: {
     return { value: account.qbAccountId, name: account.qbAccountName }
   }
 
+  // Resolve per-tx class/vendor names → QB Ids at post time. Names come from
+  // effectiveVendor/effectiveClass (override → counterparty wallet). A name
+  // not found in the catalog returns null — the JE builder omits the ref rather
+  // than throwing, so an unresolved name is a silent no-op (not a hard failure).
+  const classByNameMap = await readCachedClassCatalogByName(args.entity)
+  const vendorByNameMap = await readCachedVendorCatalogByName(args.entity)
+  const resolveClass: BuildArgs['resolveClass'] = (name) => {
+    const r = classByNameMap.get(name)
+    return r ? { value: r.qbClassId, name: r.qbClassName } : null
+  }
+  const resolveVendor: BuildArgs['resolveVendor'] = (name) => {
+    const r = vendorByNameMap.get(name)
+    return r ? { value: r.qbVendorId } : null
+  }
+
   const successes: PostBatchResult['successes'] = []
   const failures: PostBatchResult['failures'] = []
 
@@ -475,7 +511,7 @@ export async function postBatch(args: {
   // per JE. Successful groups commit independently of failed ones.
   for (const group of groups) {
     try {
-      const result = await postOneGroupLocked(group, args.entity, args.userId, resolveAccount)
+      const result = await postOneGroupLocked(group, args.entity, args.userId, resolveAccount, resolveClass, resolveVendor)
       successes.push(result)
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -512,6 +548,8 @@ async function postOneGroupLocked(
   entity: QboEntity,
   userId: string,
   resolveAccount: AccountResolver,
+  resolveClass: BuildArgs['resolveClass'],
+  resolveVendor: BuildArgs['resolveVendor'],
 ): Promise<PostBatchResult['successes'][number]> {
   const yyyymm = monthKeyOf(group)
   // D6 — lock scoped per (entity, year-month) so concurrent users posting to
@@ -563,11 +601,6 @@ async function postOneGroupLocked(
     // DocNumber query). Until then, the duplicate-scan immediately after POST
     // (below) is our detection layer. (PrivateNote now carries the human
     // description/memo — not the qb_post id; that id stays in our DB only.)
-    //
-    // Resolve vendor refs (out-direction members with a labelled counterparty
-    // get matched against QB's vendor list; matches attach EntityRef to the
-    // AP-side line in buildJournalEntry).
-    const vendorEntityRef = await resolveVendorRef(entity, group)
 
     const txsForPost = (group.kind === 'individual'
       ? [group.tx]
@@ -584,9 +617,10 @@ async function postOneGroupLocked(
     const je: QbJournalEntry = buildJournalEntry({
       txs: txsForPost,
       docNumber,
-      vendorEntityRef,
       description: groupDescription(group),
       resolveAccount,
+      resolveClass,
+      resolveVendor,
     })
 
     const resp = await fetchQboJson<QbJournalEntryResponse>(
@@ -690,6 +724,8 @@ async function postOneGroupLocked(
           postId: pending.id,
           postedGlAccount: m.walletGl,
           postedGlSource: m.walletGlSource,
+          postedVendor: m.effectiveVendor,
+          postedClass: m.effectiveClass,
           updatedAt: new Date(),
           updatedBy: userId,
         })
@@ -710,6 +746,8 @@ async function postOneGroupLocked(
             postId: pending.id,
             postedGlAccount: m.walletGl,
             postedGlSource: m.walletGlSource,
+            postedVendor: m.effectiveVendor,
+            postedClass: m.effectiveClass,
             updatedAt: new Date(),
             updatedBy: userId,
           },
@@ -767,38 +805,6 @@ async function findQbJeByPrivateNote(
   return res.QueryResponse?.JournalEntry?.[0] ?? null
 }
 
-async function resolveVendorRef(
-  entity: QboEntity,
-  group: GroupSpec,
-): Promise<{ type: 'Vendor'; value: string } | null> {
-  // Vendor refs only matter on outflows. For bulk groups with a mix of inflows
-  // + outflows + multiple counterparties, the JE's main-line aggregator already
-  // splits per (direction, walletGl, counterpartyGl) tuple — but our current
-  // buildJournalEntry API takes a single optional vendorEntityRef and attaches
-  // it to every AP-side Debit line. Strategy: if ALL outflow members of the
-  // group share the same counterparty label that matches a QB vendor, attach
-  // it. Otherwise (mixed counterparties, no match), pass null. Mixed-vendor
-  // bulks lose vendor attachment — a known limitation matching v1.
-  const members = group.kind === 'individual' ? [group.tx] : group.members
-  const outMembers = members.filter((m) => m.direction === 'out')
-  if (outMembers.length === 0) return null
-
-  // Collect distinct non-empty counterparty labels across outflows.
-  const labels = new Set<string>()
-  for (const m of outMembers) {
-    if (m.counterpartyLabel && m.counterpartyLabel.trim()) {
-      labels.add(m.counterpartyLabel.trim())
-    }
-  }
-  if (labels.size !== 1) return null
-
-  const label = [...labels][0]
-  const vendors = await getQbVendors(entity)
-  const match = matchVendorByLabel(label, vendors)
-  if (!match) return null
-  return { type: 'Vendor', value: match.Id }
-}
-
 function toTxForPost(
   t: LoadedTx,
   resolved: { walletAccountCode: string; counterpartyGl: string },
@@ -814,6 +820,8 @@ function toTxForPost(
     walletAccountCode: resolved.walletAccountCode,
     counterpartyGl: resolved.counterpartyGl,
     counterpartyLabel: t.counterpartyLabel,
+    vendorName: t.effectiveVendor,
+    className: t.effectiveClass,
     gain: {
       stGain: t.gainStGain != null ? Number(t.gainStGain) : null,
       ltGain: t.gainLtGain != null ? Number(t.gainLtGain) : null,
