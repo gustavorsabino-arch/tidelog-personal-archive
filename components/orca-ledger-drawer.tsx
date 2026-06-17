@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { fmtNum, fmtUSD, fmtAddr } from '@/lib/format'
+import { fmtNum, fmtUSD, fmtAddr, fmtPrice } from '@/lib/format'
 import { CopyButton } from '@/components/copy-button'
 import type { OrcaLedgerRow, OrcaWalletSummary, LotTraceEntry } from '@/lib/types'
 
@@ -225,7 +225,7 @@ function LotRow({ l, onJumpTo, showJump = false, showGain = false }: { l: LotTra
         <div style={{ color: 'var(--muted)', fontSize: '0.7rem' }}>{l.daysHeld}d · {l.term}</div>
       </div>
       <div style={{ textAlign: 'right' }}>
-        <div style={{ fontFamily: 'var(--mono)' }}>{fmtNum(l.qty, 4)} @ ${l.costPerUnit.toFixed(4)}</div>
+        <div style={{ fontFamily: 'var(--mono)' }}>{fmtNum(l.qty, 4)} @ {fmtPrice(l.costPerUnit)}</div>
         {showGain && <div style={{ fontFamily: 'var(--mono)', color: l.gain >= 0 ? 'var(--green)' : 'var(--red)', fontSize: '0.7rem' }}>{l.gain >= 0 ? '+' : ''}{fmtUSD(l.gain)}</div>}
         {showJump && (
           <button onClick={() => onJumpTo(targetKey)} style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '0.65rem', cursor: 'pointer', padding: 0 }}>↗︎ jump to source</button>
