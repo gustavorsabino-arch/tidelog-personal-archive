@@ -49,6 +49,10 @@ type QbStateJoinRow = {
   counterpartyGlOverride: string | null
   postedGlAccount: string | null
   postedGlSource: 'override' | 'token' | 'default' | null
+  vendorOverride: string | null
+  classOverride: string | null
+  postedVendor: string | null
+  postedClass: string | null
 }
 
 type PerTokenGlJoinRow = {
@@ -82,6 +86,8 @@ export function rowToTransaction(
   counterpartyGl: CounterpartyGlJoinRow | null = null,
   qbPostRow: QbPostJoinRow | null = null,
   perTokenGl: PerTokenGlJoinRow | null = null,
+  counterpartyVendorName: string | null = null,
+  counterpartyClassName: string | null = null,
 ): Transaction {
   const qty = Number(row.qty)
   const isStable = STABLE_TOKENS.has(row.asset)
@@ -121,7 +127,17 @@ export function rowToTransaction(
   // that column only on a successful post, so its presence means "was faithfully
   // posted with this GL". qbPostingStatus could be 'posted' too, but that field
   // lives on the qb_post row and is null when no post exists — less direct.
+  // The same isPosted flag gates vendor/class snapshot vs. live resolution below.
   const isPosted = qbState?.postedGlAccount != null
+  // Effective vendor/class: posted rows use the immutable snapshot (postedVendor/
+  // postedClass written at post time); unposted rows resolve live from per-tx
+  // override → counterparty wallet default → null.
+  const effectiveVendor = isPosted && qbState?.postedVendor != null
+    ? qbState.postedVendor
+    : (qbState?.vendorOverride ?? counterpartyVendorName ?? null)
+  const effectiveClass = isPosted && qbState?.postedClass != null
+    ? qbState.postedClass
+    : (qbState?.classOverride ?? counterpartyClassName ?? null)
   const { code: effectiveGlAccount, source: glSource } = isPosted
     ? { code: qbState!.postedGlAccount, source: qbState!.postedGlSource }
     : resolveWalletGl({
@@ -154,6 +170,14 @@ export function rowToTransaction(
     isPosted,
     effectiveGlAccount,
     glSource,
+    // Task 2 (vendor/class) — counterparty wallet defaults, per-tx overrides,
+    // and effective values (snapshot for posted rows, live resolution otherwise).
+    counterpartyVendorName,
+    counterpartyClassName,
+    vendorOverride: qbState?.vendorOverride ?? null,
+    classOverride: qbState?.classOverride ?? null,
+    effectiveVendor,
+    effectiveClass,
   }
 }
 
@@ -245,6 +269,8 @@ export async function getTreasuryTransactions({
       walletLabel: wallet.label,
       walletAccountCode: wallet.accountCode,
       counterpartyLabel: cpWallet.label,
+      counterpartyVendorName: cpWallet.qbVendorName,
+      counterpartyClassName: cpWallet.qbClassName,
       gain: {
         // D10 — Drizzle nested-projection collapse marker. Without a notNull
         // column in the projection, the whole `gain` object collapses to null
@@ -275,6 +301,10 @@ export async function getTreasuryTransactions({
         counterpartyGlOverride: txQbState.counterpartyGlOverride,
         postedGlAccount: txQbState.postedGlAccount,
         postedGlSource: txQbState.postedGlSource,
+        vendorOverride: txQbState.vendorOverride,
+        classOverride: txQbState.classOverride,
+        postedVendor: txQbState.postedVendor,
+        postedClass: txQbState.postedClass,
       },
       counterpartyGl: {
         // D10 marker — counterpartyGlMap.entityId is notNull on the table.
@@ -376,6 +406,8 @@ export async function getTreasuryTransactions({
       row.counterpartyGl ?? null,
       row.qbPost ?? null,
       row.perTokenGl ?? null,
+      row.counterpartyVendorName ?? null,
+      row.counterpartyClassName ?? null,
     ),
   )
 

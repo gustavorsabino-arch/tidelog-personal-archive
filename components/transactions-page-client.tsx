@@ -8,6 +8,8 @@ import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtAddr, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
 import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
 import { useTransactionMonths } from '@/lib/hooks/use-transaction-months'
+import { useAllQbVendors } from '@/lib/hooks/use-qb-vendors'
+import { useAllQbClasses } from '@/lib/hooks/use-qb-classes'
 import { Skeleton } from '@/components/skeleton'
 import { DataTable } from '@/components/data-table'
 import { CopyButton } from '@/components/copy-button'
@@ -107,6 +109,7 @@ export function TransactionsPageClient({
   // currently in-flight.
   const [rowBusy, setRowBusy] = useState<Record<string, 'repost' | 'void' | undefined>>({})
   const [rowError, setRowError] = useState<string | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
 
   // Drill-down panel for bulk JEs. Holds the post we want to inspect; null = closed.
   type DrilldownTarget = {
@@ -137,6 +140,20 @@ export function TransactionsPageClient({
       label: `${a.qbAccountNumber} — ${a.qbAccountName}`,
     }))
   }, [glAccountsData])
+
+  // Phase 4 — Vendor + Class union catalogs for the inline-override dropdowns.
+  // useAllQbVendors/useAllQbClasses fetch across all QB entities so the options
+  // are always populated regardless of which entity tab is active.
+  const { vendors: allVendors } = useAllQbVendors()
+  const { classes: allClasses } = useAllQbClasses()
+  const vendorOptions: SelectOption[] = useMemo(
+    () => allVendors.map(v => ({ value: v.displayName, label: v.displayName })),
+    [allVendors],
+  )
+  const classOptions: SelectOption[] = useMemo(
+    () => allClasses.map(c => ({ value: c.qbClassName, label: c.qbClassName })),
+    [allClasses],
+  )
 
   // Tracks the in-flight request so a newer fetch can cancel an older one.
   // Without this, responses can arrive out of order: e.g. selecting a year
@@ -742,6 +759,70 @@ export function TransactionsPageClient({
         )
       },
     }
+    // Phase 4 — Vendor + Class inline-override columns.
+    // value = per-tx override (null when unset); defaultValue = the counterparty
+    // wallet's configured vendor/class shown in italics when value is null.
+    // No counterparty-map side-effect — the wallet is the default source.
+    const vendorCol = {
+      key: 'vendor', label: 'Vendor', width: '180px', sortable: false,
+      render: (t: Transaction) => (
+        <EditableSelectCell
+          value={t.vendorOverride ?? null}
+          defaultValue={t.counterpartyVendorName ?? undefined}
+          options={vendorOptions}
+          placeholder="— vendor"
+          onSave={async (next) => {
+            if (!t.id) {
+              console.error('cannot save: transaction has no id', t)
+              return
+            }
+            if (t.qbPostingStatus === 'posted') {
+              const ok = window.confirm(
+                'This row is posted to QuickBooks. Changing the Vendor will '
+                + 'mark the journal entry stale and require re-posting. Continue?',
+              )
+              if (!ok) throw new Error('Save cancelled')
+            }
+            await apiFetch(`/api/treasury/transactions/${t.id}/qb-state`, {
+              method: 'PATCH',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ vendorOverride: next }),
+            })
+            fetchTransactions(offset)
+          }}
+        />
+      ),
+    }
+    const classCol = {
+      key: 'class', label: 'Class', width: '160px', sortable: false,
+      render: (t: Transaction) => (
+        <EditableSelectCell
+          value={t.classOverride ?? null}
+          defaultValue={t.counterpartyClassName ?? undefined}
+          options={classOptions}
+          placeholder="— class"
+          onSave={async (next) => {
+            if (!t.id) {
+              console.error('cannot save: transaction has no id', t)
+              return
+            }
+            if (t.qbPostingStatus === 'posted') {
+              const ok = window.confirm(
+                'This row is posted to QuickBooks. Changing the Class will '
+                + 'mark the journal entry stale and require re-posting. Continue?',
+              )
+              if (!ok) throw new Error('Save cancelled')
+            }
+            await apiFetch(`/api/treasury/transactions/${t.id}/qb-state`, {
+              method: 'PATCH',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ classOverride: next }),
+            })
+            fetchTransactions(offset)
+          }}
+        />
+      ),
+    }
     const txHashCol = {
       key: 'txHash', label: 'Tx', width: '100px', sortable: false,
       render: (t: Transaction) => {
@@ -961,14 +1042,14 @@ export function TransactionsPageClient({
       // QB-domain cluster — keep WalletGL/CounterpartyGL/QBStatus adjacent
       // so the user sees posting status in their natural reading zone without
       // scrolling past the wide ST/LT/Description columns.
-      walletGlCol, counterpartyGlCol, qbStatusCol,
+      walletGlCol, counterpartyGlCol, vendorCol, classCol, qbStatusCol,
       dirCol, assetCol, qtyCol, priceCol, usdCol,
       ...orcaCols,
       descriptionCol,
       txHashCol,
     ]
   }, [
-    yearFilter, monthStartMs, fetchTransactions, offset, glOptions,
+    yearFilter, monthStartMs, fetchTransactions, offset, glOptions, vendorOptions, classOptions,
     // Selection column re-renders when selection or visible-row state changes.
     selectedIds, allVisibleSelected, someVisibleSelected, visibleSelectableIds,
     toggleSelect, toggleSelectAllVisible,
@@ -1081,6 +1162,87 @@ export function TransactionsPageClient({
                         Post {selectedIds.size} selected to QB
                       </button>
                     )}
+                    {/* Bulk vendor/class overrides — apply to all selected rows.
+                        Choosing a value confirms on posted rows (they'll flip to
+                        posted_modified), then PATCHes the bulk endpoint. */}
+                    <select
+                      className="fsel"
+                      value=""
+                      title="Set vendor on selected rows"
+                      disabled={bulkBusy}
+                      onChange={async (e) => {
+                        const next = e.target.value || null
+                        const txIds = Array.from(selectedIds)
+                        const hasPosted = transactions.some(
+                          t => t.id && selectedIds.has(t.id) && t.qbPostingStatus === 'posted',
+                        )
+                        if (hasPosted) {
+                          const ok = window.confirm(
+                            'One or more selected rows are posted to QuickBooks. '
+                            + 'Setting the Vendor will mark those journal entries stale and require re-posting. Continue?',
+                          )
+                          if (!ok) return
+                        }
+                        setBulkBusy(true)
+                        try {
+                          await apiFetch('/api/treasury/transactions/bulk-qb-state', {
+                            method: 'PATCH',
+                            headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ txIds, vendorOverride: next }),
+                          })
+                          setRowError(null)
+                          fetchTransactions(offset)
+                        } catch (err) {
+                          setRowError(`Bulk vendor update failed: ${err instanceof Error ? err.message : String(err)}`)
+                        } finally {
+                          setBulkBusy(false)
+                        }
+                      }}
+                    >
+                      <option value="">Set vendor…</option>
+                      {vendorOptions.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                    <select
+                      className="fsel"
+                      value=""
+                      title="Set class on selected rows"
+                      disabled={bulkBusy}
+                      onChange={async (e) => {
+                        const next = e.target.value || null
+                        const txIds = Array.from(selectedIds)
+                        const hasPosted = transactions.some(
+                          t => t.id && selectedIds.has(t.id) && t.qbPostingStatus === 'posted',
+                        )
+                        if (hasPosted) {
+                          const ok = window.confirm(
+                            'One or more selected rows are posted to QuickBooks. '
+                            + 'Setting the Class will mark those journal entries stale and require re-posting. Continue?',
+                          )
+                          if (!ok) return
+                        }
+                        setBulkBusy(true)
+                        try {
+                          await apiFetch('/api/treasury/transactions/bulk-qb-state', {
+                            method: 'PATCH',
+                            headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ txIds, classOverride: next }),
+                          })
+                          setRowError(null)
+                          fetchTransactions(offset)
+                        } catch (err) {
+                          setRowError(`Bulk class update failed: ${err instanceof Error ? err.message : String(err)}`)
+                        } finally {
+                          setBulkBusy(false)
+                        }
+                      }}
+                    >
+                      <option value="">Set class…</option>
+                      {classOptions.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
                     <button
                       className="fsel"
                       onClick={clearSelection}

@@ -80,6 +80,17 @@ export interface Transaction {
   effectiveGlAccount?: string | null
   glSource?: 'override' | 'token' | 'default' | null
   isPosted?: boolean
+  // Task 2 (vendor/class) — counterparty wallet defaults, per-tx overrides, and
+  // effective resolved values. Follows the same posted-snapshot vs. live pattern
+  // as effectiveGlAccount: posted rows use the immutable snapshot (postedVendor/
+  // postedClass written at post time); unposted rows resolve live from per-tx
+  // override → counterparty wallet default → null.
+  counterpartyVendorName?: string | null
+  counterpartyClassName?: string | null
+  vendorOverride?: string | null
+  classOverride?: string | null
+  effectiveVendor?: string | null
+  effectiveClass?: string | null
 }
 
 export interface TransactionSummary {
