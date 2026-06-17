@@ -272,6 +272,8 @@ export function PostToQbModal({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {preview.groups.map((g, idx) => {
                     const bal = checkBalance(g.je.Line)
+                    const className = g.je.Line[0]?.JournalEntryLineDetail.ClassRef?.value ?? null
+                    const vendorName = g.je.Line.find((l) => l.JournalEntryLineDetail.Entity?.EntityRef.value)?.JournalEntryLineDetail.Entity?.EntityRef.value ?? null
                     return (
                       <div
                         key={`${g.docNumberPreview}-${idx}`}
@@ -283,13 +285,23 @@ export function PostToQbModal({
                         }}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', fontWeight: 600 }}>
                               {g.docNumberPreview}
                             </span>
                             <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                               {g.kind === 'individual' ? 'Individual' : `Bulk (${g.memberTxIds.length} members)`}
                             </span>
+                            {className && (
+                              <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>
+                                Class: <span style={{ color: 'var(--text)', fontWeight: 500 }}>{className}</span>
+                              </span>
+                            )}
+                            {vendorName && (
+                              <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>
+                                Vendor: <span style={{ color: 'var(--text)', fontWeight: 500 }}>{vendorName}</span>
+                              </span>
+                            )}
                             {g.glSource === 'default' && (
                               <span
                                 style={{
@@ -332,7 +344,6 @@ export function PostToQbModal({
                             {g.je.Line.map((line, li) => {
                               const isDebit = line.JournalEntryLineDetail.PostingType === 'Debit'
                               const acctRef = line.JournalEntryLineDetail.AccountRef
-                              const vendor = line.JournalEntryLineDetail.Entity?.EntityRef.value
                               return (
                                 <tr key={li} style={{ borderTop: li === 0 ? 'none' : '1px solid var(--border)' }}>
                                   <td
@@ -348,7 +359,6 @@ export function PostToQbModal({
                                   <td style={{ padding: '4px 8px', color: 'var(--muted)' }}>
                                     {acctRef.value}
                                     {acctRef.name ? ` · ${acctRef.name}` : ''}
-                                    {vendor ? <span style={{ marginLeft: 8, fontSize: '0.65rem', color: 'var(--accent)' }}>Vendor: {vendor}</span> : null}
                                   </td>
                                   <td style={{ padding: '4px 0 4px 8px', textAlign: 'right', fontWeight: 500 }}>
                                     ${line.Amount.toFixed(2)}
