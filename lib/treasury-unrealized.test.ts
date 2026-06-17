@@ -17,15 +17,20 @@ let mockHistoricalPrices: Record<string, Record<number, number>> = {}
 mock.module('@/lib/treasury-transactions', () => ({
   getTreasuryTransactionsAsc: async () => mockTxs,
 }))
-mock.module('@/lib/defillama', () => ({
+mock.module('@/lib/prices', () => ({
   getCurrentPrices: async (tokens?: string[]) => {
-    if (!tokens) return mockCurrentPrices
-    const out: Record<string, number> = {}
-    for (const t of tokens) if (mockCurrentPrices[t] != null) out[t] = mockCurrentPrices[t]
-    return out
+    const src = mockCurrentPrices
+    const prices: Record<string, number> = {}
+    const sources: Record<string, 'birdeye' | 'defillama'> = {}
+    for (const t of tokens ?? Object.keys(src)) {
+      if (src[t] != null) { prices[t] = src[t]; sources[t] = 'birdeye' }
+    }
+    return { prices, sources }
   },
-  getHistoricalPrice: async (token: string, ts: number) => {
-    return mockHistoricalPrices[token]?.[ts] ?? null
+  getClosingPrice: async (token: string, dayTs: number) => {
+    const closeTs = Math.floor(dayTs / 86400) * 86400 + 86395
+    const p = mockHistoricalPrices[token]?.[closeTs]
+    return typeof p === 'number' ? { price: p, source: 'birdeye' as const } : null
   },
 }))
 
@@ -63,6 +68,8 @@ const EOM = (yyyyMm: string) => {
   const [y, m] = yyyyMm.split('-').map(Number)
   return Math.floor(Date.UTC(y, m, 0, 23, 59, 59, 999) / 1000)
 }
+// Daily close instant (23:59:55 UTC) for the UTC day containing ts.
+const CLOSE = (yyyyMm: string) => Math.floor(EOM(yyyyMm) / 86400) * 86400 + 86395
 
 test('genesis tx contributes cost basis to the open position', async () => {
   // Foundation TGE seed: 100 ORCA @ $2 (synthetic). Non-genesis Out of 30 later.
@@ -153,10 +160,9 @@ test('asOf snapshot ignores transactions after EOM', async () => {
   mockCurrentPrices = { ORCA: 5 }
   mockHistoricalPrices = {
     ORCA: {
-      [EOM('2024-03')]: 4,
-      [EOM('2024-04')]: 6,
-      [EOM('2024-02')]: 3,
-      [EOM('2024-03')]: 4,
+      [CLOSE('2024-02')]: 3,
+      [CLOSE('2024-03')]: 4,
+      [CLOSE('2024-04')]: 6,
     },
   }
 
@@ -186,8 +192,8 @@ test('prior-month delta: position existing in both months', async () => {
   mockCurrentPrices = { ORCA: 10 }
   mockHistoricalPrices = {
     ORCA: {
-      [EOM('2024-04')]: 6,
-      [EOM('2024-03')]: 4,
+      [CLOSE('2024-04')]: 6,
+      [CLOSE('2024-03')]: 4,
     },
   }
 
@@ -214,7 +220,7 @@ test('prior-month delta: newly-acquired position has priorValue=0 and deltaMonth
   mockCurrentPrices = { ORCA: 8 }
   mockHistoricalPrices = {
     ORCA: {
-      [EOM('2024-04')]: 7,
+      [CLOSE('2024-04')]: 7,
       // No price needed for 2024-03 since priorQty=0 short-circuits.
     },
   }

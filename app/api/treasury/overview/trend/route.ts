@@ -5,7 +5,7 @@ import { balanceSnapshot } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { buildTrendPoint } from '@/lib/overview-trend'
 import { STABLE_TOKENS } from '@/lib/constants'
-import { getDailyPrices } from '@/lib/defillama'
+import { getDailyPrices } from '@/lib/prices'
 import type { BalanceSnapshot, Prices, TreasuryOverviewTrendResponse } from '@/lib/types'
 
 // GET /api/treasury/overview/trend?wallet=<addr>&tokens=USDC,USDT&days=90
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
   // Map<token, Map<YYYY-MM-DD, price>>
   const pricesByToken = new Map<string, Map<string, number>>()
   await Promise.all(priceTokens.map(async (token) => {
-    const points = await getDailyPrices(token, cutoffTs, daysSpan)
+    const { points } = await getDailyPrices(token, cutoffTs, daysSpan)
     const byDate = new Map<string, number>()
     for (const p of points) {
       const date = new Date(p.timestamp * 1000).toISOString().slice(0, 10)

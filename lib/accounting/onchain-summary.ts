@@ -3,7 +3,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { balanceSnapshot } from '@/lib/db/schema/financial'
 import { wallet } from '@/lib/db/schema/reference'
-import { getCurrentPrices, getHistoricalPrice } from '@/lib/defillama'
+import { getCurrentPrices, getClosingPrice } from '@/lib/prices'
 import { FOCUS_TOKENS, STABLE_TOKENS } from '@/lib/constants'
 
 export type OnchainTokenRow = {
@@ -76,7 +76,7 @@ export async function getEntityOnchainSummary(
   const tokenSymbols = Array.from(new Set(latest.map((r) => r.token)))
   const priceMap = asOfDate
     ? await getHistoricalPricesAtDate(asOfDate)
-    : (tokenSymbols.length > 0 ? await getCurrentPrices() : {})
+    : (tokenSymbols.length > 0 ? (await getCurrentPrices()).prices : {})
   const priceByToken = new Map<string, number>(Object.entries(priceMap))
 
   // Aggregate by token
@@ -105,19 +105,19 @@ export async function getEntityOnchainSummary(
 }
 
 /**
- * DefiLlama historical prices for FOCUS_TOKENS at the given date's midnight
- * UTC. Same helper pattern as treasury-overview so both views resolve the
- * exact same prices for any given as-of date.
+ * Closing prices (23:59:55 UTC) for FOCUS_TOKENS on the given as-of date, via
+ * the price wrapper (Birdeye → DeFiLlama). Same helper pattern as
+ * treasury-overview so both views resolve the exact same prices for any date.
  */
 async function getHistoricalPricesAtDate(asOf: string): Promise<Record<string, number>> {
-  const ts = Math.floor(Date.parse(`${asOf}T23:59:59Z`) / 1000)
-  if (!Number.isFinite(ts)) return {}
+  const dayTs = Math.floor(Date.parse(`${asOf}T00:00:00Z`) / 1000)
+  if (!Number.isFinite(dayTs)) return {}
   const results = await Promise.all(
-    FOCUS_TOKENS.map(async (sym) => [sym, await getHistoricalPrice(sym, ts)] as const),
+    FOCUS_TOKENS.map(async (sym) => [sym, await getClosingPrice(sym, dayTs)] as const),
   )
   const out: Record<string, number> = {}
-  for (const [sym, price] of results) {
-    if (typeof price === 'number') out[sym] = price
+  for (const [sym, r] of results) {
+    if (r) out[sym] = r.price
   }
   return out
 }

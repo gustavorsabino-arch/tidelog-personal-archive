@@ -3,7 +3,7 @@ import { and, eq, inArray, like, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { balanceSnapshot } from '@/lib/db/schema/financial'
 import { wallet } from '@/lib/db/schema/reference'
-import { getCurrentPrices } from '@/lib/defillama'
+import { getCurrentPrices } from '@/lib/prices'
 import { PRICE_MINTS, STABLE_TOKENS } from '@/lib/constants'
 import type {
   TreasuryManagementEntitySummary,
@@ -101,7 +101,8 @@ export async function getTreasuryManagementData(
   if (latestSnapshots.length === 0) return EMPTY_RESPONSE
 
   const tokenSymbols = Array.from(new Set(latestSnapshots.map((s) => s.token)))
-  const currentPrices = tokenSymbols.length > 0 ? await getCurrentPrices() : {}
+  const { prices: currentPrices } =
+    tokenSymbols.length > 0 ? await getCurrentPrices() : { prices: {} as Record<string, number> }
   const priceByToken = new Map<string, number>(Object.entries(currentPrices))
 
   const positions: TreasuryManagementPosition[] = []
