@@ -11,6 +11,7 @@ let birdDaily: Array<{ timestamp: number; price: number }> = []
 let lamaCurrent: Record<string, number> = {}
 let lamaHist: number | null = null
 let lamaDaily: Array<{ timestamp: number; price: number }> = []
+let lastHistTs = -1
 
 mock.module('@/lib/birdeye', () => ({
   hasBirdeyeKey: true,
@@ -20,7 +21,7 @@ mock.module('@/lib/birdeye', () => ({
     for (const t of tokens) if (birdCurrent[t] != null) out[t] = birdCurrent[t]
     return out
   },
-  getHistoricalPrice: async () => birdHist,
+  getHistoricalPrice: async (_token: string, ts: number) => { lastHistTs = ts; return birdHist },
   getDailyPrices: async () => birdDaily,
 }))
 mock.module('@/lib/defillama', () => ({
@@ -33,7 +34,7 @@ mock.module('@/lib/defillama', () => ({
   getDailyPrices: async () => lamaDaily,
 }))
 
-const { getCurrentPrices, getHistoricalPrice, getDailyPrices } = await import('./prices')
+const { getCurrentPrices, getHistoricalPrice, getDailyPrices, getClosingPrice } = await import('./prices')
 
 beforeEach(() => {
   birdCurrent = {}
@@ -43,6 +44,7 @@ beforeEach(() => {
   lamaCurrent = {}
   lamaHist = null
   lamaDaily = []
+  lastHistTs = -1
 })
 
 test('current: per-token fallback — Birdeye serves what it can, DeFiLlama fills gaps', async () => {
@@ -100,4 +102,27 @@ test('daily: Birdeye points tag birdeye; empty falls back to DeFiLlama', async (
     points: [{ timestamp: 1, price: 99 }],
     source: 'defillama',
   })
+})
+
+test('getClosingPrice queries 23:59:55 UTC (dayStart + 86395), NOT midnight', async () => {
+  birdHist = 68.9
+  const noon = Math.floor(Date.parse('2026-06-13T12:00:00Z') / 1000)
+  const res = await getClosingPrice('SOL', noon)
+  const dayStart = Math.floor(Date.parse('2026-06-13T00:00:00Z') / 1000)
+  expect(lastHistTs).toBe(dayStart + 86395)
+  expect(res).toEqual({ price: 68.9, source: 'birdeye' })
+})
+
+test('getClosingPrice falls back to DeFiLlama when Birdeye misses', async () => {
+  birdHist = null
+  lamaHist = 67.2
+  const noon = Math.floor(Date.parse('2026-06-13T12:00:00Z') / 1000)
+  expect(await getClosingPrice('SOL', noon)).toEqual({ price: 67.2, source: 'defillama' })
+})
+
+test('getClosingPrice returns null for the current/future UTC day (close not final yet)', async () => {
+  birdHist = 100
+  lamaHist = 100
+  const future = Math.floor(Date.parse('2099-01-01T12:00:00Z') / 1000)
+  expect(await getClosingPrice('SOL', future)).toBeNull()
 })

@@ -9,7 +9,7 @@
  */
 
 import { computeFIFOWithTrace } from '@/lib/fifo'
-import { getCurrentPrices, getHistoricalPrice } from '@/lib/defillama'
+import { getCurrentPrices, getClosingPrice } from '@/lib/prices'
 import { getTreasuryTransactionsAsc } from '@/lib/treasury-transactions'
 import { ENTITIES } from '@/lib/constants'
 import type {
@@ -107,7 +107,9 @@ async function fetchPricesForAssets(
   const missing: string[] = []
 
   if (timestamp === null) {
-    const live = await getCurrentPrices(assets).catch(() => ({} as Record<string, number>))
+    const { prices: live } = await getCurrentPrices(assets).catch(
+      () => ({ prices: {} as Record<string, number> }),
+    )
     for (const a of assets) {
       const p = live[a]
       if (typeof p === 'number' && p > 0) prices[a] = p
@@ -116,11 +118,12 @@ async function fetchPricesForAssets(
     return { prices, missing }
   }
 
-  // Historical prices — one call per asset. DeFiLlama caches at the route.
-  const results = await Promise.all(assets.map((a) => getHistoricalPrice(a, timestamp)))
-  results.forEach((p, i) => {
+  // Historical = the day's close (23:59:55 UTC). getClosingPrice returns null
+  // for the in-progress current day; the caller patches live prices there.
+  const results = await Promise.all(assets.map((a) => getClosingPrice(a, timestamp)))
+  results.forEach((r, i) => {
     const a = assets[i]
-    if (typeof p === 'number' && p > 0) prices[a] = p
+    if (r && r.price > 0) prices[a] = r.price
     else missing.push(a)
   })
   return { prices, missing }

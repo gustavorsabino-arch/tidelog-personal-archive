@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { balanceSnapshot, wallet } from '@/lib/db/schema'
 import { buildTreasuryOverview } from '@/lib/overview'
 import { toDisplayEntity } from '@/lib/entity'
-import { getCurrentPrices, getHistoricalPrice } from '@/lib/defillama'
+import { getCurrentPrices, getClosingPrice } from '@/lib/prices'
 import { FOCUS_TOKENS } from '@/lib/constants'
 import type { BalanceSnapshot, Prices, TreasuryOverview, Wallet } from '@/lib/types'
 
@@ -43,7 +43,9 @@ export async function getTreasuryOverview(
     .where(asOfDate ? sql`${balanceSnapshot.date} <= ${asOfDate}` : sql`true`)
     .then((rows) => rows.filter((r) => r.rn === 1).map(({ rn: _rn, ...rest }) => rest))
 
-  const pricesPromise = asOfDate ? getHistoricalPricesAtDate(asOfDate) : getCurrentPrices()
+  const pricesPromise: Promise<Prices> = asOfDate
+    ? getHistoricalPricesAtDate(asOfDate)
+    : getCurrentPrices().then((r) => r.prices)
 
   const [walletRows, balanceRows, currentPrices] = await Promise.all([
     db.select().from(wallet).orderBy(wallet.label),
@@ -94,18 +96,18 @@ export async function getTreasuryOverview(
   return buildTreasuryOverview(registry, snapshot, prices, entityFilter ?? null)
 }
 
-// Fetch DefiLlama historical prices for all FOCUS_TOKENS at the given date's
-// midnight UTC. Returns the same Prices shape as getCurrentPrices() so the
-// downstream consumer doesn't care which it got.
+// Closing prices (23:59:55 UTC) for all FOCUS_TOKENS on the as-of date, via the
+// price wrapper. Returns the same Prices shape as getCurrentPrices().prices so
+// the downstream consumer doesn't care which it got.
 async function getHistoricalPricesAtDate(asOf: string): Promise<Prices> {
-  const ts = Math.floor(Date.parse(`${asOf}T23:59:59Z`) / 1000)
-  if (!Number.isFinite(ts)) return {}
+  const dayTs = Math.floor(Date.parse(`${asOf}T00:00:00Z`) / 1000)
+  if (!Number.isFinite(dayTs)) return {}
   const results = await Promise.all(
-    FOCUS_TOKENS.map(async (sym) => [sym, await getHistoricalPrice(sym, ts)] as const),
+    FOCUS_TOKENS.map(async (sym) => [sym, await getClosingPrice(sym, dayTs)] as const),
   )
   const out: Prices = {}
-  for (const [sym, price] of results) {
-    if (typeof price === 'number') out[sym] = price
+  for (const [sym, r] of results) {
+    if (r) out[sym] = r.price
   }
   return out
 }
