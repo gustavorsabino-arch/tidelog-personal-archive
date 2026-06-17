@@ -4,8 +4,8 @@ import { balanceSnapshot, wallet } from '@/lib/db/schema'
 import { buildTreasuryOverview } from '@/lib/overview'
 import { toDisplayEntity } from '@/lib/entity'
 import { getCurrentPrices, getClosingPrice } from '@/lib/prices'
-import { FOCUS_TOKENS } from '@/lib/constants'
-import type { BalanceSnapshot, Prices, TreasuryOverview, Wallet } from '@/lib/types'
+import { FOCUS_TOKENS, STABLE_TOKENS } from '@/lib/constants'
+import type { BalanceSnapshot, Prices, TreasuryOverview, PriceMeta, PriceSourceTag, PriceKind, Wallet } from '@/lib/types'
 
 /**
  * Treasury overview, optionally as-of a historical date.
@@ -43,15 +43,18 @@ export async function getTreasuryOverview(
     .where(asOfDate ? sql`${balanceSnapshot.date} <= ${asOfDate}` : sql`true`)
     .then((rows) => rows.filter((r) => r.rn === 1).map(({ rn: _rn, ...rest }) => rest))
 
-  const pricesPromise: Promise<Prices> = asOfDate
+  const kind: PriceKind = asOfDate ? 'close' : 'live'
+  const pricesPromise: Promise<{ prices: Prices; sources: Record<string, PriceSourceTag> }> = asOfDate
     ? getHistoricalPricesAtDate(asOfDate)
-    : getCurrentPrices().then((r) => r.prices)
+    : getCurrentPrices()
 
-  const [walletRows, balanceRows, currentPrices] = await Promise.all([
+  const [walletRows, balanceRows, priceResult] = await Promise.all([
     db.select().from(wallet).orderBy(wallet.label),
     balanceQuery,
     pricesPromise,
   ])
+  const currentPrices: Prices = priceResult.prices
+  const priceSources = priceResult.sources
 
   // For historical view, the displayed snapshot date is the chosen asOf even
   // if no row matches it — finance team wants to know "the report is as of X".
@@ -65,6 +68,11 @@ export async function getTreasuryOverview(
   }
 
   const prices: Prices = currentPrices
+  const priceMeta: Record<string, PriceMeta> = {}
+  for (const token of Object.keys(prices)) {
+    const source: PriceSourceTag = STABLE_TOKENS.has(token) ? 'stable' : (priceSources[token] ?? 'defillama')
+    priceMeta[token] = { source, kind }
+  }
 
   const mostRecentFetched = balanceRows.reduce<Date | null>((acc, row) => {
     const t = row.fetchedAt
@@ -93,21 +101,23 @@ export async function getTreasuryOverview(
     updatedAt: w.updatedAt.toISOString(),
   }))
 
-  return buildTreasuryOverview(registry, snapshot, prices, entityFilter ?? null)
+  return { ...buildTreasuryOverview(registry, snapshot, prices, entityFilter ?? null), priceMeta }
 }
 
 // Closing prices (23:59:59 UTC) for all FOCUS_TOKENS on the as-of date, via the
-// price wrapper. Returns the same Prices shape as getCurrentPrices().prices so
-// the downstream consumer doesn't care which it got.
-async function getHistoricalPricesAtDate(asOf: string): Promise<Prices> {
+// price wrapper. Returns prices + sources so getTreasuryOverview can build priceMeta.
+async function getHistoricalPricesAtDate(
+  asOf: string,
+): Promise<{ prices: Prices; sources: Record<string, PriceSourceTag> }> {
   const dayTs = Math.floor(Date.parse(`${asOf}T00:00:00Z`) / 1000)
-  if (!Number.isFinite(dayTs)) return {}
+  if (!Number.isFinite(dayTs)) return { prices: {}, sources: {} }
   const results = await Promise.all(
     FOCUS_TOKENS.map(async (sym) => [sym, await getClosingPrice(sym, dayTs)] as const),
   )
-  const out: Prices = {}
+  const prices: Prices = {}
+  const sources: Record<string, PriceSourceTag> = {}
   for (const [sym, r] of results) {
-    if (r) out[sym] = r.price
+    if (r) { prices[sym] = r.price; sources[sym] = r.source }
   }
-  return out
+  return { prices, sources }
 }

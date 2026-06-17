@@ -11,9 +11,10 @@
 import { computeFIFOWithTrace } from '@/lib/fifo'
 import { getCurrentPrices, getClosingPrice } from '@/lib/prices'
 import { getTreasuryTransactionsAsc } from '@/lib/treasury-transactions'
-import { ENTITIES } from '@/lib/constants'
+import { ENTITIES, STABLE_TOKENS } from '@/lib/constants'
 import type {
   OpenLotView,
+  PriceSourceTag,
   Transaction,
   UnrealizedLot,
   UnrealizedPosition,
@@ -101,21 +102,22 @@ function rollUpPositions(lots: OpenLotView[]): Map<string, RolledPosition> {
 async function fetchPricesForAssets(
   assets: string[],
   timestamp: number | null,
-): Promise<{ prices: Record<string, number>; missing: string[] }> {
-  if (!assets.length) return { prices: {}, missing: [] }
+): Promise<{ prices: Record<string, number>; sources: Record<string, PriceSourceTag>; missing: string[] }> {
+  if (!assets.length) return { prices: {}, sources: {}, missing: [] }
   const prices: Record<string, number> = {}
+  const sources: Record<string, PriceSourceTag> = {}
   const missing: string[] = []
 
   if (timestamp === null) {
-    const { prices: live } = await getCurrentPrices(assets).catch(
-      () => ({ prices: {} as Record<string, number> }),
+    const { prices: live, sources: liveSrc } = await getCurrentPrices(assets).catch(
+      () => ({ prices: {} as Record<string, number>, sources: {} as Record<string, PriceSourceTag> }),
     )
     for (const a of assets) {
       const p = live[a]
-      if (typeof p === 'number' && p > 0) prices[a] = p
+      if (typeof p === 'number' && p > 0) { prices[a] = p; sources[a] = liveSrc[a] ?? 'birdeye' }
       else missing.push(a)
     }
-    return { prices, missing }
+    return { prices, sources, missing }
   }
 
   // Historical = the day's close (23:59:59 UTC). getClosingPrice returns null
@@ -123,10 +125,10 @@ async function fetchPricesForAssets(
   const results = await Promise.all(assets.map((a) => getClosingPrice(a, timestamp)))
   results.forEach((r, i) => {
     const a = assets[i]
-    if (r && r.price > 0) prices[a] = r.price
+    if (r && r.price > 0) { prices[a] = r.price; sources[a] = r.source }
     else missing.push(a)
   })
-  return { prices, missing }
+  return { prices, sources, missing }
 }
 
 export async function getTreasuryUnrealized({
@@ -192,30 +194,35 @@ export async function getTreasuryUnrealized({
   //      EOM price for delta vs prior month.
   //    - Falling back to live current price when asOf is the current month
   //      and historical isn't yet available.
-  const { prices: livePrices, missing: missingLive } = await fetchPricesForAssets(assetsHeld, null)
+  const { prices: livePrices, sources: liveSources, missing: missingLive } = await fetchPricesForAssets(assetsHeld, null)
 
   let snapshotPrices = livePrices
+  let snapshotSources: Record<string, PriceSourceTag> = liveSources
   let snapshotMissing = missingLive
   if (asOfUnix !== null) {
     const isCurrentMonth = asOfYm === ymOfNow()
-    const { prices: histPrices, missing: histMissing } = await fetchPricesForAssets(
+    const { prices: histPrices, sources: histSources, missing: histMissing } = await fetchPricesForAssets(
       assetsHeld,
       asOfUnix,
     )
     if (isCurrentMonth) {
       // Patch in live prices where historical isn't published yet.
       snapshotPrices = { ...livePrices, ...histPrices }
+      snapshotSources = { ...liveSources, ...histSources }
       snapshotMissing = assetsHeld.filter((a) => !(a in snapshotPrices))
     } else {
       snapshotPrices = histPrices
+      snapshotSources = histSources
       snapshotMissing = histMissing
     }
   }
 
   let priorPrices: Record<string, number> = {}
+  let priorSources: Record<string, PriceSourceTag> = {}
   if (priorUnix !== null) {
-    const { prices } = await fetchPricesForAssets(assetsHeld, priorUnix)
+    const { prices, sources } = await fetchPricesForAssets(assetsHeld, priorUnix)
     priorPrices = prices
+    priorSources = sources
   }
 
   // 7. Enrich each rolled-up position with current/prior pricing.
@@ -268,6 +275,8 @@ export async function getTreasuryUnrealized({
       priorPrice,
       priorValue,
       deltaMonth,
+      currentPriceSource: (STABLE_TOKENS.has(p.asset) ? 'stable' : (snapshotSources[p.asset] ?? 'defillama')) as PriceSourceTag,
+      priorPriceSource: (STABLE_TOKENS.has(p.asset) ? 'stable' : (priorSources[p.asset] ?? 'defillama')) as PriceSourceTag,
     })
   }
 

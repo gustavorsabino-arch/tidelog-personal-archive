@@ -6,7 +6,7 @@ import { requirePermission } from '@/lib/auth/require-permission'
 import { buildTrendPoint } from '@/lib/overview-trend'
 import { STABLE_TOKENS } from '@/lib/constants'
 import { getDailyPrices } from '@/lib/prices'
-import type { BalanceSnapshot, Prices, TreasuryOverviewTrendResponse } from '@/lib/types'
+import type { BalanceSnapshot, Prices, PriceSourceTag, TreasuryOverviewTrendResponse } from '@/lib/types'
 
 // GET /api/treasury/overview/trend?wallet=<addr>&tokens=USDC,USDT&days=90
 export async function GET(req: NextRequest) {
@@ -50,8 +50,10 @@ export async function GET(req: NextRequest) {
 
   // Map<token, Map<YYYY-MM-DD, price>>
   const pricesByToken = new Map<string, Map<string, number>>()
+  const seriesSources: PriceSourceTag[] = []
   await Promise.all(priceTokens.map(async (token) => {
-    const { points } = await getDailyPrices(token, cutoffTs, daysSpan)
+    const { points, source } = await getDailyPrices(token, cutoffTs, daysSpan)
+    seriesSources.push(source)
     const byDate = new Map<string, number>()
     for (const p of points) {
       const date = new Date(p.timestamp * 1000).toISOString().slice(0, 10)
@@ -89,12 +91,15 @@ export async function GET(req: NextRequest) {
       return buildTrendPoint(snapshot, walletAddr, tokens)
     })
 
+  const source: PriceSourceTag = seriesSources.includes('defillama') ? 'defillama' : 'birdeye'
+
   const response: TreasuryOverviewTrendResponse = {
     walletAddr,
     tokens,
     points,
     firstDate: points[0]?.date || null,
     lastDate: points[points.length - 1]?.date || null,
+    source,
   }
 
   return NextResponse.json(response)

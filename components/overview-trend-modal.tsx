@@ -207,6 +207,9 @@ export function OverviewTrendModal({
                   <div>
                     <div className="trend-chart-title">{modeLabel}</div>
                     <div className="trend-chart-sub">{subtitle}</div>
+                    <span style={{ fontSize: '0.6rem', fontFamily: 'var(--mono)', color: data?.source === 'defillama' ? 'var(--fallback)' : 'var(--muted)' }}>
+                      prices via {data?.source === 'defillama' ? 'DeFiLlama (Birdeye fallback)' : 'Birdeye'}
+                    </span>
                   </div>
                   {latestPoint && (
                     <div className="trend-chart-current">

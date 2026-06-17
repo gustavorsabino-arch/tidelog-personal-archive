@@ -5,6 +5,7 @@ import { balanceSnapshot } from '@/lib/db/schema/financial'
 import { wallet } from '@/lib/db/schema/reference'
 import { getCurrentPrices, getClosingPrice } from '@/lib/prices'
 import { FOCUS_TOKENS, STABLE_TOKENS } from '@/lib/constants'
+import type { PriceSourceTag, PriceKind } from '@/lib/types'
 
 export type OnchainTokenRow = {
   token: string
@@ -12,6 +13,7 @@ export type OnchainTokenRow = {
   priceUsd: number
   usd: number
   walletCount: number
+  source: PriceSourceTag
 }
 
 export type OnchainSummary = {
@@ -19,6 +21,7 @@ export type OnchainSummary = {
   snapshotDate: string | null
   walletCount: number
   byToken: OnchainTokenRow[]
+  kind: PriceKind
 }
 
 /**
@@ -38,6 +41,7 @@ export async function getEntityOnchainSummary(
   // Strict ISO date — anything else falls back to "latest" so a typo'd query
   // doesn't 500 the entire page.
   const asOfDate = asOf && /^\d{4}-\d{2}-\d{2}$/.test(asOf) ? asOf : null
+  const kind: PriceKind = asOfDate ? 'close' : 'live'
 
   const wallets = await db
     .select({ address: wallet.address })
@@ -45,7 +49,7 @@ export async function getEntityOnchainSummary(
     .where(and(eq(wallet.entityId, entityId), eq(wallet.type, 'internal'), eq(wallet.hiddenFromFinance, false)))
 
   if (wallets.length === 0) {
-    return { totalUsd: 0, snapshotDate: null, walletCount: 0, byToken: [] }
+    return { totalUsd: 0, snapshotDate: null, walletCount: 0, byToken: [], kind }
   }
   const addresses = wallets.map((w) => w.address)
 
@@ -70,14 +74,17 @@ export async function getEntityOnchainSummary(
 
   const latest = snapshots.filter((r) => r.rn === 1)
   if (latest.length === 0) {
-    return { totalUsd: 0, snapshotDate: asOfDate, walletCount: wallets.length, byToken: [] }
+    return { totalUsd: 0, snapshotDate: asOfDate, walletCount: wallets.length, byToken: [], kind }
   }
 
   const tokenSymbols = Array.from(new Set(latest.map((r) => r.token)))
-  const priceMap = asOfDate
+  const { prices: priceMap, sources: sourceMap } = asOfDate
     ? await getHistoricalPricesAtDate(asOfDate)
-    : (tokenSymbols.length > 0 ? (await getCurrentPrices()).prices : {})
+    : tokenSymbols.length > 0
+      ? await getCurrentPrices()
+      : { prices: {} as Record<string, number>, sources: {} as Record<string, PriceSourceTag> }
   const priceByToken = new Map<string, number>(Object.entries(priceMap))
+  const sourceByToken = new Map<string, PriceSourceTag>(Object.entries(sourceMap))
 
   // Aggregate by token
   const agg = new Map<string, { amount: number; wallets: Set<string>; latestDate: string }>()
@@ -97,11 +104,14 @@ export async function getEntityOnchainSummary(
     const usd = entry.amount * priceUsd
     totalUsd += usd
     if (!snapshotDate || entry.latestDate > snapshotDate) snapshotDate = entry.latestDate
-    byToken.push({ token, amount: entry.amount, priceUsd, usd, walletCount: entry.wallets.size })
+    const source: PriceSourceTag = STABLE_TOKENS.has(token)
+      ? 'stable'
+      : (sourceByToken.get(token) ?? 'defillama')
+    byToken.push({ token, amount: entry.amount, priceUsd, usd, walletCount: entry.wallets.size, source })
   }
   byToken.sort((a, b) => b.usd - a.usd)
 
-  return { totalUsd, snapshotDate, walletCount: wallets.length, byToken }
+  return { totalUsd, snapshotDate, walletCount: wallets.length, byToken, kind }
 }
 
 /**
@@ -109,15 +119,18 @@ export async function getEntityOnchainSummary(
  * the price wrapper (Birdeye → DeFiLlama). Same helper pattern as
  * treasury-overview so both views resolve the exact same prices for any date.
  */
-async function getHistoricalPricesAtDate(asOf: string): Promise<Record<string, number>> {
+async function getHistoricalPricesAtDate(
+  asOf: string,
+): Promise<{ prices: Record<string, number>; sources: Record<string, PriceSourceTag> }> {
   const dayTs = Math.floor(Date.parse(`${asOf}T00:00:00Z`) / 1000)
-  if (!Number.isFinite(dayTs)) return {}
+  if (!Number.isFinite(dayTs)) return { prices: {}, sources: {} }
   const results = await Promise.all(
     FOCUS_TOKENS.map(async (sym) => [sym, await getClosingPrice(sym, dayTs)] as const),
   )
-  const out: Record<string, number> = {}
+  const prices: Record<string, number> = {}
+  const sources: Record<string, PriceSourceTag> = {}
   for (const [sym, r] of results) {
-    if (r) out[sym] = r.price
+    if (r) { prices[sym] = r.price; sources[sym] = r.source }
   }
-  return out
+  return { prices, sources }
 }
