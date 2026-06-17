@@ -28,7 +28,7 @@ mock.module('@/lib/prices', () => ({
     return { prices, sources }
   },
   getClosingPrice: async (token: string, dayTs: number) => {
-    const closeTs = Math.floor(dayTs / 86400) * 86400 + 86395
+    const closeTs = Math.floor(dayTs / 86400) * 86400 + 86399
     const p = mockHistoricalPrices[token]?.[closeTs]
     return typeof p === 'number' ? { price: p, source: 'birdeye' as const } : null
   },
@@ -68,8 +68,8 @@ const EOM = (yyyyMm: string) => {
   const [y, m] = yyyyMm.split('-').map(Number)
   return Math.floor(Date.UTC(y, m, 0, 23, 59, 59, 999) / 1000)
 }
-// Daily close instant (23:59:55 UTC) for the UTC day containing ts.
-const CLOSE = (yyyyMm: string) => Math.floor(EOM(yyyyMm) / 86400) * 86400 + 86395
+// Daily close instant (23:59:59 UTC) for the UTC day containing ts.
+const CLOSE = (yyyyMm: string) => Math.floor(EOM(yyyyMm) / 86400) * 86400 + 86399
 
 test('genesis tx contributes cost basis to the open position', async () => {
   // Foundation TGE seed: 100 ORCA @ $2 (synthetic). Non-genesis Out of 30 later.

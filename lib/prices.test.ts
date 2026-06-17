@@ -104,12 +104,12 @@ test('daily: Birdeye points tag birdeye; empty falls back to DeFiLlama', async (
   })
 })
 
-test('getClosingPrice queries 23:59:55 UTC (dayStart + 86395), NOT midnight', async () => {
+test('getClosingPrice queries 23:59:59 UTC (dayStart + 86399), NOT midnight', async () => {
   birdHist = 68.9
   const noon = Math.floor(Date.parse('2026-06-13T12:00:00Z') / 1000)
   const res = await getClosingPrice('SOL', noon)
   const dayStart = Math.floor(Date.parse('2026-06-13T00:00:00Z') / 1000)
-  expect(lastHistTs).toBe(dayStart + 86395)
+  expect(lastHistTs).toBe(dayStart + 86399)
   expect(res).toEqual({ price: 68.9, source: 'birdeye' })
 })
 

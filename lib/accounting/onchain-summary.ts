@@ -105,7 +105,7 @@ export async function getEntityOnchainSummary(
 }
 
 /**
- * Closing prices (23:59:55 UTC) for FOCUS_TOKENS on the given as-of date, via
+ * Closing prices (23:59:59 UTC) for FOCUS_TOKENS on the given as-of date, via
  * the price wrapper (Birdeye → DeFiLlama). Same helper pattern as
  * treasury-overview so both views resolve the exact same prices for any date.
  */

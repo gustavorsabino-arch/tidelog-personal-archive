@@ -96,7 +96,7 @@ export async function getTreasuryOverview(
   return buildTreasuryOverview(registry, snapshot, prices, entityFilter ?? null)
 }
 
-// Closing prices (23:59:55 UTC) for all FOCUS_TOKENS on the as-of date, via the
+// Closing prices (23:59:59 UTC) for all FOCUS_TOKENS on the as-of date, via the
 // price wrapper. Returns the same Prices shape as getCurrentPrices().prices so
 // the downstream consumer doesn't care which it got.
 async function getHistoricalPricesAtDate(asOf: string): Promise<Prices> {
