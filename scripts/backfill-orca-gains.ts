@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import './_prod-env'
 /**
  * One-shot recompute of FIFO gain output (transaction_gain + fifo_state)
  * for every entity. Idempotent — replaces all rows per entity+asset on each
