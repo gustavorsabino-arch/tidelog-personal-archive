@@ -8,7 +8,8 @@ import { Skeleton } from '@/components/skeleton'
 import { OrcaLedgerDrawer } from '@/components/orca-ledger-drawer'
 import { CopyButton } from '@/components/copy-button'
 import { exportOrcaLedgerXLSX } from '@/lib/orca-ledger-export'
-import type { OrcaLedgerResponse, OrcaLedgerRow } from '@/lib/types'
+import type { OrcaLedgerResponse, OrcaLedgerRow, PriceSourceTag } from '@/lib/types'
+import { PriceWithSource } from '@/components/price-with-source'
 
 interface Props {
   initialEntity: string
@@ -282,7 +283,7 @@ function LedgerRow({ row, rowKey: k, onOpen }: { row: OrcaLedgerRow; rowKey: str
       </td>
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ fontWeight: 700, textAlign: 'center', fontSize: '1rem' }}>{row.dir === 'In' ? '↑' : '↓'}</td>
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{row.dir === 'In' ? '+' : '-'}{fmtNum(row.qty, 2)}</td>
-      <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{fmtPrice(row.price)}</td>
+      <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}><PriceWithSource value={row.price} source={row.priceSource as PriceSourceTag} /></td>
       <td className={row.dir === 'In' ? 'gain-pos' : 'gain-neg'} style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem' }}>{row.usd != null ? fmtUSD(row.usd) : '—'}</td>
       <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.72rem', color: row.balanceAfter < 0 ? 'var(--red)' : 'var(--text)' }}>{fmtNum(row.balanceAfter, 2)}</td>
       <td style={{ lineHeight: 1.4 }}>
