@@ -115,7 +115,7 @@ export interface Prices {
   [key: string]: number | undefined
 }
 
-export type PriceSourceTag = 'birdeye' | 'defillama' | 'stable'
+export type PriceSourceTag = 'birdeye' | 'defillama' | 'stable' | 'cache' | 'genesis' | 'ln'
 export type PriceKind = 'close' | 'live'
 export interface PriceMeta {
   source: PriceSourceTag

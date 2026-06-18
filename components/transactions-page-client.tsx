@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { ENTITIES, TOKEN_COLORS } from '@/lib/constants'
-import { fmtUSD, fmtNum, fmtAddr, fmtPrice, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
+import { fmtUSD, fmtNum, fmtAddr, monthToRange, yearToRange, MONTH_SHORT_NAMES } from '@/lib/format'
 import { useEntityWallets } from '@/lib/hooks/use-entity-wallets'
 import { useTransactionMonths } from '@/lib/hooks/use-transaction-months'
 import { useAllQbVendors } from '@/lib/hooks/use-qb-vendors'
@@ -21,7 +21,8 @@ import { useSharedAccess } from '@/lib/access-context'
 import { hasPermission } from '@/lib/auth/permissions'
 import { isQboEntity, type QboEntity } from '@/lib/qb/config'
 import { qbJeUrl, isBulkDocNumber } from '@/lib/qb/links'
-import type { Transaction, TransactionSummary, TransactionsResponse } from '@/lib/types'
+import type { Transaction, TransactionSummary, TransactionsResponse, PriceSourceTag } from '@/lib/types'
+import { PriceWithSource } from '@/components/price-with-source'
 
 // Status filter values map directly to t.qbPostingStatus (with the addition of
 // 'all' for no filter and 'unposted' which also covers null). Keep this in
@@ -609,7 +610,7 @@ export function TransactionsPageClient({
       key: 'price', label: 'Price', numeric: true, width: '90px',
       render: (t: Transaction) => (
         <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>
-          {fmtPrice(t.price)}
+          <PriceWithSource value={t.price} source={t.priceSource as PriceSourceTag} />
         </span>
       ),
     }
