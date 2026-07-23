@@ -110,23 +110,44 @@ const FULLY_ALLOCATED_ADDRESS_PATTERNS: AddressPattern[] = [
   { prefix: 'DrhE25', suffix: '3qxh9X', label: 'Climate Fund' },
 ]
 
-function matchesAnyPattern(address: string, patterns: AddressPattern[]): boolean {
+// Prefix-only match (dropped the suffix requirement — 6-char prefix is
+// already effectively unique for a wallet list this small, and a stricter
+// AND-suffix check was rejecting wallets whose suffix I misread from the
+// photo).
+function matchesAnyPrefix(address: string, patterns: AddressPattern[]): boolean {
   if (!address) return false
   for (const p of patterns) {
-    if (address.startsWith(p.prefix) && address.endsWith(p.suffix)) return true
+    if (address.startsWith(p.prefix)) return true
   }
   return false
 }
 
-export function isBuybackWallet(address: string): boolean {
-  return matchesAnyPattern(address, BUYBACK_ADDRESS_PATTERNS)
+// Label fallback: matches on unique substrings anyone would recognize.
+// 'buyback' covers every ORCA Buyback wallet; the 4 MM names cover the
+// MM counterparties. Case-insensitive.
+function labelMatchesBuyback(label: string | null | undefined): boolean {
+  if (!label) return false
+  const l = label.toLowerCase()
+  if (l.includes('buyback') || l.includes('buy back') || l.includes('buy-back')) return true
+  return ['wintermute', 'vamient', 'velar', 'keyrock'].some(name => l.includes(name))
 }
 
-export function isFullyAllocatedWallet(address: string): boolean {
-  return matchesAnyPattern(address, FULLY_ALLOCATED_ADDRESS_PATTERNS)
+function labelMatchesFullyAllocated(label: string | null | undefined): boolean {
+  if (!label) return false
+  const l = label.toLowerCase()
+  return ['bug bounty', 'foundation - pool ops', 'foundation pool ops',
+          'orca council', 'pool ops', 'climate fund'].some(name => l.includes(name))
+}
+
+export function isBuybackWallet(address: string, label?: string | null): boolean {
+  return matchesAnyPrefix(address, BUYBACK_ADDRESS_PATTERNS) || labelMatchesBuyback(label)
+}
+
+export function isFullyAllocatedWallet(address: string, label?: string | null): boolean {
+  return matchesAnyPrefix(address, FULLY_ALLOCATED_ADDRESS_PATTERNS) || labelMatchesFullyAllocated(label)
 }
 
 // A wallet is "Owned by the Team" iff it is neither buyback nor fully-allocated.
-export function isOwnedByTeamWallet(address: string): boolean {
-  return !isBuybackWallet(address) && !isFullyAllocatedWallet(address)
+export function isOwnedByTeamWallet(address: string, label?: string | null): boolean {
+  return !isBuybackWallet(address, label) && !isFullyAllocatedWallet(address, label)
 }

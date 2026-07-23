@@ -156,7 +156,7 @@ export function buildOverviewDrilldown(
     if (purpose === 'team')         { predicate = isOwnedByTeamWallet; title = 'Owned by the Team'; accentColor = '#4C9F70' }
     else if (purpose === 'buyback') { predicate = isBuybackWallet;     title = 'BuyBack';           accentColor = '#D97706' }
     else return null
-    filteredWallets = wallets.filter(w => predicate(w.address))
+    filteredWallets = wallets.filter(w => predicate(w.address, w.label))
     rowTokens = activeTokens.filter(t => filteredWallets.some(w => (w.balances[t] || 0) > 0))
     showEntityColumn = true
   } else if (key.startsWith('entity:')) {
