@@ -1,23 +1,26 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { wallet, balanceSnapshot } from '@/lib/db/schema'
+import { wallet, balanceSnapshot, token } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { logAudit } from '@/lib/audit'
 
 /**
  * GET /api/admin/seed-manual-balances
  *
- * One-shot admin endpoint that upserts the manually-tracked off-chain
- * positions (Strategic Reserve - Morpho, Altitude Treasury) into the
- * Overview Stablecoins view.
+ * One-shot admin endpoint that upserts manually-tracked off-chain positions
+ * (Morpho ETH, Altitude Solana, Mercury bank accounts) so they surface in
+ * the Overview cards. Two mechanisms working together:
  *
- * These wallets use chain='MANUAL' — the balance cron (lib/cron/fetch-balances.ts:34)
- * dispatches only SOL/ETH/BTC, so 'MANUAL' rows are never overwritten.
- * The Overview picks them up because lib/overview.ts:shouldIncludeInOverview
- * only filters on type='internal' AND !hiddenFromFinance.
+ *   1. Wallets use chain='MANUAL' — the balance cron dispatches only
+ *      SOL/ETH/BTC (lib/cron/fetch-balances.ts:34), so 'MANUAL' rows are
+ *      never overwritten by scheduled fetches.
+ *   2. Bank accounts use token='USD'. The USD token row is upserted here
+ *      so the balance_snapshot FK holds. USD is in STABLE_TOKENS (1:1
+ *      pricing) but also in BANK_TOKENS (UI puts it in its own "Bank" card
+ *      instead of aggregating into "Stablecoins").
  *
  * Idempotent — safe to re-run. Updates label + amount to whatever is
- * hardcoded here; edit this file and re-deploy to change values.
+ * hardcoded here; edit the POSITIONS array + re-deploy to change values.
  *
  * Auth: admin:manage_data. Just open the URL as admin — that's it.
  */
@@ -27,11 +30,12 @@ type ManualPosition = {
   label: string
   entityId: string          // lowercase — 'opco' / 'foundation' / 'zagreus'
   accountCode: string | null
-  token: string             // must exist in app.token
+  token: string             // 'USDC' | 'USD' (bank) — must exist in app.token
   amount: number
 }
 
 const POSITIONS: ManualPosition[] = [
+  // === Stablecoins bucket (on-chain positions we track manually) ===
   {
     address: '0x54B3Ac176ed8c57367B7B7528600D4CFFbbE0De3',
     label: 'Strategic Reserve - Morpho',
@@ -46,7 +50,33 @@ const POSITIONS: ManualPosition[] = [
     entityId: 'opco',
     accountCode: null,
     token: 'USDC',
-    amount: 5_260_195.93,
+    amount: 5_327_509.32,        // 5,260,195.93 + 67,313.39 (on-chain wallet USDC)
+  },
+
+  // === Bank bucket (Mercury USD accounts) ===
+  {
+    address: 'mercury-foundation-checking-2592',
+    label: 'Mercury Foundation Checking 2592',
+    entityId: 'foundation',
+    accountCode: null,
+    token: 'USD',
+    amount: 44_908.15,
+  },
+  {
+    address: 'mercury-zagreus-checking-0627',
+    label: 'Mercury Zagreus Checking 0627',
+    entityId: 'zagreus',
+    accountCode: null,
+    token: 'USD',
+    amount: 64_467.77,
+  },
+  {
+    address: 'mercury-zagreus-treasury',
+    label: 'Mercury Zagreus Treasury',
+    entityId: 'zagreus',
+    accountCode: null,
+    token: 'USD',
+    amount: 449_008.21,
   },
 ]
 
@@ -57,6 +87,19 @@ export async function GET(req: Request) {
   const today = new Date().toISOString().slice(0, 10)
   const now = new Date()
   const seeded: Array<{ address: string; label: string; token: string; amount: number }> = []
+
+  // Ensure every token symbol referenced below exists in app.token before
+  // we try to insert balance_snapshot rows (FK constraint). USD is the new
+  // one — the SOL-side stablecoins (USDC etc.) already have rows from seed.
+  const tokensNeeded = Array.from(new Set(POSITIONS.map(p => p.token)))
+  for (const sym of tokensNeeded) {
+    await db.insert(token).values({
+      symbol: sym,
+      name: sym === 'USD' ? 'US Dollar (Bank)' : sym,
+      decimals: sym === 'USD' ? 2 : 6,
+      coinId: null,
+    }).onConflictDoNothing({ target: token.symbol })
+  }
 
   for (const p of POSITIONS) {
     await db.insert(wallet).values({

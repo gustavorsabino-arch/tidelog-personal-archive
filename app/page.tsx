@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
-import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS, STABLE_TOKENS } from '@/lib/constants'
+import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS, STABLE_TOKENS, BANK_TOKENS } from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtPrice, pctOf } from '@/lib/format'
 import { OverviewTrendModal } from '@/components/overview-trend-modal'
 import { PriceWithSource } from '@/components/price-with-source'
@@ -65,9 +65,13 @@ export default function OverviewPage() {
   const grandTotal = data?.grandTotalUSD || 0
 
   const activeTokens = getSortedActiveTokens(tokenTotals)
-  const stableTokens = activeTokens.filter(token => STABLE_TOKENS.has(token))
+  // Bank tokens are BANK_TOKENS (subset of STABLE_TOKENS by design). They
+  // render in their own "Bank" card so they don't inflate Stablecoins.
+  const bankTokens = activeTokens.filter(token => BANK_TOKENS.has(token))
+  const stableTokens = activeTokens.filter(token => STABLE_TOKENS.has(token) && !BANK_TOKENS.has(token))
   const featuredTokens = activeTokens.filter(token => !STABLE_TOKENS.has(token) && (tokenTotals[token]?.usd || 0) > 0).slice(0, 3)
   const stablesUSD = stableTokens.reduce((sum, token) => sum + (tokenTotals[token]?.usd || 0), 0)
+  const bankUSD = bankTokens.reduce((sum, token) => sum + (tokenTotals[token]?.usd || 0), 0)
   const stableSummary = stableTokens
     .map(token => `${token} ${fmtNum(tokenTotals[token]?.amount || 0, 0)}`)
     .join(' · ')
@@ -191,6 +195,26 @@ export default function OverviewPage() {
             </div>
           </button>
         </div>
+
+        {/* Bank — off-chain USD (Mercury etc). Renders only when a balance exists. */}
+        {bankUSD > 0 && (
+          <div className="card" style={{ borderTop: `3px solid ${TOKEN_COLORS.USD}` }}>
+            <button
+              type="button"
+              className="card-clickable"
+              onClick={() => toggleDrilldown('token:USD')}
+            >
+              <div className="card-label">Bank <span style={{ color: TOKEN_COLORS.USD, fontSize: '0.6rem' }}>▾</span></div>
+              <div className="card-value">{fmtUSD(bankUSD)}</div>
+              <div className="card-sub">
+                {pct(bankUSD)}% · USD {fmtNum(tokenTotals.USD?.amount || 0, 0)}
+              </div>
+              <div className="card-bar">
+                <div className="card-bar-fill" style={{ width: `${pct(bankUSD)}%`, background: TOKEN_COLORS.USD }} />
+              </div>
+            </button>
+          </div>
+        )}
 
         {featuredTokens.map(token => {
           const usd = tokenTotals[token]?.usd || 0

@@ -8,7 +8,15 @@ export const BUDGET_ENTITIES = ['Opco', 'Foundation', 'Zagreus'] as const
 
 export const FOCUS_TOKENS = ['SOL', 'ORCA', 'USDC', 'USDT', 'PYUSD', 'USDG'] as const
 
-export const STABLE_TOKENS = new Set(['USDC', 'USDT', 'PYUSD', 'USDG'])
+// STABLE_TOKENS drives the 1:1 USD valuation in getTokenUsdValue. USD (bank
+// cash) is included so bank balances price as $1 without needing a Birdeye
+// entry.
+export const STABLE_TOKENS = new Set(['USDC', 'USDT', 'PYUSD', 'USDG', 'USD'])
+
+// BANK_TOKENS is a UI-only category: the Overview renders these in a
+// separate "Bank" card instead of aggregating them into "Stablecoins".
+// A token in BANK_TOKENS should also be in STABLE_TOKENS (for 1:1 pricing).
+export const BANK_TOKENS = new Set(['USD'])
 
 export const TOKEN_COLORS: Record<string, string> = {
   SOL: '#9945ff',
@@ -18,6 +26,7 @@ export const TOKEN_COLORS: Record<string, string> = {
   PYUSD: '#0052FF',
   USDG: '#1a365d',
   ETH: '#627EEA',
+  USD: '#4C9F70',
   default: '#6b7a8d',
 }
 
