@@ -26,7 +26,10 @@ export async function proxy(request: NextRequest) {
   strippedHeaders.delete('x-user-role')
   strippedHeaders.delete('x-user-departments')
 
-  if (pathname.startsWith('/api/cron/')) {
+  if (pathname.startsWith('/api/auth/')) {
+    return NextResponse.next({ request: { headers: strippedHeaders } })
+  }
+  if (pathname === '/api/qb/callback') {
     return NextResponse.next({ request: { headers: strippedHeaders } })
   }
   if (pathname.startsWith('/api/auth/')) {
