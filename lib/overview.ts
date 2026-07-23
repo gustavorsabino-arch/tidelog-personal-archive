@@ -1,4 +1,7 @@
-import { ENTITY_COLORS, STABLE_TOKENS, TOKEN_COLORS } from '@/lib/constants'
+import {
+  ENTITY_COLORS, STABLE_TOKENS, TOKEN_COLORS,
+  isBuybackWallet, isOwnedByTeamWallet,
+} from '@/lib/constants'
 import type {
   BalanceSnapshot,
   Prices,
@@ -146,6 +149,15 @@ export function buildOverviewDrilldown(
     filteredWallets = wallets.filter(wallet => (wallet.balances[token] || 0) > 0)
     title = `${token} — All Entities`
     accentColor = TOKEN_COLORS[token] || TOKEN_COLORS.default
+    showEntityColumn = true
+  } else if (key.startsWith('purpose:')) {
+    const purpose = key.slice('purpose:'.length)
+    let predicate: (label: string) => boolean = () => false
+    if (purpose === 'team')         { predicate = isOwnedByTeamWallet; title = 'Owned by the Team'; accentColor = '#4C9F70' }
+    else if (purpose === 'buyback') { predicate = isBuybackWallet;     title = 'BuyBack';           accentColor = '#D97706' }
+    else return null
+    filteredWallets = wallets.filter(w => predicate(w.label))
+    rowTokens = activeTokens.filter(t => filteredWallets.some(w => (w.balances[t] || 0) > 0))
     showEntityColumn = true
   } else if (key.startsWith('entity:')) {
     const [, entity, scope, scopeToken] = key.split(':')

@@ -3,7 +3,10 @@ import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
-import { ENTITIES, ENTITY_COLORS, TOKEN_COLORS, STABLE_TOKENS, BANK_TOKENS } from '@/lib/constants'
+import {
+  ENTITIES, ENTITY_COLORS, TOKEN_COLORS, STABLE_TOKENS, BANK_TOKENS,
+  isBuybackWallet, isOwnedByTeamWallet,
+} from '@/lib/constants'
 import { fmtUSD, fmtNum, fmtPrice, pctOf } from '@/lib/format'
 import { OverviewTrendModal } from '@/components/overview-trend-modal'
 import { PriceWithSource } from '@/components/price-with-source'
@@ -72,6 +75,15 @@ export default function OverviewPage() {
   const featuredTokens = activeTokens.filter(token => !STABLE_TOKENS.has(token) && (tokenTotals[token]?.usd || 0) > 0).slice(0, 3)
   const stablesUSD = stableTokens.reduce((sum, token) => sum + (tokenTotals[token]?.usd || 0), 0)
   const bankUSD = bankTokens.reduce((sum, token) => sum + (tokenTotals[token]?.usd || 0), 0)
+
+  // "By Purpose" segmentation — team vs buyback.
+  // Fully Allocated wallets (Bug Bounty / Council / Pool Ops etc) are
+  // excluded from both cards by design — they don't render in this section
+  // at all, though they still count in the top-line totals + By Entity.
+  const teamWallets = wallets.filter(w => isOwnedByTeamWallet(w.label))
+  const buybackWallets = wallets.filter(w => isBuybackWallet(w.label))
+  const teamUSD = teamWallets.reduce((sum, w) => sum + w.totalUSD, 0)
+  const buybackUSD = buybackWallets.reduce((sum, w) => sum + w.totalUSD, 0)
   const stableSummary = stableTokens
     .map(token => `${token} ${fmtNum(tokenTotals[token]?.amount || 0, 0)}`)
     .join(' · ')
@@ -366,6 +378,43 @@ export default function OverviewPage() {
             </div>
           )
         })}
+      </div>
+
+      {/* By Purpose — team-owned vs buyback-earmarked (Fully Allocated hidden) */}
+      <div style={{
+        marginBottom: 8, fontFamily: 'var(--mono)', fontSize: '0.62rem',
+        textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted)',
+      }}>
+        By Purpose
+      </div>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+        gap: 12, marginBottom: 24,
+      }}>
+        <div className="card" style={{ borderTop: '3px solid #4C9F70' }}>
+          <button type="button" className="card-clickable" onClick={() => toggleDrilldown('purpose:team')}>
+            <div className="card-label">Owned by the Team <span style={{ color: '#4C9F70', fontSize: '0.6rem' }}>▾</span></div>
+            <div className="card-value">{fmtUSD(teamUSD)}</div>
+            <div className="card-sub">
+              {pct(teamUSD)}% · {teamWallets.length} wallets
+            </div>
+            <div className="card-bar">
+              <div className="card-bar-fill" style={{ width: `${pct(teamUSD)}%`, background: '#4C9F70' }} />
+            </div>
+          </button>
+        </div>
+        <div className="card" style={{ borderTop: '3px solid #D97706' }}>
+          <button type="button" className="card-clickable" onClick={() => toggleDrilldown('purpose:buyback')}>
+            <div className="card-label">BuyBack <span style={{ color: '#D97706', fontSize: '0.6rem' }}>▾</span></div>
+            <div className="card-value">{fmtUSD(buybackUSD)}</div>
+            <div className="card-sub">
+              {pct(buybackUSD)}% · {buybackWallets.length} wallets
+            </div>
+            <div className="card-bar">
+              <div className="card-bar-fill" style={{ width: `${pct(buybackUSD)}%`, background: '#D97706' }} />
+            </div>
+          </button>
+        </div>
       </div>
 
       {drilldown && (

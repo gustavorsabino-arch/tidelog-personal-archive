@@ -72,3 +72,50 @@ export const BUDGET_DEPTS = [
   'General', 'Ops', 'Finance', 'Legal',
   'Product', 'Engineering', 'Marketing', 'Business Development',
 ] as const
+
+// Wallets earmarked for the buyback programme (ORCA Buyback + Market Maker
+// counterparties). Used by the Overview "By Purpose" section to split
+// wallets into "Owned by the Team" vs "BuyBack". Match is exact against
+// wallet.label — if Kate renames one of these in /wallets, update here.
+export const BUYBACK_WALLET_LABELS = new Set<string>([
+  'ORCA Buyback - FlowDesk',
+  'ORCA Buyback - Team',
+  'ORCA Buyback (Intermediary - Wintermute)',
+  'ORCA Buyback 1',
+  'ORCA Buyback 2',
+  'ORCA Buyback 3',
+  'ORCA Buyback 4',
+  'ORCA Buyback 5',
+  'ORCA Buyback 6',
+  'ORCA Buyback 7',
+  'ORCA Buyback 8',
+  'MM - Wintermute',
+  'MM - Vamient',
+  'MM - Velar',
+  'MM - Keyrock',
+])
+
+export function isBuybackWallet(label: string): boolean {
+  return BUYBACK_WALLET_LABELS.has(label)
+}
+
+// Wallets in the "Fully Allocated" bucket (funds committed to specific
+// mandates — Bug Bounty pool, Council allocation, etc). Excluded from
+// "Owned by the Team" so the team-owned figure reflects only free/liquid
+// treasury.
+export const FULLY_ALLOCATED_WALLET_LABELS = new Set<string>([
+  'Bug Bounty',
+  'Foundation - Pool Ops',
+  'Orca Council',
+  'Pool Ops',
+  'Climate Fund',
+])
+
+export function isFullyAllocatedWallet(label: string): boolean {
+  return FULLY_ALLOCATED_WALLET_LABELS.has(label)
+}
+
+// A wallet is "Owned by the Team" iff it is neither buyback nor fully-allocated.
+export function isOwnedByTeamWallet(label: string): boolean {
+  return !isBuybackWallet(label) && !isFullyAllocatedWallet(label)
+}
