@@ -152,7 +152,7 @@ export function buildOverviewDrilldown(
     showEntityColumn = true
   } else if (key.startsWith('purpose:')) {
     const purpose = key.slice('purpose:'.length)
-    let predicate: (label: string) => boolean = () => false
+    let predicate: (address: string, label?: string | null) => boolean = () => false
     if (purpose === 'team')         { predicate = isOwnedByTeamWallet; title = 'Owned by the Team'; accentColor = '#4C9F70' }
     else if (purpose === 'buyback') { predicate = isBuybackWallet;     title = 'BuyBack';           accentColor = '#D97706' }
     else return null
