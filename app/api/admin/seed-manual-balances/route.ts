@@ -52,6 +52,16 @@ const POSITIONS: ManualPosition[] = [
     token: 'USDC',
     amount: 5_327_509.32,        // 5,260,195.93 + 67,313.39 (on-chain wallet USDC)
   },
+  {
+    // Synthetic address — user didn't supply a real Solana one for the
+    // Zagreus Altitude position. Swap for a real address later if needed.
+    address: 'altitude-treasury-zagreus',
+    label: 'Altitude Treasury',
+    entityId: 'zagreus',
+    accountCode: null,
+    token: 'USDC',
+    amount: 5_052_444.84,
+  },
 
   // === Bank bucket (Mercury USD accounts) ===
   {
