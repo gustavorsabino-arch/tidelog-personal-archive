@@ -95,8 +95,36 @@ export const BUYBACK_WALLET_LABELS = new Set<string>([
   'MM - Keyrock',
 ])
 
+// Normalize a wallet label for tolerant comparison — collapses whitespace
+// and lowercases. Handles typos/spacing drift between the image Kate sent
+// and what's actually in the DB (e.g. "ORCA Buyback  1" vs "ORCA Buyback 1").
+function normalizeLabel(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+const BUYBACK_LABELS_NORMALIZED = new Set(
+  Array.from(BUYBACK_WALLET_LABELS).map(normalizeLabel),
+)
+
+// Names of the MM-partner counterparties that live in the buyback bucket.
+// Match uses CONTAINS on the normalized label so spacing/prefix drift is
+// tolerated ("MM - Wintermute" / "MM-Wintermute" / "Mm Wintermute" all pass).
+const BUYBACK_MM_NAMES = ['wintermute', 'vamient', 'velar', 'keyrock'] as const
+
 export function isBuybackWallet(label: string): boolean {
-  return BUYBACK_WALLET_LABELS.has(label)
+  if (!label) return false
+  const n = normalizeLabel(label)
+  // Exact (normalized) match against the curated 15-label list.
+  if (BUYBACK_LABELS_NORMALIZED.has(n)) return true
+  // Broad match on 'buyback' anywhere in the label — catches any spacing
+  // / prefix variant Kate uses ('ORCABuyback 9', 'orca-buyback-team', etc).
+  if (n.includes('buyback')) return true
+  // MM-partner wallets: must contain the counterparty name AND have an 'mm'
+  // marker (prefix or ' mm ' word) so we don't falsely match unrelated
+  // wallets that happen to include the counterparty name.
+  const hasMmMarker = n.startsWith('mm ') || n.startsWith('mm-') || n.startsWith('mm:') || / mm[- ]/.test(` ${n}`)
+  if (hasMmMarker && BUYBACK_MM_NAMES.some(name => n.includes(name))) return true
+  return false
 }
 
 // Wallets in the "Fully Allocated" bucket (funds committed to specific
@@ -111,8 +139,19 @@ export const FULLY_ALLOCATED_WALLET_LABELS = new Set<string>([
   'Climate Fund',
 ])
 
+const FULLY_ALLOCATED_LABELS_NORMALIZED = new Set(
+  Array.from(FULLY_ALLOCATED_WALLET_LABELS).map(normalizeLabel),
+)
+
 export function isFullyAllocatedWallet(label: string): boolean {
-  return FULLY_ALLOCATED_WALLET_LABELS.has(label)
+  if (!label) return false
+  const n = normalizeLabel(label)
+  // CONTAINS match — catches suffix drift like "Climate Fund - OpCo" /
+  // "Bug Bounty (Foundation)" that would miss an exact-string check.
+  for (const allocated of FULLY_ALLOCATED_LABELS_NORMALIZED) {
+    if (n.includes(allocated)) return true
+  }
+  return false
 }
 
 // A wallet is "Owned by the Team" iff it is neither buyback nor fully-allocated.
