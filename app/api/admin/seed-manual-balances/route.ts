@@ -46,7 +46,7 @@ const POSITIONS: ManualPosition[] = [
   },
   {
     address: '2s4hhgQGPuBsEnvrVtT3n2PYXSvHFWXgmTK1sTM9Rqas',
-    label: 'Altitude Treasury',
+    label: 'Altitude OpCo - Earn Vault',
     entityId: 'opco',
     accountCode: null,
     token: 'USDC',
@@ -56,7 +56,7 @@ const POSITIONS: ManualPosition[] = [
     // Synthetic address — user didn't supply a real Solana one for the
     // Zagreus Altitude position. Swap for a real address later if needed.
     address: 'altitude-treasury-zagreus',
-    label: 'Altitude Treasury',
+    label: 'Altitude Zagreus - Earn Vault',
     entityId: 'zagreus',
     accountCode: null,
     token: 'USDC',
