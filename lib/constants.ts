@@ -73,88 +73,60 @@ export const BUDGET_DEPTS = [
   'Product', 'Engineering', 'Marketing', 'Business Development',
 ] as const
 
-// Wallets earmarked for the buyback programme (ORCA Buyback + Market Maker
-// counterparties). Used by the Overview "By Purpose" section to split
-// wallets into "Owned by the Team" vs "BuyBack". Match is exact against
-// wallet.label — if Kate renames one of these in /wallets, update here.
-export const BUYBACK_WALLET_LABELS = new Set<string>([
-  'ORCA Buyback - FlowDesk',
-  'ORCA Buyback - Team',
-  'ORCA Buyback (Intermediary - Wintermute)',
-  'ORCA Buyback 1',
-  'ORCA Buyback 2',
-  'ORCA Buyback 3',
-  'ORCA Buyback 4',
-  'ORCA Buyback 5',
-  'ORCA Buyback 6',
-  'ORCA Buyback 7',
-  'ORCA Buyback 8',
-  'MM - Wintermute',
-  'MM - Vamient',
-  'MM - Velar',
-  'MM - Keyrock',
-])
+// Address-based classification for the Overview "By Purpose" section.
+// Labels can drift ('ORCA Buyback 1' vs 'Orca Buyback 1' vs 'ORCA Buyback-1'
+// etc), addresses can't — Kate's photo shows each wallet's address prefix
+// and suffix, so we match on those. `startsWith(prefix) && endsWith(suffix)`
+// on a Solana base58 address is effectively unique.
+//
+// Source of truth: screenshot from Kate (2026-07). If a wallet gets rotated
+// (new address), update the entry here.
 
-// Normalize a wallet label for tolerant comparison — collapses whitespace
-// and lowercases. Handles typos/spacing drift between the image Kate sent
-// and what's actually in the DB (e.g. "ORCA Buyback  1" vs "ORCA Buyback 1").
-function normalizeLabel(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, ' ')
-}
+type AddressPattern = { prefix: string; suffix: string; label: string }
 
-const BUYBACK_LABELS_NORMALIZED = new Set(
-  Array.from(BUYBACK_WALLET_LABELS).map(normalizeLabel),
-)
+const BUYBACK_ADDRESS_PATTERNS: AddressPattern[] = [
+  { prefix: '2qxLG1', suffix: 'L8i8ar', label: 'ORCA Buyback - FlowDesk' },
+  { prefix: 'BTUWJU', suffix: 'eFwz3Q', label: 'ORCA Buyback - Team' },
+  { prefix: '8dRyge', suffix: 'oXZMda', label: 'ORCA Buyback (Intermediary - Wintermute)' },
+  { prefix: 'G2v2mb', suffix: '4qRSYH', label: 'ORCA Buyback 1' },
+  { prefix: '4V6tiy', suffix: '4JgwRJ', label: 'ORCA Buyback 2' },
+  { prefix: '7gPQyA', suffix: '1cpNQu', label: 'ORCA Buyback 3' },
+  { prefix: 'FHmejd', suffix: 'tGf8K9', label: 'ORCA Buyback 4' },
+  { prefix: 'HebdVC', suffix: 'rD7147', label: 'ORCA Buyback 5' },
+  { prefix: '3JJ55z', suffix: 'PuYiwf', label: 'ORCA Buyback 6' },
+  { prefix: 'FMJiNp', suffix: 'ChU1bb', label: 'ORCA Buyback 7' },
+  { prefix: '43SAPB', suffix: 'wnn5bi', label: 'ORCA Buyback 8' },
+  { prefix: 'B7Azio', suffix: 'dEdQGz', label: 'MM - Wintermute' },
+  { prefix: '6FmYt5', suffix: 'zFMQ9F', label: 'MM - Vamient' },
+  { prefix: 'FSXJcr', suffix: 'HyWZnT', label: 'MM - Velar' },
+  { prefix: '9XG4zF', suffix: 'Pch1Sq', label: 'MM - Keyrock' },
+]
 
-// Names of the MM-partner counterparties that live in the buyback bucket.
-// Match uses CONTAINS on the normalized label so spacing/prefix drift is
-// tolerated ("MM - Wintermute" / "MM-Wintermute" / "Mm Wintermute" all pass).
-const BUYBACK_MM_NAMES = ['wintermute', 'vamient', 'velar', 'keyrock'] as const
+const FULLY_ALLOCATED_ADDRESS_PATTERNS: AddressPattern[] = [
+  { prefix: '8TMfen', suffix: 'chX1cE', label: 'Bug Bounty' },
+  { prefix: 'FNwKaq', suffix: 'Jm6f3d', label: 'Foundation - Pool Ops' },
+  { prefix: '5emFju', suffix: 'Quc7Ep', label: 'Orca Council' },
+  { prefix: '754rCJ', suffix: 'w7G7rJ', label: 'Pool Ops' },
+  { prefix: 'DrhE25', suffix: '3qxh9X', label: 'Climate Fund' },
+]
 
-export function isBuybackWallet(label: string): boolean {
-  if (!label) return false
-  const n = normalizeLabel(label)
-  // Exact (normalized) match against the curated 15-label list.
-  if (BUYBACK_LABELS_NORMALIZED.has(n)) return true
-  // Broad match on 'buyback' anywhere in the label — catches any spacing
-  // / prefix variant Kate uses ('ORCABuyback 9', 'orca-buyback-team', etc).
-  if (n.includes('buyback')) return true
-  // MM-partner wallets: must contain the counterparty name AND have an 'mm'
-  // marker (prefix or ' mm ' word) so we don't falsely match unrelated
-  // wallets that happen to include the counterparty name.
-  const hasMmMarker = n.startsWith('mm ') || n.startsWith('mm-') || n.startsWith('mm:') || / mm[- ]/.test(` ${n}`)
-  if (hasMmMarker && BUYBACK_MM_NAMES.some(name => n.includes(name))) return true
-  return false
-}
-
-// Wallets in the "Fully Allocated" bucket (funds committed to specific
-// mandates — Bug Bounty pool, Council allocation, etc). Excluded from
-// "Owned by the Team" so the team-owned figure reflects only free/liquid
-// treasury.
-export const FULLY_ALLOCATED_WALLET_LABELS = new Set<string>([
-  'Bug Bounty',
-  'Foundation - Pool Ops',
-  'Orca Council',
-  'Pool Ops',
-  'Climate Fund',
-])
-
-const FULLY_ALLOCATED_LABELS_NORMALIZED = new Set(
-  Array.from(FULLY_ALLOCATED_WALLET_LABELS).map(normalizeLabel),
-)
-
-export function isFullyAllocatedWallet(label: string): boolean {
-  if (!label) return false
-  const n = normalizeLabel(label)
-  // CONTAINS match — catches suffix drift like "Climate Fund - OpCo" /
-  // "Bug Bounty (Foundation)" that would miss an exact-string check.
-  for (const allocated of FULLY_ALLOCATED_LABELS_NORMALIZED) {
-    if (n.includes(allocated)) return true
+function matchesAnyPattern(address: string, patterns: AddressPattern[]): boolean {
+  if (!address) return false
+  for (const p of patterns) {
+    if (address.startsWith(p.prefix) && address.endsWith(p.suffix)) return true
   }
   return false
 }
 
+export function isBuybackWallet(address: string): boolean {
+  return matchesAnyPattern(address, BUYBACK_ADDRESS_PATTERNS)
+}
+
+export function isFullyAllocatedWallet(address: string): boolean {
+  return matchesAnyPattern(address, FULLY_ALLOCATED_ADDRESS_PATTERNS)
+}
+
 // A wallet is "Owned by the Team" iff it is neither buyback nor fully-allocated.
-export function isOwnedByTeamWallet(label: string): boolean {
-  return !isBuybackWallet(label) && !isFullyAllocatedWallet(label)
+export function isOwnedByTeamWallet(address: string): boolean {
+  return !isBuybackWallet(address) && !isFullyAllocatedWallet(address)
 }

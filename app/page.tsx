@@ -80,8 +80,8 @@ export default function OverviewPage() {
   // Fully Allocated wallets (Bug Bounty / Council / Pool Ops etc) are
   // excluded from both cards by design — they don't render in this section
   // at all, though they still count in the top-line totals + By Entity.
-  const teamWallets = wallets.filter(w => isOwnedByTeamWallet(w.label))
-  const buybackWallets = wallets.filter(w => isBuybackWallet(w.label))
+  const teamWallets = wallets.filter(w => isOwnedByTeamWallet(w.address))
+  const buybackWallets = wallets.filter(w => isBuybackWallet(w.address))
   const teamUSD = teamWallets.reduce((sum, w) => sum + w.totalUSD, 0)
   const buybackUSD = buybackWallets.reduce((sum, w) => sum + w.totalUSD, 0)
   const stableSummary = stableTokens
