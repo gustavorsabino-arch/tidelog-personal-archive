@@ -940,7 +940,19 @@ export default function BudgetPage() {
   }
 
   useEffect(() => {
-    if (!canFetchOverview || !activeActualRequest || activeActualsLoaded || activeActualsLoading) return
+    // canFetchOverview is derived from qbStatuses, which /api/budget/bootstrap
+    // intentionally returns as null for non-admins (privacy — don't leak realm
+    // ids / refresh metadata). That makes the guard reject viewer requests
+    // even for their own department, so actuals never load and every cell
+    // renders '—'. Bypass the guard when the request is department-scoped and
+    // the user is not an admin: the /api/budget/actuals/department endpoint
+    // enforces its own per-department access check (requireBudgetAccess with
+    // { department }), so a viewer scoped to ['Legal'] can only pull Legal
+    // data and any other department request is 403'd server-side. Admin path
+    // is unchanged (canFetchOverview is always true for them, so skipQbGate
+    // is irrelevant). Overview and headcount kinds still respect the guard.
+    const skipQbGate = activeActualRequest?.kind === 'department' && access?.role !== 'admin'
+    if ((!canFetchOverview && !skipQbGate) || !activeActualRequest || activeActualsLoaded || activeActualsLoading) return
     if (attemptedAutoActualKeysRef.current.has(activeActualRequest.requestKey)) return
 
     const timeoutId = setTimeout(() => {
@@ -966,6 +978,7 @@ export default function BudgetPage() {
     activeActualsLoaded,
     activeActualsLoading,
     canFetchOverview,
+    access?.role,
   ])
 
   function openQbConnect(entity: QboConnectionStatus['entity']) {
