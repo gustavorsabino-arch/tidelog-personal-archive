@@ -1081,25 +1081,10 @@ export default function BudgetPage() {
         setSearchDrillCache((prev) => ({ ...prev, [key]: drill }))
       })
       .catch((err) => {
-        // Non-fatal — search still works with static entries. Log for triage.
+        // Non-fatal — search still works with static entries (line items,
+        // categories, departments, team). The attemptedRef above already
+        // prevents retry for the same key; no need to cache a placeholder.
         console.warn('[budget/search] tx fetch failed', err)
-        // Cache a synthetic empty result so we don't re-try this key.
-        setSearchDrillCache((prev) => ({
-          ...prev,
-          [key]: {
-            source: 'quickbooks',
-            year: budgetView.year,
-            view: budgetView,
-            department: null,
-            fetchedAt: new Date().toISOString(),
-            mappingSource: 'db',
-            lineKeys: [],
-            totalUsd: 0,
-            unreconciledTotalUsd: 0,
-            accounts: [],
-            transactions: [],
-          } as BudgetActualDrillState,
-        }))
       })
       .finally(() => setSearchTxLoading(false))
   }, [searchOpen, searchTxCacheKey, searchDrillCache, budgetView, overviewSelectedDepartment, activeDept])
