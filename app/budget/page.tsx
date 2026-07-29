@@ -1044,7 +1044,7 @@ export default function BudgetPage() {
     if (hit.navigate.tab) setActiveTab(hit.navigate.tab)
     if (hit.navigate.department !== undefined) setActiveDept(hit.navigate.department)
     if (hit.navigate.month) {
-      setBudgetView(prev => ({ ...prev, mode: 'period', month: hit.navigate.month! }))
+      setBudgetView(prev => ({ ...prev, mode: 'month', month: hit.navigate.month! }))
     }
     setSearchInput('')
     setSearchQuery('')
