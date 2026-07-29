@@ -14,6 +14,10 @@ type BudgetActualDrillModalProps = {
   drill: BudgetActualDrillState | null
   isAdmin: boolean
   onClose: () => void
+  // Optional export handler. When provided (currently the search-aggregated
+  // drill) an "Export" button appears next to the close button and calls it.
+  onExport?: () => void
+  exportLabel?: string
 }
 
 function formatSignedUsd(value: number): string {
@@ -29,6 +33,8 @@ export function BudgetActualDrillModal({
   drill,
   isAdmin,
   onClose,
+  onExport,
+  exportLabel = 'Export',
 }: BudgetActualDrillModalProps) {
   useEffect(() => {
     if (!open) return
@@ -65,7 +71,19 @@ export function BudgetActualDrillModal({
               </span>
             ) : null}
           </div>
-          <button className="modal-close" onClick={onClose} aria-label="Close actual drill modal">×</button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {onExport && !loading && !error && drill && drill.transactions.length > 0 ? (
+              <button
+                className="btn-secondary"
+                onClick={onExport}
+                style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                title="Download these transactions as .xlsx"
+              >
+                {exportLabel}
+              </button>
+            ) : null}
+            <button className="modal-close" onClick={onClose} aria-label="Close actual drill modal">×</button>
+          </div>
         </div>
 
         <div className="modal-body">

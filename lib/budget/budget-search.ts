@@ -190,7 +190,12 @@ export function buildBudgetSearchIndex(input: BudgetSearchIndexInput): BudgetSea
 // -------- QUERY --------
 
 const MAX_RESULTS = 20
-const FUZZY_THRESHOLD = 0.6
+// Tightened from 0.6 → 0.3. Levenshtein normalized above ~0.35 drags in too
+// many false positives (e.g. 'fireblocks' would fuzzy-match short unrelated
+// labels). Fuzzy is also disabled entirely for very short queries where
+// distance means nothing meaningful.
+const FUZZY_THRESHOLD = 0.3
+const MIN_FUZZY_QUERY_LEN = 3
 
 export function searchBudget(
   index: BudgetSearchIndex,
@@ -225,14 +230,15 @@ export function searchBudget(
         if (!best || s < best.score) best = { score: s, isFuzzy: false }
         continue
       }
-      // Tier 4 — Levenshtein normalized.
-      const dist = levenshtein(q, t)
-      const norm = dist / Math.max(q.length, t.length)
-      if (norm <= FUZZY_THRESHOLD) {
-        // Fuzzy tier — never score better than 0.3 so pure fuzzy sits below
-        // clean substring matches from other entries.
-        const s = 0.3 + norm * 0.4
-        if (!best || s < best.score) best = { score: s, isFuzzy: true }
+      // Tier 4 — Levenshtein normalized. Disabled for very short queries
+      // (distance means little there) and gated by the tight threshold.
+      if (q.length >= MIN_FUZZY_QUERY_LEN) {
+        const dist = levenshtein(q, t)
+        const norm = dist / Math.max(q.length, t.length)
+        if (norm <= FUZZY_THRESHOLD) {
+          const s = 0.3 + norm * 0.4
+          if (!best || s < best.score) best = { score: s, isFuzzy: true }
+        }
       }
     }
 
@@ -284,8 +290,13 @@ export function filterTransactionsByQuery(
       const t = normalize(target)
       if (!t) continue
       if (t === q || t.startsWith(q) || t.includes(q)) { hit = true; break }
-      const dist = levenshtein(q, t)
-      if (dist / Math.max(q.length, t.length) <= FUZZY_THRESHOLD) { hit = true; break }
+      // Same tightened fuzzy rule as searchBudget — must have a substring
+      // OR a small enough Levenshtein distance on a query long enough for
+      // distance to be meaningful.
+      if (q.length >= MIN_FUZZY_QUERY_LEN) {
+        const dist = levenshtein(q, t)
+        if (dist / Math.max(q.length, t.length) <= FUZZY_THRESHOLD) { hit = true; break }
+      }
     }
     if (hit) out.push(tx)
   }

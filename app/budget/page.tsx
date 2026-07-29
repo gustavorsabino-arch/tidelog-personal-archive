@@ -103,7 +103,7 @@ import {
   buildBudgetDepartmentReport,
   buildBudgetOverviewReport,
 } from '@/lib/budget/reports'
-import { buildBudgetWorkbook, buildBudgetExportFilename } from '@/lib/budget/budget-export'
+import { buildBudgetWorkbook, buildBudgetExportFilename, buildTransactionsWorkbook } from '@/lib/budget/budget-export'
 import {
   buildBudgetSearchIndex,
   searchBudget,
@@ -1113,9 +1113,29 @@ export default function BudgetPage() {
             accounts: Array.from(accountByNum.values()),
           }
         })()
-        if (merged) {
-          setSearchDrillCache((prev) => ({ ...prev, [key]: merged }))
-        }
+        if (!merged) return
+        // Defense-in-depth: filter out any transaction whose
+        // normalizedDepartment is NOT one the current user is allowed to
+        // see. The server should already be doing this per-dept, but a
+        // GL account shared across depts occasionally leaks through
+        // (e.g. Fireblocks classed to Finance appearing when Legal is
+        // the requested scope). This client-side filter is the last
+        // gate before the transaction lands in the search cache.
+        const finalMerged = isAdmin
+          ? merged
+          : (() => {
+              const allowedSet = new Set(allowedDepartments as string[])
+              const filteredTxs = merged.transactions.filter(
+                (tx) => tx.normalizedDepartment != null && allowedSet.has(tx.normalizedDepartment),
+              )
+              const keptAcctNums = new Set(filteredTxs.map((t) => t.accountNumber))
+              return {
+                ...merged,
+                transactions: filteredTxs,
+                accounts: merged.accounts.filter((a) => keptAcctNums.has(a.accountNumber)),
+              }
+            })()
+        setSearchDrillCache((prev) => ({ ...prev, [key]: finalMerged }))
       })
       .finally(() => setSearchTxLoading(false))
   }, [searchOpen, searchTxCacheKey, searchDrillCache, budgetView.year, budgetView.entity, access?.role, allowedDepartments])
@@ -1303,10 +1323,17 @@ export default function BudgetPage() {
               availableMonthIndices={selectableMonthIndices}
               allowedEntities={allowedBudgetEntities}
             />
-            {/* Search + Export live to the right of the scope controls so
-                the operator sees "Entity / Year / Month / Department / Search /
-                Export" in one line. Both features work identically for admin
-                and viewer paths — access is enforced server-side. */}
+            {/* Export sits right next to the Department dropdown — Kate's
+                preference. Search stays on the far right so its dropdown has
+                room to grow without pushing filters around. */}
+            <button
+              className="btn-secondary"
+              onClick={handleExport}
+              disabled={!overviewReport}
+              title={overviewReport ? 'Download the current view as .xlsx' : 'Nothing to export yet'}
+            >
+              Export
+            </button>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
               <div ref={searchBoxRef} style={{ position: 'relative', minWidth: 240 }}>
                 <input
@@ -1437,14 +1464,6 @@ export default function BudgetPage() {
                   </div>
                 ) : null}
               </div>
-              <button
-                className="btn-secondary"
-                onClick={handleExport}
-                disabled={!overviewReport}
-                title={overviewReport ? 'Download the current view as .xlsx' : 'Nothing to export yet'}
-              >
-                Export
-              </button>
             </div>
           </div>
         </div>
@@ -1936,6 +1955,18 @@ export default function BudgetPage() {
           setActualDrill(null)
           setActualDrillError(null)
         }}
+        onExport={actualDrill && actualDrill.transactions.length > 0 ? () => {
+          // Slug the modal title into a filename. Trims quotes, collapses
+          // non-alphanumerics, caps length.
+          const slug = actualDrillTitle.toLowerCase()
+            .replace(/[""]/g, '')
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .slice(0, 60) || 'drill'
+          const filename = `tidelog-${slug}.xlsx`
+          const wb = buildTransactionsWorkbook(actualDrill.transactions, slug.slice(0, 30))
+          XLSX.writeFile(wb, filename)
+        } : undefined}
       />
       <BudgetRevenueMonthlyModal
         open={revenueModalOpen}

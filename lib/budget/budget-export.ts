@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx'
-import type { BudgetReportTableModel } from './types.ts'
+import type { BudgetActualDrillTransaction, BudgetReportTableModel } from './types.ts'
 
 /**
  * Serialize the current on-screen budget report to an .xlsx workbook.
@@ -111,6 +111,49 @@ export function buildBudgetExportFilename(opts: {
     .replace(/^-+|-+$/g, '')
     || 'annual'
   return `tidelog-budget-${deptSlug}-${opts.year}-${periodSlug}.xlsx`
+}
+
+/**
+ * Serialize a list of drill transactions to an .xlsx workbook. Used by the
+ * "Export" button inside BudgetActualDrillModal — Kate wants the aggregated
+ * search modal's results (all Gustavo txns across the year, all Fireblocks
+ * txns, etc) downloadable in one click.
+ */
+export function buildTransactionsWorkbook(
+  transactions: readonly BudgetActualDrillTransaction[],
+  sheetName: string,
+): XLSX.WorkBook {
+  const wb = XLSX.utils.book_new()
+  const header = [
+    'Date', 'Ref', 'Name', 'Memo', 'Type', 'Account', 'Class',
+    'Department', 'Entity', 'Amount USD',
+  ]
+  const rows: (string | number | null)[][] = transactions.map((t) => [
+    t.date || '',
+    t.documentNumber || '',
+    t.name || '',
+    t.memo || '',
+    t.transactionType || '',
+    t.accountName || t.accountNumber || '',
+    t.className || '',
+    t.normalizedDepartment || '',
+    t.entity || '',
+    t.amountUsd,
+  ])
+  const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
+  // Amount column (index 9 = col J) as currency.
+  for (let r = 1; r <= rows.length; r++) {
+    const ref = XLSX.utils.encode_cell({ c: 9, r })
+    const cell = ws[ref]
+    if (cell && typeof cell.v === 'number') cell.z = '$#,##0.00;-$#,##0.00'
+  }
+  ws['!cols'] = [
+    { wch: 12 }, { wch: 12 }, { wch: 24 }, { wch: 40 }, { wch: 22 },
+    { wch: 26 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 14 },
+  ]
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
+  XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(sheetName))
+  return wb
 }
 
 function slugify(s: string): string {
