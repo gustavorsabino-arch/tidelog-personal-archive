@@ -1102,7 +1102,22 @@ export default function BudgetPage() {
           const nonNull = results.filter((r): r is BudgetActualDrillState => r !== null)
           if (nonNull.length === 0) return null
           const first = nonNull[0]
-          const txs = nonNull.flatMap((r) => r.transactions ?? [])
+          // Dedupe transactions across per-department responses. Kate (Legal
+          // + BD) was seeing the same 'Digital Chamber' row twice because
+          // the drill endpoint returned it from BOTH dept-scoped calls
+          // (accrual accounts are shared across depts). Prefer tx.id as the
+          // key (server-issued, always unique); fall back to a synthetic key
+          // if id ever comes back empty.
+          const seen = new Set<string>()
+          const txs: BudgetActualDrillState['transactions'] = []
+          for (const r of nonNull) {
+            for (const t of (r.transactions ?? [])) {
+              const k = t.id || `${t.txnId ?? ''}:${t.accountNumber}:${t.date ?? ''}:${t.amountUsd}`
+              if (seen.has(k)) continue
+              seen.add(k)
+              txs.push(t)
+            }
+          }
           const accountByNum = new Map<string, typeof first.accounts[number]>()
           for (const r of nonNull) {
             for (const a of r.accounts ?? []) accountByNum.set(a.accountNumber, a)
@@ -1271,6 +1286,137 @@ export default function BudgetPage() {
           <div className="page-title">{budgetYear} Budget</div>
           <div className="page-sub">{budgetPageSub}</div>
         </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div ref={searchBoxRef} style={{ position: 'relative', minWidth: 240 }}>
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => { setSearchInput(e.target.value); setSearchOpen(true) }}
+              onFocus={() => setSearchOpen(true)}
+              placeholder="Search line items, people, txns…"
+              style={{
+                width: '100%',
+                padding: '6px 10px',
+                border: '1px solid var(--border, #ccc)',
+                borderRadius: 4,
+                background: 'var(--bg, #fff)',
+                color: 'var(--text, #000)',
+                fontSize: '0.85rem',
+                fontFamily: 'var(--mono)',
+              }}
+              aria-label="Search the budget"
+            />
+            {searchOpen && searchQuery ? (
+              <div
+                role="listbox"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  right: 0,
+                  minWidth: 320,
+                  maxWidth: 480,
+                  maxHeight: 360,
+                  overflowY: 'auto',
+                  background: 'var(--card, #fff)',
+                  color: 'var(--text, #000)',
+                  border: '1px solid var(--border, #ccc)',
+                  borderRadius: 4,
+                  boxShadow: '0 8px 24px rgba(0,0,0,.15)',
+                  zIndex: 50,
+                  fontFamily: 'var(--mono)',
+                  fontSize: '0.8rem',
+                }}
+              >
+                {searchHits.length === 0 ? (
+                  <div style={{ padding: 12, color: 'var(--muted, #888)' }}>
+                    {searchTxLoading
+                      ? `Loading transactions for the current view…`
+                      : `No matches for "${searchQuery}".`}
+                  </div>
+                ) : (
+                  <>
+                    {searchTxLoading ? (
+                      <div style={{
+                        padding: '6px 12px',
+                        borderBottom: '1px solid var(--border, #eee)',
+                        color: 'var(--muted, #888)',
+                        fontSize: '0.7rem',
+                      }}>
+                        Loading transactions for the current view…
+                      </div>
+                    ) : null}
+                    {searchAllFuzzy ? (
+                      <div style={{
+                        padding: '8px 12px',
+                        borderBottom: '1px solid var(--border, #eee)',
+                        color: '#d97706',
+                        fontSize: '0.72rem',
+                        letterSpacing: '.02em',
+                      }}>
+                        ⚠ No exact match — showing closest results
+                      </div>
+                    ) : null}
+                    {/* All-in-one button: opens the aggregated drill modal for
+                        every transaction matching the query, across every
+                        month and every allowed department. */}
+                    <button
+                      onClick={() => openAggregatedSearchModal(searchQuery)}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        textAlign: 'left',
+                        background: 'var(--brand-glow, #f0f7ff)',
+                        border: 'none',
+                        borderBottom: '1px solid var(--border, #eee)',
+                        padding: '10px 12px',
+                        cursor: 'pointer',
+                        color: 'var(--brand, #2b6cb0)',
+                        fontWeight: 600,
+                        fontFamily: 'inherit',
+                        fontSize: '0.82rem',
+                      }}
+                    >
+                      Open all {searchHits.length} match{searchHits.length === 1 ? '' : 'es'} for "{searchQuery}"
+                    </button>
+                    {searchHits.map((hit, idx) => (
+                      <button
+                        key={`${hit.kind}:${hit.label}:${idx}`}
+                        role="option"
+                        onClick={() => openAggregatedSearchModal(searchQuery)}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          background: 'transparent',
+                          border: 'none',
+                          borderBottom: idx === searchHits.length - 1 ? 'none' : '1px solid var(--border, #eee)',
+                          padding: '8px 12px',
+                          cursor: 'pointer',
+                          color: 'inherit',
+                          fontFamily: 'inherit',
+                          fontSize: 'inherit',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--muted, #888)', textTransform: 'uppercase' }}>
+                            {kindBadge(hit.kind)}
+                          </span>
+                          <span style={{ fontWeight: 600 }}>{hit.label}</span>
+                          {hit.isFuzzy ? (
+                            <span style={{ marginLeft: 'auto', color: '#d97706', fontSize: '0.65rem' }}>fuzzy</span>
+                          ) : null}
+                        </div>
+                        <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'var(--muted, #888)' }}>
+                          {hit.subtitle}
+                        </div>
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
         {(canOpenQbConnect || canImportPlan) ? (
           <div className="budget-page-actions">
           {canOpenQbConnect ? (
@@ -1323,9 +1469,8 @@ export default function BudgetPage() {
               availableMonthIndices={selectableMonthIndices}
               allowedEntities={allowedBudgetEntities}
             />
-            {/* Export sits right next to the Department dropdown — Kate's
-                preference. Search stays on the far right so its dropdown has
-                room to grow without pushing filters around. */}
+            {/* Export sits right next to the Department dropdown per Kate's
+                preference. Search lives in the top page-header instead. */}
             <button
               className="btn-secondary"
               onClick={handleExport}
@@ -1334,137 +1479,6 @@ export default function BudgetPage() {
             >
               Export
             </button>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div ref={searchBoxRef} style={{ position: 'relative', minWidth: 240 }}>
-                <input
-                  type="text"
-                  value={searchInput}
-                  onChange={(e) => { setSearchInput(e.target.value); setSearchOpen(true) }}
-                  onFocus={() => setSearchOpen(true)}
-                  placeholder="Search line items, people, txns…"
-                  style={{
-                    width: '100%',
-                    padding: '6px 10px',
-                    border: '1px solid var(--border, #ccc)',
-                    borderRadius: 4,
-                    background: 'var(--bg, #fff)',
-                    color: 'var(--text, #000)',
-                    fontSize: '0.85rem',
-                    fontFamily: 'var(--mono)',
-                  }}
-                  aria-label="Search the budget"
-                />
-                {searchOpen && searchQuery ? (
-                  <div
-                    role="listbox"
-                    style={{
-                      position: 'absolute',
-                      top: 'calc(100% + 4px)',
-                      right: 0,
-                      minWidth: 320,
-                      maxWidth: 480,
-                      maxHeight: 360,
-                      overflowY: 'auto',
-                      background: 'var(--card, #fff)',
-                      color: 'var(--text, #000)',
-                      border: '1px solid var(--border, #ccc)',
-                      borderRadius: 4,
-                      boxShadow: '0 8px 24px rgba(0,0,0,.15)',
-                      zIndex: 50,
-                      fontFamily: 'var(--mono)',
-                      fontSize: '0.8rem',
-                    }}
-                  >
-                    {searchHits.length === 0 ? (
-                      <div style={{ padding: 12, color: 'var(--muted, #888)' }}>
-                        {searchTxLoading
-                          ? `Loading transactions for the current view…`
-                          : `No matches for "${searchQuery}".`}
-                      </div>
-                    ) : (
-                      <>
-                        {searchTxLoading ? (
-                          <div style={{
-                            padding: '6px 12px',
-                            borderBottom: '1px solid var(--border, #eee)',
-                            color: 'var(--muted, #888)',
-                            fontSize: '0.7rem',
-                          }}>
-                            Loading transactions for the current view…
-                          </div>
-                        ) : null}
-                        {searchAllFuzzy ? (
-                          <div style={{
-                            padding: '8px 12px',
-                            borderBottom: '1px solid var(--border, #eee)',
-                            color: '#d97706',
-                            fontSize: '0.72rem',
-                            letterSpacing: '.02em',
-                          }}>
-                            ⚠ No exact match — showing closest results
-                          </div>
-                        ) : null}
-                        {/* All-in-one button: opens the aggregated drill modal for
-                            every transaction matching the query, across every
-                            month and every allowed department. */}
-                        <button
-                          onClick={() => openAggregatedSearchModal(searchQuery)}
-                          style={{
-                            display: 'block',
-                            width: '100%',
-                            textAlign: 'left',
-                            background: 'var(--brand-glow, #f0f7ff)',
-                            border: 'none',
-                            borderBottom: '1px solid var(--border, #eee)',
-                            padding: '10px 12px',
-                            cursor: 'pointer',
-                            color: 'var(--brand, #2b6cb0)',
-                            fontWeight: 600,
-                            fontFamily: 'inherit',
-                            fontSize: '0.82rem',
-                          }}
-                        >
-                          Open all {searchHits.length} match{searchHits.length === 1 ? '' : 'es'} for "{searchQuery}"
-                        </button>
-                        {searchHits.map((hit, idx) => (
-                          <button
-                            key={`${hit.kind}:${hit.label}:${idx}`}
-                            role="option"
-                            onClick={() => openAggregatedSearchModal(searchQuery)}
-                            style={{
-                              display: 'block',
-                              width: '100%',
-                              textAlign: 'left',
-                              background: 'transparent',
-                              border: 'none',
-                              borderBottom: idx === searchHits.length - 1 ? 'none' : '1px solid var(--border, #eee)',
-                              padding: '8px 12px',
-                              cursor: 'pointer',
-                              color: 'inherit',
-                              fontFamily: 'inherit',
-                              fontSize: 'inherit',
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ fontSize: '0.65rem', color: 'var(--muted, #888)', textTransform: 'uppercase' }}>
-                                {kindBadge(hit.kind)}
-                              </span>
-                              <span style={{ fontWeight: 600 }}>{hit.label}</span>
-                              {hit.isFuzzy ? (
-                                <span style={{ marginLeft: 'auto', color: '#d97706', fontSize: '0.65rem' }}>fuzzy</span>
-                              ) : null}
-                            </div>
-                            <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'var(--muted, #888)' }}>
-                              {hit.subtitle}
-                            </div>
-                          </button>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            </div>
           </div>
         </div>
       )}

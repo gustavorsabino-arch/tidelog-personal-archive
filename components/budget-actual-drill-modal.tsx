@@ -71,12 +71,12 @@ export function BudgetActualDrillModal({
               </span>
             ) : null}
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginLeft: 20 }}>
             {onExport && !loading && !error && drill && drill.transactions.length > 0 ? (
               <button
                 className="btn-secondary"
                 onClick={onExport}
-                style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                style={{ fontSize: '0.75rem', padding: '4px 12px', whiteSpace: 'nowrap' }}
                 title="Download these transactions as .xlsx"
               >
                 {exportLabel}
