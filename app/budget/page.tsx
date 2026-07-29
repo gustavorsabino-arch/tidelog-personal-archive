@@ -103,6 +103,14 @@ import {
   buildBudgetDepartmentReport,
   buildBudgetOverviewReport,
 } from '@/lib/budget/reports'
+import { buildBudgetWorkbook, buildBudgetExportFilename } from '@/lib/budget/budget-export'
+import {
+  buildBudgetSearchIndex,
+  searchBudget,
+  hasOnlyFuzzyHits,
+  type BudgetSearchHit,
+} from '@/lib/budget/budget-search'
+import * as XLSX from 'xlsx'
 
 function departmentPlanHasBudgetData(plan: BudgetState['plan']['departments'][BudgetDepartment]): boolean {
   return Object.values(plan.periods ?? {}).some((lines) => !!lines && Object.keys(lines).length > 0)
@@ -175,6 +183,16 @@ function getBudgetVarianceTone(varianceUsd: number | null): 'green' | 'red' | ''
   return varianceUsd < 0 ? 'green' : 'red'
 }
 
+function kindBadge(kind: BudgetSearchHit['kind']): string {
+  switch (kind) {
+    case 'line-item':   return 'Line'
+    case 'category':    return 'Category'
+    case 'department':  return 'Dept'
+    case 'team-member': return 'Person'
+    default:            return ''
+  }
+}
+
 export default function BudgetPage() {
   const [activeTab, setActiveTab] = useState('overview')
   const [activeDept, setActiveDept] = useState<BudgetDepartmentViewScope | ''>('')
@@ -229,6 +247,12 @@ export default function BudgetPage() {
   const [loading, setLoading] = useState(true)
   const [allowedBudgetMonthIndices, setAllowedBudgetMonthIndices] = useState<number[] | null>(null)
   const attemptedAutoActualKeysRef = useRef<Set<string>>(new Set())
+  // Search box state: raw input, debounced query used for actual matching,
+  // and open/closed for the results dropdown.
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchBoxRef = useRef<HTMLDivElement | null>(null)
   const { access, loading: accessLoading, error: accessError } = useSharedAccess()
   const canViewBudget = hasBudgetPageAccess(access)
   const allowedBudgetViewModes = useMemo(() => getAllowedBudgetViewModes(access), [access])
@@ -403,14 +427,19 @@ export default function BudgetPage() {
   }, [activeTab, canViewBudget, coverageLoading, coverageState, coverageError])
 
   // Lazy-load team data when the user activates a tab that needs it. Bootstrap
-  // skips team for everyone — only Headcount and Team tabs read team rows, and
-  // both tabs are admin-only via getVisibleBudgetTabs.
+  // skips team for everyone — only Headcount and Team tabs read team rows,
+  // both tabs are admin-only via getVisibleBudgetTabs. Also pre-load for admins
+  // regardless of tab so the top-bar Search box can index people from any tab
+  // (dropping to a person via search would otherwise miss until the user
+  // opened Team/Headcount first). Non-admin path is untouched — the endpoint
+  // itself is admin-only, and their search index gets teamMembers=[].
   useEffect(() => {
     if (!canViewBudget) return
-    if (activeTab !== 'headcount' && activeTab !== 'team') return
+    const needsTeam = activeTab === 'headcount' || activeTab === 'team' || access?.role === 'admin'
+    if (!needsTeam) return
     if (teamLoaded || teamLoading) return
     void loadBudgetTeam()
-  }, [activeTab, canViewBudget, teamLoaded, teamLoading])
+  }, [activeTab, canViewBudget, teamLoaded, teamLoading, access?.role])
 
   useEffect(() => {
     function handleQbAuthSuccess(event: MessageEvent) {
@@ -981,6 +1010,68 @@ export default function BudgetPage() {
     access?.role,
   ])
 
+  // --------- Search: debounce, index, hits, navigation ---------
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setSearchQuery(searchInput.trim()), 200)
+    return () => window.clearTimeout(t)
+  }, [searchInput])
+
+  // Close the results dropdown when the user clicks anywhere outside the box.
+  useEffect(() => {
+    if (!searchOpen) return
+    const handleClick = (e: MouseEvent) => {
+      const el = searchBoxRef.current
+      if (el && !el.contains(e.target as Node)) setSearchOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [searchOpen])
+
+  const searchIndex = useMemo(() => buildBudgetSearchIndex({
+    allowedDepartments,
+    teamMembers: access?.role === 'admin' ? budgetState.team.members : [],
+    canUseAllDepartments,
+  }), [allowedDepartments, budgetState.team.members, canUseAllDepartments, access?.role])
+
+  const searchHits = useMemo(() => searchQuery ? searchBudget(searchIndex, searchQuery) : [], [searchIndex, searchQuery])
+  const searchAllFuzzy = useMemo(() => hasOnlyFuzzyHits(searchHits), [searchHits])
+
+  function navigateToHit(hit: BudgetSearchHit) {
+    // Apply navigation targets in a sensible order — tab first, then dept,
+    // then month. The BudgetScopeControls will clamp anything the user isn't
+    // allowed to see. Missing fields mean "leave current selection".
+    if (hit.navigate.tab) setActiveTab(hit.navigate.tab)
+    if (hit.navigate.department !== undefined) setActiveDept(hit.navigate.department)
+    if (hit.navigate.month) {
+      setBudgetView(prev => ({ ...prev, mode: 'period', month: hit.navigate.month! }))
+    }
+    setSearchInput('')
+    setSearchQuery('')
+    setSearchOpen(false)
+  }
+
+  // --------- Export: build workbook from current on-screen report ---------
+
+  function handleExport() {
+    // overviewReport is the exact table the user is looking at — already
+    // access-filtered and scope-narrowed. Round-tripping through it means
+    // Excel matches the screen 1:1.
+    const report = overviewReport
+    if (!report) return
+    const department = overviewSelectedDepartment && overviewSelectedDepartment !== 'Not specified'
+      ? overviewSelectedDepartment
+      : null
+    const sheetName = department ? `${department} ${report.periodLabel}` : `Overview ${report.periodLabel}`
+    const filename = buildBudgetExportFilename({
+      department,
+      year: budgetYear,
+      periodLabel: report.periodLabel,
+    })
+    const wb = buildBudgetWorkbook(report, sheetName)
+    XLSX.writeFile(wb, filename)
+  }
+
   function openQbConnect(entity: QboConnectionStatus['entity']) {
     setQbNotice(null)
     const popup = window.open(`/api/qb/connect?entity=${encodeURIComponent(entity)}`, 'qb-auth', 'popup=yes,width=720,height=760')
@@ -1025,20 +1116,128 @@ export default function BudgetPage() {
           <div className="page-title">{budgetYear} Budget</div>
           <div className="page-sub">{budgetPageSub}</div>
         </div>
-        {canImportPlan || canOpenQbConnect ? (
-          <div className="budget-page-actions">
-            {canOpenQbConnect ? (
-              <button className="btn-secondary budget-import-trigger budget-admin-only" onClick={() => setIsQbModalOpen(true)}>
-                QuickBooks
-              </button>
-            ) : null}
-            {canImportPlan ? (
-              <button className="btn-primary budget-import-trigger budget-admin-only" onClick={openImportModal}>
-                Import v1 Workbook
-              </button>
+        <div className="budget-page-actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Search box — matches line items, categories, departments, and
+              (admin only) team members. Fuzzy, so 'gusavo' still finds
+              'Gustavo Sabino' with a "no exact match" hint. */}
+          <div ref={searchBoxRef} style={{ position: 'relative', minWidth: 260 }}>
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => { setSearchInput(e.target.value); setSearchOpen(true) }}
+              onFocus={() => setSearchOpen(true)}
+              placeholder="Search line items, departments, people…"
+              style={{
+                width: '100%',
+                padding: '6px 10px',
+                border: '1px solid var(--border, #ccc)',
+                borderRadius: 4,
+                background: 'var(--bg, #fff)',
+                color: 'var(--text, #000)',
+                fontSize: '0.85rem',
+                fontFamily: 'var(--mono)',
+              }}
+              aria-label="Search the budget"
+            />
+            {searchOpen && searchQuery ? (
+              <div
+                role="listbox"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  right: 0,
+                  maxHeight: 360,
+                  overflowY: 'auto',
+                  background: 'var(--card, #fff)',
+                  color: 'var(--text, #000)',
+                  border: '1px solid var(--border, #ccc)',
+                  borderRadius: 4,
+                  boxShadow: '0 8px 24px rgba(0,0,0,.15)',
+                  zIndex: 50,
+                  fontFamily: 'var(--mono)',
+                  fontSize: '0.8rem',
+                }}
+              >
+                {searchHits.length === 0 ? (
+                  <div style={{ padding: 12, color: 'var(--muted, #888)' }}>
+                    No matches for “{searchQuery}”.
+                  </div>
+                ) : (
+                  <>
+                    {searchAllFuzzy ? (
+                      <div style={{
+                        padding: '8px 12px',
+                        borderBottom: '1px solid var(--border, #eee)',
+                        color: '#d97706',
+                        fontSize: '0.72rem',
+                        letterSpacing: '.02em',
+                      }}>
+                        ⚠ No exact match — showing closest results
+                      </div>
+                    ) : null}
+                    {searchHits.map((hit, idx) => (
+                      <button
+                        key={`${hit.kind}:${hit.label}:${idx}`}
+                        role="option"
+                        onClick={() => navigateToHit(hit)}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          background: 'transparent',
+                          border: 'none',
+                          borderBottom: idx === searchHits.length - 1 ? 'none' : '1px solid var(--border, #eee)',
+                          padding: '8px 12px',
+                          cursor: 'pointer',
+                          color: 'inherit',
+                          fontFamily: 'inherit',
+                          fontSize: 'inherit',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--muted, #888)', textTransform: 'uppercase' }}>
+                            {kindBadge(hit.kind)}
+                          </span>
+                          <span style={{ fontWeight: 600 }}>{hit.label}</span>
+                          {hit.isFuzzy ? (
+                            <span style={{ marginLeft: 'auto', color: '#d97706', fontSize: '0.65rem' }}>fuzzy</span>
+                          ) : null}
+                        </div>
+                        <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'var(--muted, #888)' }}>
+                          {hit.subtitle}
+                        </div>
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
             ) : null}
           </div>
-        ) : null}
+
+          {/* Export — exports the exact on-screen table (respecting current
+              department, month, entity). Available to any role that can see
+              the page (admin + budget_viewer). */}
+          <button
+            className="btn-secondary"
+            onClick={handleExport}
+            disabled={!overviewReport}
+            title={overviewReport ? 'Download the current view as .xlsx' : 'Nothing to export yet'}
+          >
+            Export
+          </button>
+
+          {canOpenQbConnect ? (
+            <button className="btn-secondary budget-import-trigger budget-admin-only" onClick={() => setIsQbModalOpen(true)}>
+              QuickBooks
+            </button>
+          ) : null}
+          {canImportPlan ? (
+            <button className="btn-primary budget-import-trigger budget-admin-only" onClick={openImportModal}>
+              Import v1 Workbook
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {lastActionMessage ? (
