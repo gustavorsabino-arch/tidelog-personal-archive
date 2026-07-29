@@ -11,7 +11,13 @@
 //   - normalized Levenshtein distance   → dist / max(len)   (only if <= 0.6)
 // Anything above 0.6 is dropped. Hits are sorted by (score asc, label asc).
 
-import type { BudgetActualDrillTransaction, BudgetDepartment, BudgetMonthKey, BudgetTeamMember } from './types.ts'
+import type {
+  BudgetActualDrillAccountSummary,
+  BudgetActualDrillTransaction,
+  BudgetDepartment,
+  BudgetMonthKey,
+  BudgetTeamMember,
+} from './types.ts'
 import { BUDGET_LINE_CATALOG } from './catalog.ts'
 
 export type BudgetSearchHitKind =
@@ -49,6 +55,11 @@ export type BudgetSearchIndexInput = {
   // filtering when the drill endpoint is called, so anything present here
   // is safe to surface.
   transactions?: readonly BudgetActualDrillTransaction[]
+  // Optional — the drill accounts that came alongside `transactions`, so we
+  // can map each tx's accountNumber → mappingKeys[0] (the line item that
+  // "owns" the account). The click handler uses that lineKey to open the
+  // drill modal on the containing line item directly.
+  accounts?: readonly BudgetActualDrillAccountSummary[]
 }
 
 type IndexEntry = {
@@ -116,7 +127,14 @@ export function buildBudgetSearchIndex(input: BudgetSearchIndexInput): BudgetSea
   // Transactions from the current-view drilldown — indexes vendor names,
   // memos, transaction types, GL accounts, and document numbers. Each hit
   // shows amount + date in the subtitle so operators know at a glance where
-  // the entry lives.
+  // the entry lives. If the accounts array is supplied we can attach a
+  // lineKey (via account.mappingKeys[0]) so clicks open the drill modal on
+  // the containing line item directly, both for admin and dept-scoped viewers.
+  const accountLineKey = new Map<string, string>()
+  for (const a of input.accounts ?? []) {
+    const lk = a.mappingKeys?.[0]
+    if (lk) accountLineKey.set(a.accountNumber, lk)
+  }
   for (const tx of input.transactions ?? []) {
     const amount = fmtSignedUsd(tx.amountUsd)
     const dept = tx.normalizedDepartment ?? ''
@@ -130,6 +148,7 @@ export function buildBudgetSearchIndex(input: BudgetSearchIndexInput): BudgetSea
       dept,
       tx.transactionType,
     ].filter((s): s is string => !!s && s.length > 0)
+    const lineKey = accountLineKey.get(tx.accountNumber)
     entries.push({
       kind: 'transaction',
       label,
@@ -141,9 +160,11 @@ export function buildBudgetSearchIndex(input: BudgetSearchIndexInput): BudgetSea
         tx.documentNumber,
         tx.className,
       ].filter((s): s is string => !!s && s.length > 0),
-      navigate: dept
-        ? { department: dept as BudgetDepartment, tab: 'overview' }
-        : { tab: 'overview' },
+      navigate: {
+        ...(dept ? { department: dept as BudgetDepartment } : {}),
+        tab: 'overview',
+        ...(lineKey ? { lineKey } : {}),
+      },
     })
   }
 

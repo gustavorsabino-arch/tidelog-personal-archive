@@ -40,7 +40,6 @@ import { useSharedAccess } from '@/lib/access-context'
 import type { BudgetBootstrapResponse } from '@/lib/budget/bootstrap'
 import type {
   BudgetActualDrillState,
-  BudgetActualDrillTransaction,
   BudgetCoverageState,
   BudgetDepartment,
   BudgetDepartmentActualScope,
@@ -255,12 +254,18 @@ export default function BudgetPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const searchBoxRef = useRef<HTMLDivElement | null>(null)
-  // Transactions from the current-view drilldown, cached per view+dept key so
-  // the search box can match against vendor names + memos + invoice numbers
-  // in addition to the static line-item catalog.
-  const [searchTxCache, setSearchTxCache] = useState<Record<string, BudgetActualDrillTransaction[]>>({})
+  // Full drilldown state (transactions + accounts) for the current view,
+  // cached per view+dept key. Search matches over transactions; accounts
+  // give us the account→lineKey mapping so a tx click can open the drill
+  // modal on the containing line item directly.
+  const [searchDrillCache, setSearchDrillCache] = useState<Record<string, BudgetActualDrillState>>({})
   const [searchTxLoading, setSearchTxLoading] = useState(false)
   const searchTxAttemptedRef = useRef<Set<string>>(new Set())
+  // When a search hit needs to open the drill modal, we may have just
+  // changed the department — overviewReport rebuilds on the next render.
+  // Store the requested line key and open the drill in an effect once the
+  // report reflects the new scope.
+  const [pendingDrillLineKey, setPendingDrillLineKey] = useState<string | null>(null)
   const { access, loading: accessLoading, error: accessError } = useSharedAccess()
   const canViewBudget = hasBudgetPageAccess(access)
   const allowedBudgetViewModes = useMemo(() => getAllowedBudgetViewModes(access), [access])
@@ -1038,7 +1043,7 @@ export default function BudgetPage() {
   useEffect(() => {
     if (!searchOpen) return
     const key = searchTxCacheKey
-    if (searchTxCache[key] !== undefined) return
+    if (searchDrillCache[key] !== undefined) return
     if (searchTxAttemptedRef.current.has(key)) return
     searchTxAttemptedRef.current.add(key)
 
@@ -1073,15 +1078,31 @@ export default function BudgetPage() {
     setSearchTxLoading(true)
     apiFetch<BudgetActualDrillState>(`/api/budget/actuals/drill?${params.toString()}`)
       .then((drill) => {
-        setSearchTxCache((prev) => ({ ...prev, [key]: drill.transactions ?? [] }))
+        setSearchDrillCache((prev) => ({ ...prev, [key]: drill }))
       })
       .catch((err) => {
         // Non-fatal — search still works with static entries. Log for triage.
         console.warn('[budget/search] tx fetch failed', err)
-        setSearchTxCache((prev) => ({ ...prev, [key]: [] }))
+        // Cache a synthetic empty result so we don't re-try this key.
+        setSearchDrillCache((prev) => ({
+          ...prev,
+          [key]: {
+            source: 'quickbooks',
+            year: budgetView.year,
+            view: budgetView,
+            department: null,
+            fetchedAt: new Date().toISOString(),
+            mappingSource: 'db',
+            lineKeys: [],
+            totalUsd: 0,
+            unreconciledTotalUsd: 0,
+            accounts: [],
+            transactions: [],
+          } as BudgetActualDrillState,
+        }))
       })
       .finally(() => setSearchTxLoading(false))
-  }, [searchOpen, searchTxCacheKey, searchTxCache, budgetView, overviewSelectedDepartment, activeDept])
+  }, [searchOpen, searchTxCacheKey, searchDrillCache, budgetView, overviewSelectedDepartment, activeDept])
 
   useEffect(() => {
     const t = window.setTimeout(() => setSearchQuery(searchInput.trim()), 200)
@@ -1099,31 +1120,49 @@ export default function BudgetPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [searchOpen])
 
-  const searchTransactions = searchTxCache[searchTxCacheKey]
+  const searchDrill = searchDrillCache[searchTxCacheKey]
   const searchIndex = useMemo(() => buildBudgetSearchIndex({
     allowedDepartments,
     teamMembers: access?.role === 'admin' ? budgetState.team.members : [],
     canUseAllDepartments,
-    transactions: searchTransactions,
-  }), [allowedDepartments, budgetState.team.members, canUseAllDepartments, access?.role, searchTransactions])
+    transactions: searchDrill?.transactions,
+    accounts: searchDrill?.accounts,
+  }), [allowedDepartments, budgetState.team.members, canUseAllDepartments, access?.role, searchDrill])
 
   const searchHits = useMemo(() => searchQuery ? searchBudget(searchIndex, searchQuery) : [], [searchIndex, searchQuery])
   const searchAllFuzzy = useMemo(() => hasOnlyFuzzyHits(searchHits), [searchHits])
 
   function navigateToHit(hit: BudgetSearchHit) {
-    // Apply navigation targets in a sensible order — tab first, then dept,
-    // then month. The BudgetScopeControls will clamp anything the user isn't
-    // allowed to see. Missing fields mean "leave current selection".
+    // Apply navigation targets — tab first, then dept. If the hit has a
+    // lineKey (line item OR transaction resolved via its account), also
+    // schedule opening the drill modal once the report catches up to the
+    // new scope. That gives viewers useful click behaviour (they can't
+    // change dept anyway, but the drill opens right on the matching line).
     if (hit.navigate.tab) setActiveTab(hit.navigate.tab)
     if (hit.navigate.department !== undefined) setActiveDept(hit.navigate.department)
-    // Month navigation intentionally omitted for now — no current hit sets
-    // navigate.month, and BudgetViewState.month is a numeric 0-11 index that
-    // needs converting from the BudgetMonthKey string. Add a converter here
-    // if hits start carrying a month later.
+    if (hit.navigate.lineKey) setPendingDrillLineKey(hit.navigate.lineKey)
+    // Month navigation intentionally omitted — no hit currently sets one and
+    // BudgetViewState.month is a numeric index that needs converting from
+    // the BudgetMonthKey string. Add a converter here if hits start carrying
+    // a month later.
     setSearchInput('')
     setSearchQuery('')
     setSearchOpen(false)
   }
+
+  // Once a pendingDrillLineKey is set AND the overview report reflects the
+  // (possibly-changed) department scope, resolve the key to a report row and
+  // open the drill modal on it. If the row isn't found we clear the pending
+  // key immediately so we don't loop forever on stale scope.
+  useEffect(() => {
+    if (!pendingDrillLineKey || !overviewReport) return
+    const row = overviewReport.rows.find((r) => {
+      if (r.key === pendingDrillLineKey) return true
+      return Array.isArray(r.actualKeys) && r.actualKeys.includes(pendingDrillLineKey)
+    })
+    setPendingDrillLineKey(null)
+    if (row) void openActualDrill(row, 'period', overviewReport)
+  }, [pendingDrillLineKey, overviewReport])
 
   // --------- Export: build workbook from current on-screen report ---------
 
