@@ -1025,21 +1025,24 @@ export default function BudgetPage() {
 
   // --------- Search: debounce, index, hits, navigation ---------
 
-  // Cache key for the current-view transactions fetch. When the user changes
-  // month / entity / department, the key flips and we lazily re-fetch.
-  const searchTxCacheKey = useMemo(() => {
-    const dept = overviewSelectedDepartment && overviewSelectedDepartment !== 'Not specified'
-      ? overviewSelectedDepartment
-      : (activeDept && activeDept !== 'All' ? activeDept : 'ALL')
-    return `${getBudgetViewCacheKey(budgetView)}:${dept}`
-  }, [budgetView, overviewSelectedDepartment, activeDept])
+  // Cache key for the search fetch. Deliberately year+entity ONLY — the
+  // drill request pulls the whole year for every department the user can
+  // see, so changing month / department / tab doesn't invalidate the cache.
+  const searchTxCacheKey = useMemo(
+    () => `${budgetView.year}:${budgetView.entity}`,
+    [budgetView.year, budgetView.entity],
+  )
 
-  // Kick off a background fetch of every line-item's drill data as soon as
-  // the user focuses the search box. Cached per view+dept key so navigating
-  // around doesn't repeatedly re-fetch. Only runs when the drill endpoint is
-  // callable — admins always, viewers only when the request is scoped to
-  // their department (endpoint enforces this either way; the check just
-  // avoids surfacing 403s).
+  // Kick off a background fetch of the full-year drilldown as soon as the
+  // search box is focused. The fetch spans every allowed department and
+  // every month of the year, so a search for 'TRM' in a June view still
+  // finds hits in October, and a viewer with access to Legal + BD sees
+  // both departments even when the visible table is Legal.
+  //
+  // Admin: single request, no `department` param (endpoint returns all
+  // departments). Viewer: one request per allowed department (endpoint
+  // enforces per-dept access). Results are merged into a single synthetic
+  // BudgetActualDrillState so the search index sees one unified list.
   useEffect(() => {
     if (!searchOpen) return
     const key = searchTxCacheKey
@@ -1047,47 +1050,77 @@ export default function BudgetPage() {
     if (searchTxAttemptedRef.current.has(key)) return
     searchTxAttemptedRef.current.add(key)
 
-    const column: BudgetReportColumnKey =
-      budgetView.mode === 'ytd' ? 'ytd' :
-      budgetView.mode === 'range' ? 'annual' :
-      'period'
-    const allKeys = Array.from(new Set([
-      // Every catalogued line + the aggregate 'total' keys some GL rows use.
-      ...['salary', 'benefits', 'payroll', 'severance', 'bonus', 'commissions',
-          'epdTools', 'bizTools', 'hosting', 'blockchainRpc', 'securityMon',
-          'hrCosts', 'recruiting', 'meals', 'mktExp', 'profSvc', 'corpCompliance',
-          'travel', 'colos', 'bankFees', 'rent', 'hardware',
-          'corpFees', 'lobbying', 'mmFees', 'industryRelations', 'contingency'],
-    ]))
-    const dept = overviewSelectedDepartment && overviewSelectedDepartment !== 'Not specified'
-      ? overviewSelectedDepartment
-      : (activeDept && activeDept !== 'All' ? activeDept : null)
+    // Include coreProductRevenue in the keys list so
+    // getBudgetActualDrillRange returns the FULL annual range (see
+    // lib/budget/drill.ts:67). Without a revenue key it falls back to YTD
+    // relative to the view's month, which would exclude months after it.
+    const allKeys = [
+      'coreProductRevenue',
+      'salary', 'benefits', 'payroll', 'severance', 'bonus', 'commissions',
+      'epdTools', 'bizTools', 'hosting', 'blockchainRpc', 'securityMon',
+      'hrCosts', 'recruiting', 'meals', 'mktExp', 'profSvc', 'corpCompliance',
+      'travel', 'colos', 'bankFees', 'rent', 'hardware',
+      'corpFees', 'lobbying', 'mmFees', 'industryRelations', 'contingency',
+    ]
 
-    const params = new URLSearchParams({
+    const isAdmin = access?.role === 'admin'
+    // Admin: [null] → one endpoint call with no department (server returns
+    // txns across all depts). Viewer: their allowedDepartments → one call
+    // per dept (server checks each).
+    const deptTargets: (string | null)[] = isAdmin ? [null] : [...allowedDepartments]
+
+    const paramsBase: Record<string, string> = {
       year: String(budgetView.year),
       entity: budgetView.entity,
-      mode: budgetView.mode,
-      month: String(budgetView.month),
-      rangeStart: String(budgetView.rangeStart),
-      rangeEnd: String(budgetView.rangeEnd),
-      column,
+      // Use ytd mode w/ Dec so the range covers Jan-Dec for non-revenue
+      // keys too; combined with column=annual + revenue in keys list, the
+      // server picks annual (Jan-Dec) as the range.
+      mode: 'ytd',
+      month: '11',
+      rangeStart: '0',
+      rangeEnd: '11',
+      column: 'annual',
       keys: allKeys.join(','),
-    })
-    if (dept) params.set('department', dept)
+    }
 
     setSearchTxLoading(true)
-    apiFetch<BudgetActualDrillState>(`/api/budget/actuals/drill?${params.toString()}`)
-      .then((drill) => {
-        setSearchDrillCache((prev) => ({ ...prev, [key]: drill }))
-      })
-      .catch((err) => {
-        // Non-fatal — search still works with static entries (line items,
-        // categories, departments, team). The attemptedRef above already
-        // prevents retry for the same key; no need to cache a placeholder.
-        console.warn('[budget/search] tx fetch failed', err)
+    Promise.all(
+      deptTargets.map((dept) => {
+        const params = new URLSearchParams(paramsBase)
+        if (dept) params.set('department', dept)
+        return apiFetch<BudgetActualDrillState>(`/api/budget/actuals/drill?${params.toString()}`)
+          .catch((err) => {
+            console.warn('[budget/search] drill fetch failed for dept', dept, err)
+            return null
+          })
+      }),
+    )
+      .then((results) => {
+        // Merge every successful drill result into one shape. Transactions
+        // are concatenated (each already tagged with normalizedDepartment
+        // by the server); accounts are keyed by accountNumber so duplicates
+        // across dept fetches collapse to one entry.
+        const merged: BudgetActualDrillState | null = (() => {
+          const nonNull = results.filter((r): r is BudgetActualDrillState => r !== null)
+          if (nonNull.length === 0) return null
+          const first = nonNull[0]
+          const txs = nonNull.flatMap((r) => r.transactions ?? [])
+          const accountByNum = new Map<string, typeof first.accounts[number]>()
+          for (const r of nonNull) {
+            for (const a of r.accounts ?? []) accountByNum.set(a.accountNumber, a)
+          }
+          return {
+            ...first,
+            transactions: txs,
+            accounts: Array.from(accountByNum.values()),
+          }
+        })()
+        if (merged) {
+          setSearchDrillCache((prev) => ({ ...prev, [key]: merged }))
+        }
       })
       .finally(() => setSearchTxLoading(false))
-  }, [searchOpen, searchTxCacheKey, searchDrillCache, budgetView, overviewSelectedDepartment, activeDept])
+  }, [searchOpen, searchTxCacheKey, searchDrillCache, budgetView.year, budgetView.entity, access?.role, allowedDepartments])
 
   useEffect(() => {
     const t = window.setTimeout(() => setSearchQuery(searchInput.trim()), 200)
