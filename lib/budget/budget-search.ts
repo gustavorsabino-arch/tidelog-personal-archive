@@ -262,6 +262,36 @@ export function hasOnlyFuzzyHits(hits: readonly BudgetSearchHit[]): boolean {
   return hits.length > 0 && hits.every(h => h.isFuzzy)
 }
 
+// Filter a raw transaction list by the same query the search box uses. Used
+// by the "View all matches" flow to build a single aggregated drill view of
+// every transaction that matched the query across all months and departments.
+// Uses the same tolerance ladder as searchBudget: exact/startsWith/includes
+// pass, and Levenshtein up to FUZZY_THRESHOLD on any single searchable field.
+export function filterTransactionsByQuery(
+  transactions: readonly BudgetActualDrillTransaction[],
+  query: string,
+): BudgetActualDrillTransaction[] {
+  const q = normalize(query)
+  if (!q) return []
+  const out: BudgetActualDrillTransaction[] = []
+  for (const tx of transactions) {
+    const targets = [
+      tx.name, tx.memo, tx.transactionType, tx.accountName,
+      tx.documentNumber, tx.className, tx.normalizedDepartment,
+    ].filter((s): s is string => !!s && s.length > 0)
+    let hit = false
+    for (const target of targets) {
+      const t = normalize(target)
+      if (!t) continue
+      if (t === q || t.startsWith(q) || t.includes(q)) { hit = true; break }
+      const dist = levenshtein(q, t)
+      if (dist / Math.max(q.length, t.length) <= FUZZY_THRESHOLD) { hit = true; break }
+    }
+    if (hit) out.push(tx)
+  }
+  return out
+}
+
 // -------- HELPERS --------
 
 function normalize(s: string): string {

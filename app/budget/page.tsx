@@ -108,6 +108,7 @@ import {
   buildBudgetSearchIndex,
   searchBudget,
   hasOnlyFuzzyHits,
+  filterTransactionsByQuery,
   type BudgetSearchHit,
 } from '@/lib/budget/budget-search'
 import * as XLSX from 'xlsx'
@@ -261,11 +262,8 @@ export default function BudgetPage() {
   const [searchDrillCache, setSearchDrillCache] = useState<Record<string, BudgetActualDrillState>>({})
   const [searchTxLoading, setSearchTxLoading] = useState(false)
   const searchTxAttemptedRef = useRef<Set<string>>(new Set())
-  // When a search hit needs to open the drill modal, we may have just
-  // changed the department — overviewReport rebuilds on the next render.
-  // Store the requested line key and open the drill in an effect once the
-  // report reflects the new scope.
-  const [pendingDrillLineKey, setPendingDrillLineKey] = useState<string | null>(null)
+  // (Removed: pendingDrillLineKey. Search hits now aggregate into a single
+  // modal via openAggregatedSearchModal — no per-hit navigation.)
   const { access, loading: accessLoading, error: accessError } = useSharedAccess()
   const canViewBudget = hasBudgetPageAccess(access)
   const allowedBudgetViewModes = useMemo(() => getAllowedBudgetViewModes(access), [access])
@@ -1150,37 +1148,43 @@ export default function BudgetPage() {
   const searchHits = useMemo(() => searchQuery ? searchBudget(searchIndex, searchQuery) : [], [searchIndex, searchQuery])
   const searchAllFuzzy = useMemo(() => hasOnlyFuzzyHits(searchHits), [searchHits])
 
-  function navigateToHit(hit: BudgetSearchHit) {
-    // Apply navigation targets — tab first, then dept. If the hit has a
-    // lineKey (line item OR transaction resolved via its account), also
-    // schedule opening the drill modal once the report catches up to the
-    // new scope. That gives viewers useful click behaviour (they can't
-    // change dept anyway, but the drill opens right on the matching line).
-    if (hit.navigate.tab) setActiveTab(hit.navigate.tab)
-    if (hit.navigate.department !== undefined) setActiveDept(hit.navigate.department)
-    if (hit.navigate.lineKey) setPendingDrillLineKey(hit.navigate.lineKey)
-    // Month navigation intentionally omitted — no hit currently sets one and
-    // BudgetViewState.month is a numeric index that needs converting from
-    // the BudgetMonthKey string. Add a converter here if hits start carrying
-    // a month later.
+  // Clicking any search hit opens a single aggregated drill modal that
+  // shows EVERY transaction matching the current query across all months
+  // and all allowed departments -- not just the row the user clicked. This
+  // matches Kate's feedback: instead of drilling into one line at a time
+  // to see who 'Gustavo' is, the operator sees all Gustavo txns at once.
+  //
+  // The filter uses the same tolerance ladder as the dropdown ranker
+  // (filterTransactionsByQuery in budget-search.ts) so the modal never
+  // omits a hit that appeared in the dropdown.
+  function openAggregatedSearchModal(query: string) {
+    const drill = searchDrill
+    const q = query.trim()
+    if (!drill || !q) return
+    const matched = filterTransactionsByQuery(drill.transactions, q)
+    const matchedAcctNums = new Set(matched.map((t) => t.accountNumber))
+    const matchedAccounts = drill.accounts.filter((a) => matchedAcctNums.has(a.accountNumber))
+    const total = matched.reduce((s, t) => s + t.amountUsd, 0)
+
+    const synthetic: BudgetActualDrillState = {
+      ...drill,
+      lineKeys: ['__search_aggregate__'],
+      totalUsd: total,
+      unreconciledTotalUsd: 0,
+      accounts: matchedAccounts,
+      transactions: matched,
+      fetchedAt: new Date().toISOString(),
+    }
+
+    setActualDrillTitle(`Search: "${q}" - ${matched.length} match${matched.length === 1 ? '' : 'es'}`)
+    setActualDrillOpen(true)
+    setActualDrillLoading(false)
+    setActualDrillError(null)
+    setActualDrill(synthetic)
     setSearchInput('')
     setSearchQuery('')
     setSearchOpen(false)
   }
-
-  // Once a pendingDrillLineKey is set AND the overview report reflects the
-  // (possibly-changed) department scope, resolve the key to a report row and
-  // open the drill modal on it. If the row isn't found we clear the pending
-  // key immediately so we don't loop forever on stale scope.
-  useEffect(() => {
-    if (!pendingDrillLineKey || !overviewReport) return
-    const row = overviewReport.rows.find((r) => {
-      if (r.key === pendingDrillLineKey) return true
-      return Array.isArray(r.actualKeys) && r.actualKeys.includes(pendingDrillLineKey)
-    })
-    setPendingDrillLineKey(null)
-    if (row) void openActualDrill(row, 'period', overviewReport)
-  }, [pendingDrillLineKey, overviewReport])
 
   // --------- Export: build workbook from current on-screen report ---------
 
@@ -1247,129 +1251,8 @@ export default function BudgetPage() {
           <div className="page-title">{budgetYear} Budget</div>
           <div className="page-sub">{budgetPageSub}</div>
         </div>
-        <div className="budget-page-actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* Search box — matches line items, categories, departments, and
-              (admin only) team members. Fuzzy, so 'gusavo' still finds
-              'Gustavo Sabino' with a "no exact match" hint. */}
-          <div ref={searchBoxRef} style={{ position: 'relative', minWidth: 260 }}>
-            <input
-              type="text"
-              value={searchInput}
-              onChange={(e) => { setSearchInput(e.target.value); setSearchOpen(true) }}
-              onFocus={() => setSearchOpen(true)}
-              placeholder="Search line items, departments, people…"
-              style={{
-                width: '100%',
-                padding: '6px 10px',
-                border: '1px solid var(--border, #ccc)',
-                borderRadius: 4,
-                background: 'var(--bg, #fff)',
-                color: 'var(--text, #000)',
-                fontSize: '0.85rem',
-                fontFamily: 'var(--mono)',
-              }}
-              aria-label="Search the budget"
-            />
-            {searchOpen && searchQuery ? (
-              <div
-                role="listbox"
-                style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 4px)',
-                  left: 0,
-                  right: 0,
-                  maxHeight: 360,
-                  overflowY: 'auto',
-                  background: 'var(--card, #fff)',
-                  color: 'var(--text, #000)',
-                  border: '1px solid var(--border, #ccc)',
-                  borderRadius: 4,
-                  boxShadow: '0 8px 24px rgba(0,0,0,.15)',
-                  zIndex: 50,
-                  fontFamily: 'var(--mono)',
-                  fontSize: '0.8rem',
-                }}
-              >
-                {searchHits.length === 0 ? (
-                  <div style={{ padding: 12, color: 'var(--muted, #888)' }}>
-                    {searchTxLoading
-                      ? `Loading transactions for the current view… (search matches static items right now — retry once loaded)`
-                      : `No matches for "${searchQuery}".`}
-                  </div>
-                ) : (
-                  <>
-                    {searchTxLoading ? (
-                      <div style={{
-                        padding: '6px 12px',
-                        borderBottom: '1px solid var(--border, #eee)',
-                        color: 'var(--muted, #888)',
-                        fontSize: '0.7rem',
-                      }}>
-                        Loading transactions for the current view…
-                      </div>
-                    ) : null}
-                    {searchAllFuzzy ? (
-                      <div style={{
-                        padding: '8px 12px',
-                        borderBottom: '1px solid var(--border, #eee)',
-                        color: '#d97706',
-                        fontSize: '0.72rem',
-                        letterSpacing: '.02em',
-                      }}>
-                        ⚠ No exact match — showing closest results
-                      </div>
-                    ) : null}
-                    {searchHits.map((hit, idx) => (
-                      <button
-                        key={`${hit.kind}:${hit.label}:${idx}`}
-                        role="option"
-                        onClick={() => navigateToHit(hit)}
-                        style={{
-                          display: 'block',
-                          width: '100%',
-                          textAlign: 'left',
-                          background: 'transparent',
-                          border: 'none',
-                          borderBottom: idx === searchHits.length - 1 ? 'none' : '1px solid var(--border, #eee)',
-                          padding: '8px 12px',
-                          cursor: 'pointer',
-                          color: 'inherit',
-                          fontFamily: 'inherit',
-                          fontSize: 'inherit',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: '0.65rem', color: 'var(--muted, #888)', textTransform: 'uppercase' }}>
-                            {kindBadge(hit.kind)}
-                          </span>
-                          <span style={{ fontWeight: 600 }}>{hit.label}</span>
-                          {hit.isFuzzy ? (
-                            <span style={{ marginLeft: 'auto', color: '#d97706', fontSize: '0.65rem' }}>fuzzy</span>
-                          ) : null}
-                        </div>
-                        <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'var(--muted, #888)' }}>
-                          {hit.subtitle}
-                        </div>
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            ) : null}
-          </div>
-
-          {/* Export — exports the exact on-screen table (respecting current
-              department, month, entity). Available to any role that can see
-              the page (admin + budget_viewer). */}
-          <button
-            className="btn-secondary"
-            onClick={handleExport}
-            disabled={!overviewReport}
-            title={overviewReport ? 'Download the current view as .xlsx' : 'Nothing to export yet'}
-          >
-            Export
-          </button>
-
+        {(canOpenQbConnect || canImportPlan) ? (
+          <div className="budget-page-actions">
           {canOpenQbConnect ? (
             <button className="btn-secondary budget-import-trigger budget-admin-only" onClick={() => setIsQbModalOpen(true)}>
               QuickBooks
@@ -1380,7 +1263,8 @@ export default function BudgetPage() {
               Import v1 Workbook
             </button>
           ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
 
       {lastActionMessage ? (
@@ -1402,22 +1286,167 @@ export default function BudgetPage() {
 
       {(activeTab === 'overview' || activeTab === 'coverage' || activeTab === 'headcount') && (
         <div className="budget-shell">
-          <BudgetScopeControls
-            year={budgetYear}
-            value={budgetView}
-            department={activeDept}
-            departments={departmentOptions}
-            onChange={setBudgetView}
-            onYearChange={(year) => setBudgetYear(normalizeBudgetYear(year))}
-            onDepartmentChange={setActiveDept}
-            showDepartmentSelector={
-              activeTab === 'overview' && departmentOptions.length > 1 && (isDepartmentScopedOverview || access?.role === 'admin')
-            }
-            showEntitySelector={access?.role === 'admin'}
-            availableModes={allowedBudgetViewModes ?? undefined}
-            availableMonthIndices={selectableMonthIndices}
-            allowedEntities={allowedBudgetEntities}
-          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+            <BudgetScopeControls
+              year={budgetYear}
+              value={budgetView}
+              department={activeDept}
+              departments={departmentOptions}
+              onChange={setBudgetView}
+              onYearChange={(year) => setBudgetYear(normalizeBudgetYear(year))}
+              onDepartmentChange={setActiveDept}
+              showDepartmentSelector={
+                activeTab === 'overview' && departmentOptions.length > 1 && (isDepartmentScopedOverview || access?.role === 'admin')
+              }
+              showEntitySelector={access?.role === 'admin'}
+              availableModes={allowedBudgetViewModes ?? undefined}
+              availableMonthIndices={selectableMonthIndices}
+              allowedEntities={allowedBudgetEntities}
+            />
+            {/* Search + Export live to the right of the scope controls so
+                the operator sees "Entity / Year / Month / Department / Search /
+                Export" in one line. Both features work identically for admin
+                and viewer paths — access is enforced server-side. */}
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div ref={searchBoxRef} style={{ position: 'relative', minWidth: 240 }}>
+                <input
+                  type="text"
+                  value={searchInput}
+                  onChange={(e) => { setSearchInput(e.target.value); setSearchOpen(true) }}
+                  onFocus={() => setSearchOpen(true)}
+                  placeholder="Search line items, people, txns…"
+                  style={{
+                    width: '100%',
+                    padding: '6px 10px',
+                    border: '1px solid var(--border, #ccc)',
+                    borderRadius: 4,
+                    background: 'var(--bg, #fff)',
+                    color: 'var(--text, #000)',
+                    fontSize: '0.85rem',
+                    fontFamily: 'var(--mono)',
+                  }}
+                  aria-label="Search the budget"
+                />
+                {searchOpen && searchQuery ? (
+                  <div
+                    role="listbox"
+                    style={{
+                      position: 'absolute',
+                      top: 'calc(100% + 4px)',
+                      right: 0,
+                      minWidth: 320,
+                      maxWidth: 480,
+                      maxHeight: 360,
+                      overflowY: 'auto',
+                      background: 'var(--card, #fff)',
+                      color: 'var(--text, #000)',
+                      border: '1px solid var(--border, #ccc)',
+                      borderRadius: 4,
+                      boxShadow: '0 8px 24px rgba(0,0,0,.15)',
+                      zIndex: 50,
+                      fontFamily: 'var(--mono)',
+                      fontSize: '0.8rem',
+                    }}
+                  >
+                    {searchHits.length === 0 ? (
+                      <div style={{ padding: 12, color: 'var(--muted, #888)' }}>
+                        {searchTxLoading
+                          ? `Loading transactions for the current view…`
+                          : `No matches for "${searchQuery}".`}
+                      </div>
+                    ) : (
+                      <>
+                        {searchTxLoading ? (
+                          <div style={{
+                            padding: '6px 12px',
+                            borderBottom: '1px solid var(--border, #eee)',
+                            color: 'var(--muted, #888)',
+                            fontSize: '0.7rem',
+                          }}>
+                            Loading transactions for the current view…
+                          </div>
+                        ) : null}
+                        {searchAllFuzzy ? (
+                          <div style={{
+                            padding: '8px 12px',
+                            borderBottom: '1px solid var(--border, #eee)',
+                            color: '#d97706',
+                            fontSize: '0.72rem',
+                            letterSpacing: '.02em',
+                          }}>
+                            ⚠ No exact match — showing closest results
+                          </div>
+                        ) : null}
+                        {/* All-in-one button: opens the aggregated drill modal for
+                            every transaction matching the query, across every
+                            month and every allowed department. */}
+                        <button
+                          onClick={() => openAggregatedSearchModal(searchQuery)}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            textAlign: 'left',
+                            background: 'var(--brand-glow, #f0f7ff)',
+                            border: 'none',
+                            borderBottom: '1px solid var(--border, #eee)',
+                            padding: '10px 12px',
+                            cursor: 'pointer',
+                            color: 'var(--brand, #2b6cb0)',
+                            fontWeight: 600,
+                            fontFamily: 'inherit',
+                            fontSize: '0.82rem',
+                          }}
+                        >
+                          Open all {searchHits.length} match{searchHits.length === 1 ? '' : 'es'} for "{searchQuery}"
+                        </button>
+                        {searchHits.map((hit, idx) => (
+                          <button
+                            key={`${hit.kind}:${hit.label}:${idx}`}
+                            role="option"
+                            onClick={() => openAggregatedSearchModal(searchQuery)}
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              textAlign: 'left',
+                              background: 'transparent',
+                              border: 'none',
+                              borderBottom: idx === searchHits.length - 1 ? 'none' : '1px solid var(--border, #eee)',
+                              padding: '8px 12px',
+                              cursor: 'pointer',
+                              color: 'inherit',
+                              fontFamily: 'inherit',
+                              fontSize: 'inherit',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontSize: '0.65rem', color: 'var(--muted, #888)', textTransform: 'uppercase' }}>
+                                {kindBadge(hit.kind)}
+                              </span>
+                              <span style={{ fontWeight: 600 }}>{hit.label}</span>
+                              {hit.isFuzzy ? (
+                                <span style={{ marginLeft: 'auto', color: '#d97706', fontSize: '0.65rem' }}>fuzzy</span>
+                              ) : null}
+                            </div>
+                            <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'var(--muted, #888)' }}>
+                              {hit.subtitle}
+                            </div>
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                className="btn-secondary"
+                onClick={handleExport}
+                disabled={!overviewReport}
+                title={overviewReport ? 'Download the current view as .xlsx' : 'Nothing to export yet'}
+              >
+                Export
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
