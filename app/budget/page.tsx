@@ -40,6 +40,7 @@ import { useSharedAccess } from '@/lib/access-context'
 import type { BudgetBootstrapResponse } from '@/lib/budget/bootstrap'
 import type {
   BudgetActualDrillState,
+  BudgetActualDrillTransaction,
   BudgetCoverageState,
   BudgetDepartment,
   BudgetDepartmentActualScope,
@@ -189,6 +190,7 @@ function kindBadge(kind: BudgetSearchHit['kind']): string {
     case 'category':    return 'Category'
     case 'department':  return 'Dept'
     case 'team-member': return 'Person'
+    case 'transaction': return 'Txn'
     default:            return ''
   }
 }
@@ -253,6 +255,12 @@ export default function BudgetPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const searchBoxRef = useRef<HTMLDivElement | null>(null)
+  // Transactions from the current-view drilldown, cached per view+dept key so
+  // the search box can match against vendor names + memos + invoice numbers
+  // in addition to the static line-item catalog.
+  const [searchTxCache, setSearchTxCache] = useState<Record<string, BudgetActualDrillTransaction[]>>({})
+  const [searchTxLoading, setSearchTxLoading] = useState(false)
+  const searchTxAttemptedRef = useRef<Set<string>>(new Set())
   const { access, loading: accessLoading, error: accessError } = useSharedAccess()
   const canViewBudget = hasBudgetPageAccess(access)
   const allowedBudgetViewModes = useMemo(() => getAllowedBudgetViewModes(access), [access])
@@ -1012,6 +1020,69 @@ export default function BudgetPage() {
 
   // --------- Search: debounce, index, hits, navigation ---------
 
+  // Cache key for the current-view transactions fetch. When the user changes
+  // month / entity / department, the key flips and we lazily re-fetch.
+  const searchTxCacheKey = useMemo(() => {
+    const dept = overviewSelectedDepartment && overviewSelectedDepartment !== 'Not specified'
+      ? overviewSelectedDepartment
+      : (activeDept && activeDept !== 'All' ? activeDept : 'ALL')
+    return `${getBudgetViewCacheKey(budgetView)}:${dept}`
+  }, [budgetView, overviewSelectedDepartment, activeDept])
+
+  // Kick off a background fetch of every line-item's drill data as soon as
+  // the user focuses the search box. Cached per view+dept key so navigating
+  // around doesn't repeatedly re-fetch. Only runs when the drill endpoint is
+  // callable — admins always, viewers only when the request is scoped to
+  // their department (endpoint enforces this either way; the check just
+  // avoids surfacing 403s).
+  useEffect(() => {
+    if (!searchOpen) return
+    const key = searchTxCacheKey
+    if (searchTxCache[key] !== undefined) return
+    if (searchTxAttemptedRef.current.has(key)) return
+    searchTxAttemptedRef.current.add(key)
+
+    const column: BudgetReportColumnKey =
+      budgetView.mode === 'ytd' ? 'ytd' :
+      budgetView.mode === 'range' ? 'annual' :
+      'period'
+    const allKeys = Array.from(new Set([
+      // Every catalogued line + the aggregate 'total' keys some GL rows use.
+      ...['salary', 'benefits', 'payroll', 'severance', 'bonus', 'commissions',
+          'epdTools', 'bizTools', 'hosting', 'blockchainRpc', 'securityMon',
+          'hrCosts', 'recruiting', 'meals', 'mktExp', 'profSvc', 'corpCompliance',
+          'travel', 'colos', 'bankFees', 'rent', 'hardware',
+          'corpFees', 'lobbying', 'mmFees', 'industryRelations', 'contingency'],
+    ]))
+    const dept = overviewSelectedDepartment && overviewSelectedDepartment !== 'Not specified'
+      ? overviewSelectedDepartment
+      : (activeDept && activeDept !== 'All' ? activeDept : null)
+
+    const params = new URLSearchParams({
+      year: String(budgetView.year),
+      entity: budgetView.entity,
+      mode: budgetView.mode,
+      month: String(budgetView.month),
+      rangeStart: String(budgetView.rangeStart),
+      rangeEnd: String(budgetView.rangeEnd),
+      column,
+      keys: allKeys.join(','),
+    })
+    if (dept) params.set('department', dept)
+
+    setSearchTxLoading(true)
+    apiFetch<BudgetActualDrillState>(`/api/budget/actuals/drill?${params.toString()}`)
+      .then((drill) => {
+        setSearchTxCache((prev) => ({ ...prev, [key]: drill.transactions ?? [] }))
+      })
+      .catch((err) => {
+        // Non-fatal — search still works with static entries. Log for triage.
+        console.warn('[budget/search] tx fetch failed', err)
+        setSearchTxCache((prev) => ({ ...prev, [key]: [] }))
+      })
+      .finally(() => setSearchTxLoading(false))
+  }, [searchOpen, searchTxCacheKey, searchTxCache, budgetView, overviewSelectedDepartment, activeDept])
+
   useEffect(() => {
     const t = window.setTimeout(() => setSearchQuery(searchInput.trim()), 200)
     return () => window.clearTimeout(t)
@@ -1028,11 +1099,13 @@ export default function BudgetPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [searchOpen])
 
+  const searchTransactions = searchTxCache[searchTxCacheKey]
   const searchIndex = useMemo(() => buildBudgetSearchIndex({
     allowedDepartments,
     teamMembers: access?.role === 'admin' ? budgetState.team.members : [],
     canUseAllDepartments,
-  }), [allowedDepartments, budgetState.team.members, canUseAllDepartments, access?.role])
+    transactions: searchTransactions,
+  }), [allowedDepartments, budgetState.team.members, canUseAllDepartments, access?.role, searchTransactions])
 
   const searchHits = useMemo(() => searchQuery ? searchBudget(searchIndex, searchQuery) : [], [searchIndex, searchQuery])
   const searchAllFuzzy = useMemo(() => hasOnlyFuzzyHits(searchHits), [searchHits])
@@ -1162,10 +1235,22 @@ export default function BudgetPage() {
               >
                 {searchHits.length === 0 ? (
                   <div style={{ padding: 12, color: 'var(--muted, #888)' }}>
-                    No matches for “{searchQuery}”.
+                    {searchTxLoading
+                      ? `Loading transactions for the current view… (search matches static items right now — retry once loaded)`
+                      : `No matches for "${searchQuery}".`}
                   </div>
                 ) : (
                   <>
+                    {searchTxLoading ? (
+                      <div style={{
+                        padding: '6px 12px',
+                        borderBottom: '1px solid var(--border, #eee)',
+                        color: 'var(--muted, #888)',
+                        fontSize: '0.7rem',
+                      }}>
+                        Loading transactions for the current view…
+                      </div>
+                    ) : null}
                     {searchAllFuzzy ? (
                       <div style={{
                         padding: '8px 12px',

@@ -11,7 +11,7 @@
 //   - normalized Levenshtein distance   → dist / max(len)   (only if <= 0.6)
 // Anything above 0.6 is dropped. Hits are sorted by (score asc, label asc).
 
-import type { BudgetDepartment, BudgetMonthKey, BudgetTeamMember } from './types.ts'
+import type { BudgetActualDrillTransaction, BudgetDepartment, BudgetMonthKey, BudgetTeamMember } from './types.ts'
 import { BUDGET_LINE_CATALOG } from './catalog.ts'
 
 export type BudgetSearchHitKind =
@@ -19,6 +19,7 @@ export type BudgetSearchHitKind =
   | 'category'
   | 'department'
   | 'team-member'
+  | 'transaction'
 
 export type BudgetSearchHit = {
   kind: BudgetSearchHitKind
@@ -42,6 +43,12 @@ export type BudgetSearchIndexInput = {
   teamMembers: readonly BudgetTeamMember[]
   // 'All' available in the dept dropdown for admins.
   canUseAllDepartments: boolean
+  // Optional — transactions from the current-view drilldown so the search
+  // covers vendor names, memos, and invoice numbers in addition to the
+  // static line item / department catalog. Server already applies access
+  // filtering when the drill endpoint is called, so anything present here
+  // is safe to surface.
+  transactions?: readonly BudgetActualDrillTransaction[]
 }
 
 type IndexEntry = {
@@ -104,6 +111,40 @@ export function buildBudgetSearchIndex(input: BudgetSearchIndexInput): BudgetSea
         navigate: { department: dept, tab: 'overview', lineKey: item.key },
       })
     }
+  }
+
+  // Transactions from the current-view drilldown — indexes vendor names,
+  // memos, transaction types, GL accounts, and document numbers. Each hit
+  // shows amount + date in the subtitle so operators know at a glance where
+  // the entry lives.
+  for (const tx of input.transactions ?? []) {
+    const amount = fmtSignedUsd(tx.amountUsd)
+    const dept = tx.normalizedDepartment ?? ''
+    const dateLabel = tx.date ? formatShortDate(tx.date) : ''
+    const account = tx.accountName ?? tx.accountNumber
+    const label = tx.name?.trim() || tx.memo?.trim() || tx.transactionType?.trim() || account || 'Transaction'
+    const subtitleBits = [
+      amount,
+      dateLabel,
+      account,
+      dept,
+      tx.transactionType,
+    ].filter((s): s is string => !!s && s.length > 0)
+    entries.push({
+      kind: 'transaction',
+      label,
+      subtitle: subtitleBits.join(' · '),
+      aliases: [
+        tx.memo,
+        tx.transactionType,
+        tx.accountName,
+        tx.documentNumber,
+        tx.className,
+      ].filter((s): s is string => !!s && s.length > 0),
+      navigate: dept
+        ? { department: dept as BudgetDepartment, tab: 'overview' }
+        : { tab: 'overview' },
+    })
   }
 
   // Team members — safe by construction: empty for non-admin (server strips).
@@ -204,6 +245,23 @@ export function hasOnlyFuzzyHits(hits: readonly BudgetSearchHit[]): boolean {
 
 function normalize(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function fmtSignedUsd(n: number): string {
+  const abs = Math.abs(n)
+  const rounded = Math.round(abs * 100) / 100
+  const s = rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return `${n < 0 ? '-' : '+'}$${s}`
+}
+
+function formatShortDate(iso: string): string {
+  // Return 'Jun 30' style from 'YYYY-MM-DD' — falls back to the raw string
+  // if parsing fails so we never silently drop useful context.
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  if (!m) return iso
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const monthName = months[Number(m[2]) - 1] ?? m[2]
+  return `${monthName} ${Number(m[3])}`
 }
 
 // Iterative Levenshtein — O(n·m) with two rolling rows. Good enough for the
