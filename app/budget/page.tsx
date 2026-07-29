@@ -1043,9 +1043,10 @@ export default function BudgetPage() {
     // allowed to see. Missing fields mean "leave current selection".
     if (hit.navigate.tab) setActiveTab(hit.navigate.tab)
     if (hit.navigate.department !== undefined) setActiveDept(hit.navigate.department)
-    if (hit.navigate.month) {
-      setBudgetView(prev => ({ ...prev, mode: 'month', month: hit.navigate.month! }))
-    }
+    // Month navigation intentionally omitted for now — no current hit sets
+    // navigate.month, and BudgetViewState.month is a numeric 0-11 index that
+    // needs converting from the BudgetMonthKey string. Add a converter here
+    // if hits start carrying a month later.
     setSearchInput('')
     setSearchQuery('')
     setSearchOpen(false)
