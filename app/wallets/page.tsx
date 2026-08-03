@@ -58,6 +58,7 @@ export default function WalletsPage() {
   const [creatingWallet, setCreatingWallet] = useState(false)
   const [backfillingAddr, setBackfillingAddr] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ type: 'success' | 'info'; text: string } | null>(null)
+  const [refetchingAll, setRefetchingAll] = useState(false)
   const [deletingAddr, setDeletingAddr] = useState<string | null>(null)
   const [deletingWallet, setDeletingWallet] = useState<Wallet | null>(null)
   const [confirmText, setConfirmText] = useState('')
@@ -317,6 +318,33 @@ export default function WalletsPage() {
     }
   }
 
+  // Manual "catch up" trigger — runs fetchTransactionsJob for every
+  // internal/non-hidden wallet, same as the Vercel cron does at 08:30 and
+  // 20:30 UTC. Useful when the cron falls behind (missed runs, Helius
+  // failures, CRON_SECRET issues on the Vercel side) and admins need
+  // tidelog to catch up right now.
+  const refetchAllTransactions = async () => {
+    if (refetchingAll) return
+    setRefetchingAll(true); setError(null); setNotice(null)
+    try {
+      const res = await fetch('/api/admin/refetch-all-transactions', { credentials: 'same-origin' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      const body = await res.json() as { wallets?: number; inserted?: number; failed?: number; elapsedMs?: number }
+      const sec = body.elapsedMs != null ? Math.max(1, Math.round(body.elapsedMs / 1000)) : null
+      setNotice({
+        type: 'success',
+        text: `Refreshed ${body.wallets ?? 0} wallet${(body.wallets ?? 0) === 1 ? '' : 's'} · ${body.inserted ?? 0} new transaction${(body.inserted ?? 0) === 1 ? '' : 's'} inserted${(body.failed ?? 0) > 0 ? ` · ${body.failed} failed` : ''}${sec ? ` in ${sec}s` : ''}.`,
+      })
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Refetch failed')
+    } finally {
+      setRefetchingAll(false)
+    }
+  }
+
   const backfillWallet = async (address: string) => {
     setBackfillingAddr(address); setError(null); setNotice(null)
     try {
@@ -420,13 +448,24 @@ export default function WalletsPage() {
         </div>
         <input className="fsearch" placeholder="Search wallets…" value={search} onChange={e => setSearch(e.target.value)} />
         {isAdmin && (
-          <button
-            className="btn-primary"
-            onClick={() => setFormOpen((o) => !o)}
-            style={{ marginLeft: 'auto', flexShrink: 0 }}
-          >
-            {formOpen ? 'Close' : 'Add wallet'}
-          </button>
+          <>
+            <button
+              className="btn-secondary"
+              onClick={refetchAllTransactions}
+              disabled={refetchingAll}
+              title="Run fetchTransactionsJob for every internal wallet now. Same as the periodic cron; useful when tidelog has fallen behind Solscan."
+              style={{ marginLeft: 'auto', flexShrink: 0 }}
+            >
+              {refetchingAll ? 'Refreshing…' : 'Refresh transactions'}
+            </button>
+            <button
+              className="btn-primary"
+              onClick={() => setFormOpen((o) => !o)}
+              style={{ flexShrink: 0 }}
+            >
+              {formOpen ? 'Close' : 'Add wallet'}
+            </button>
+          </>
         )}
       </div>
 
