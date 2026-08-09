@@ -16,6 +16,7 @@ import { CopyButton } from '@/components/copy-button'
 import { EditableCell } from '@/components/editable-cell'
 import { EditableSelectCell, type SelectOption } from '@/components/editable-select-cell'
 import { PostToQbModal } from '@/components/post-to-qb-modal'
+import { TransactionsExportModal } from '@/components/transactions-export-modal'
 import { QbBulkDrilldownPanel } from '@/components/qb-bulk-drilldown-panel'
 import { useSharedAccess } from '@/lib/access-context'
 import { hasPermission } from '@/lib/auth/permissions'
@@ -104,6 +105,8 @@ export function TransactionsPageClient({
   const [qbStatusFilter, setQbStatusFilter] = useState<QbStatusFilter>('')
   // Client-side search over the current page only
   const [search, setSearch] = useState('')
+  // Export modal — downloads posted transactions for a month + entity to .xlsx.
+  const [exportModalOpen, setExportModalOpen] = useState(false)
 
   // Per-row action state for Re-post / Void hover buttons. Keyed by tx.id so
   // multiple rows can spin independently. A row with a non-null entry is
@@ -1305,6 +1308,14 @@ export function TransactionsPageClient({
                   {walletOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <input className="fsearch" placeholder="Tx hash / wallet / address (current page)…" value={search} onChange={e => setSearch(e.target.value)} />
+                <button
+                  className="fsel"
+                  onClick={() => setExportModalOpen(true)}
+                  style={{ fontWeight: 600 }}
+                  title="Download posted transactions for a month (any entity or all)"
+                >
+                  Export
+                </button>
               </div>
             </div>
 
@@ -1443,6 +1454,20 @@ export function TransactionsPageClient({
           }}
         />
       )}
+
+      <TransactionsExportModal
+        open={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        defaultEntity={entity}
+        // Pre-fill the modal with whatever year/month is currently filtered.
+        // Fallback to current UTC year/month when no filter is set.
+        defaultYear={yearFilter ? parseInt(yearFilter, 10) : new Date().getUTCFullYear()}
+        defaultMonth={
+          monthFilter && /^\d{4}-\d{2}$/.test(monthFilter)
+            ? parseInt(monthFilter.slice(5, 7), 10)
+            : new Date().getUTCMonth() + 1
+        }
+      />
     </div>
   )
 }
