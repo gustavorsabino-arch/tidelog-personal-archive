@@ -48,6 +48,31 @@ export function getClosedBudgetMonthIndices(year: number, today: Date = new Date
   return Array.from({ length: lastClosed + 1 }, (_, index) => index)
 }
 
+/**
+ * Admin-only variant: month indices selectable for an admin user. Admins do
+ * NOT wait for the 16th-of-following-month close rule — as soon as a month
+ * begins (calendar day 1) the PREVIOUS month is treated as selectable, and
+ * the current month itself becomes selectable partway through. This makes
+ * mid-month reviews possible for people who understand the "actuals are
+ * partial" caveat.
+ *
+ * Behaviour by year:
+ *   - Past year: every month.
+ *   - Current year: every month up to AND INCLUDING the current month.
+ *   - Future year: none.
+ * Non-admin path (budget viewers, contributors) still uses
+ * getClosedBudgetMonthIndices — the 16th rule protects them from partial
+ * data they can't contextualize.
+ */
+export function getAdminSelectableMonthIndices(year: number, today: Date = new Date()): number[] {
+  const todayYear = today.getFullYear()
+  if (year < todayYear) return [...ALL_BUDGET_MONTH_INDICES]
+  if (year > todayYear) return []
+
+  const todayMonth = today.getMonth()
+  return Array.from({ length: todayMonth + 1 }, (_, index) => index)
+}
+
 export function normalizeBudgetYear(year: number): number {
   if (!Number.isFinite(year)) return MIN_BUDGET_YEAR
   return Math.max(MIN_BUDGET_YEAR, Math.trunc(year))

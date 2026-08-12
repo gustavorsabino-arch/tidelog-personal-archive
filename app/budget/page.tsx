@@ -69,7 +69,7 @@ import {
   getVisibleBudgetTabs,
   hasBudgetPageAccess,
 } from '@/lib/access-model'
-import { getClosedBudgetMonthIndices } from '@/lib/budget/scope'
+import { getClosedBudgetMonthIndices, getAdminSelectableMonthIndices } from '@/lib/budget/scope'
 import {
   filterBudgetTeam,
   getBudgetHeadcountSummary,
@@ -277,14 +277,18 @@ export default function BudgetPage() {
     () => BUDGET_TABS.filter((tab) => visibleBudgetTabKeys.includes(tab.key)),
     [visibleBudgetTabKeys],
   )
-  // Only surface months that have been closed (the 16th of the month AFTER
-  // them). Restrictive when the user is on the current year; past years show
-  // all months, future years show none.
+  // Admin path drops the "16th of the month after" wait — as soon as the
+  // calendar day flips, the previous month is selectable (and the current
+  // month itself is shown for mid-month reviews). Non-admin path keeps
+  // getClosedBudgetMonthIndices so budget viewers / contributors only see
+  // months whose Actuals are complete.
   const selectableMonthIndices = useMemo(() => {
-    const closed = getClosedBudgetMonthIndices(budgetYear)
-    if (!allowedBudgetMonthIndices || allowedBudgetMonthIndices.length === 0) return closed
-    return closed.filter((m) => allowedBudgetMonthIndices.includes(m))
-  }, [allowedBudgetMonthIndices, budgetYear])
+    const raw = access?.role === 'admin'
+      ? getAdminSelectableMonthIndices(budgetYear)
+      : getClosedBudgetMonthIndices(budgetYear)
+    if (!allowedBudgetMonthIndices || allowedBudgetMonthIndices.length === 0) return raw
+    return raw.filter((m) => allowedBudgetMonthIndices.includes(m))
+  }, [allowedBudgetMonthIndices, budgetYear, access?.role])
 
   async function loadBudgetBootstrap(noCache = false) {
     setLoading(true)
