@@ -56,6 +56,49 @@ export const auth = betterAuth({
         },
       },
     },
+    session: {
+      create: {
+        // SOX: mirror every successful sign-in into the append-only audit_log.
+        // The session row itself is deleted on sign-out / expiry cleanup, so
+        // it is NOT an immutable record — this hook writes the durable copy
+        // (ip + user-agent captured by Better Auth on the session row).
+        // Failures are swallowed (logAudit never throws) so a broken audit
+        // write can never block a login.
+        after: async (session) => {
+          const { logAudit } = await import('@/lib/audit')
+          await logAudit({
+            userId: session.userId,
+            action: 'auth.login',
+            resourceType: 'session',
+            resourceId: session.id,
+            metadata: {
+              ip: session.ipAddress ?? null,
+              userAgent: session.userAgent ?? null,
+              expiresAt: session.expiresAt?.toISOString?.() ?? null,
+            },
+          })
+        },
+      },
+      delete: {
+        // SOX: capture sign-out (session row deletion) before the record is
+        // gone. Covers explicit sign-out; sessions that lapse by expiry
+        // produce no event anywhere (same limitation as Bill.com — the
+        // session's expiresAt bounds it for auditors).
+        before: async (session) => {
+          const { logAudit } = await import('@/lib/audit')
+          await logAudit({
+            userId: session.userId,
+            action: 'auth.logout',
+            resourceType: 'session',
+            resourceId: session.id,
+            metadata: {
+              ip: session.ipAddress ?? null,
+              userAgent: session.userAgent ?? null,
+            },
+          })
+        },
+      },
+    },
   },
 
   plugins: [

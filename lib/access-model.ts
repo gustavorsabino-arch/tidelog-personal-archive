@@ -32,8 +32,8 @@ export type AccessMeResponse = {
 export function getAllowedPages(access: AccessMeResponse | null): string[] | null {
   if (!access || !access.role) return []
   if (access.role === 'admin') return null
-  // budget_viewer: only the budget page is meaningful
-  return ['budget']
+  // budget_viewer: budget + the approvals submission workflow
+  return ['budget', 'approvals']
 }
 
 export function isBudgetOnlyUser(access: AccessMeResponse | null): boolean {

@@ -16,6 +16,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/accounting': 'Balance Sheet',
   '/pnl': 'P&L',
   '/budget': 'Budget',
+  '/approvals': 'Approvals',
   '/wallets': 'Wallets',
   '/admin': 'Access Control',
 }

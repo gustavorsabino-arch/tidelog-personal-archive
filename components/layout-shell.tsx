@@ -15,7 +15,10 @@ function LayoutShellContent({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const { access, loading, error } = useSharedAccess()
   const showSidebar = !NO_SIDEBAR_ROUTES.includes(pathname)
-  const shouldRedirectToBudget = isBudgetOnlyUser(access) && pathname !== '/budget'
+  // budget_viewer users may reach /budget AND /approvals (submitters in the
+  // approval workflow); everything else redirects to /budget.
+  const budgetViewerAllowed = pathname === '/budget' || pathname.startsWith('/approvals')
+  const shouldRedirectToBudget = isBudgetOnlyUser(access) && !budgetViewerAllowed
 
   useEffect(() => {
     if (!loading && shouldRedirectToBudget) {
