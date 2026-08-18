@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/skeleton'
 import type { PnlAccount, PnlSection } from '@/lib/qb/pnl'
 import type { QboEntity } from '@/lib/qb/config'
 import type { PnlData } from '@/lib/qb/pnl-combine'
-import { GlDrillDrawer } from '@/components/gl-drill-drawer'
+import { GlDrillModal } from '@/components/gl-drill-modal'
 import type { GlDrillScope } from '@/lib/qb/gl-data'
 
 export type EntityChoice = QboEntity | 'All'
@@ -325,7 +325,7 @@ function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth, a
         </div>
       )}
 
-      <GlDrillDrawer
+      <GlDrillModal
         open={drill !== null}
         onClose={() => setDrill(null)}
         entity={drill?.entity ?? 'Opco'}

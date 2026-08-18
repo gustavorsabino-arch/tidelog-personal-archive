@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/skeleton'
 import { PriceWithSource } from '@/components/price-with-source'
 import type { BsAccount, BsSection, BsTree } from '@/lib/qb/balance-sheet'
 import type { OnchainSummary } from '@/lib/accounting/onchain-summary'
-import { GlDrillDrawer } from '@/components/gl-drill-drawer'
+import { GlDrillModal } from '@/components/gl-drill-modal'
 import type { GlDrillScope } from '@/lib/qb/gl-data'
 
 type BsResponse = {
@@ -388,7 +388,7 @@ export default function AccountingPage() {
       </div>
 
       {drill ? (
-        <GlDrillDrawer
+        <GlDrillModal
           open={!!drill}
           onClose={() => setDrill(null)}
           entity={drill.entity}
