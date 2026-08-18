@@ -8,6 +8,8 @@ import { Skeleton } from '@/components/skeleton'
 import { PriceWithSource } from '@/components/price-with-source'
 import type { BsAccount, BsSection, BsTree } from '@/lib/qb/balance-sheet'
 import type { OnchainSummary } from '@/lib/accounting/onchain-summary'
+import { GlDrillDrawer } from '@/components/gl-drill-drawer'
+import type { GlDrillScope } from '@/lib/qb/gl-data'
 
 type BsResponse = {
   entity: string
@@ -39,8 +41,15 @@ function todayUtc(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) {
+function BsRow({
+  node, depth, onGlClick,
+}: {
+  node: BsSection | BsAccount
+  depth: number
+  onGlClick: (glCode: string, label: string) => void
+}) {
   if (node.kind === 'account') {
+    const handleClick = node.glCode ? () => onGlClick(node.glCode!, node.label) : undefined
     return (
       <tr>
         <td
@@ -51,14 +60,37 @@ function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) 
           }}
         >
           {node.glCode ? (
-            <span style={{
-              fontFamily: 'var(--mono)', fontSize: '0.7rem', background: 'var(--surface2)',
-              color: 'var(--accent)', padding: '1px 6px', borderRadius: 4, marginRight: 8,
-            }}>{node.glCode}</span>
+            <button
+              className="gl-badge-button"
+              onClick={handleClick}
+              title="View transactions"
+              style={{
+                fontFamily: 'var(--mono)', fontSize: '0.7rem', background: 'var(--surface2)',
+                color: 'var(--accent)', padding: '1px 6px', borderRadius: 4, marginRight: 8,
+                border: 'none', cursor: 'pointer',
+              }}
+            >{node.glCode}</button>
           ) : null}
           {node.glCode ? node.label.replace(/^\d{4,}\s*·?\s*/, '') : node.label}
         </td>
-        <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}>{fmtUSD(node.amount)}</td>
+        {/* Amount clickable → same GL drill as /pnl. Shows PERIOD ACTIVITY
+            (year-start → as-of month-end), not the cumulative balance. */}
+        <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}>
+          {handleClick ? (
+            <button
+              onClick={handleClick}
+              title="View transactions"
+              style={{
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 'inherit', color: 'var(--accent)',
+                textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: 3,
+                whiteSpace: 'nowrap',
+              }}
+            >{fmtUSD(node.amount)}</button>
+          ) : (
+            fmtUSD(node.amount)
+          )}
+        </td>
       </tr>
     )
   }
@@ -85,7 +117,7 @@ function BsRow({ node, depth }: { node: BsSection | BsAccount; depth: number }) 
         }}>{fmtUSD(node.total)}</td>
       </tr>
       {node.children.map((child, i) => (
-        <BsRow key={i} node={child} depth={depth + 1} />
+        <BsRow key={i} node={child} depth={depth + 1} onGlClick={onGlClick} />
       ))}
     </>
   )
@@ -108,6 +140,33 @@ export default function AccountingPage() {
   const hasOnchain = (data?.onchain?.byToken?.length ?? 0) > 0
 
   const rows = useMemo(() => data?.bs?.sections ?? [], [data])
+
+  // GL drill drawer — same component /pnl uses. A balance-sheet amount is a
+  // CUMULATIVE balance, but the GL cache is period-bounded, so the drill
+  // shows the year's ACTIVITY: Jan 1 of the as-of year → month-end of the
+  // as-of month (cache granularity is monthly; a mid-month as-of would
+  // otherwise exclude the current month's row).
+  const [drill, setDrill] = useState<{
+    entity: GlDrillScope
+    accountNumber: string
+    accountLabel: string
+    periodStart: string
+    periodEnd: string
+  } | null>(null)
+
+  function openDrill(glCode: string, label: string) {
+    const effectiveAsOf = data?.bsAsOf ?? asOf
+    const year = effectiveAsOf.slice(0, 4)
+    const monthNum = Number(effectiveAsOf.slice(5, 7))
+    const lastDay = new Date(Date.UTC(Number(year), monthNum, 0)).getUTCDate()
+    setDrill({
+      entity,
+      accountNumber: glCode,
+      accountLabel: `${label} · ${year} activity`,
+      periodStart: `${year}-01-01`,
+      periodEnd: `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`,
+    })
+  }
 
   return (
     <div>
@@ -313,7 +372,7 @@ export default function AccountingPage() {
                 </colgroup>
                 <tbody>
                   {rows.map((section, i) => (
-                    <BsRow key={i} node={section} depth={0} />
+                    <BsRow key={i} node={section} depth={0} onGlClick={openDrill} />
                   ))}
                 </tbody>
               </table>
@@ -327,6 +386,18 @@ export default function AccountingPage() {
           )}
         </div>
       </div>
+
+      {drill ? (
+        <GlDrillDrawer
+          open={!!drill}
+          onClose={() => setDrill(null)}
+          entity={drill.entity}
+          accountNumber={drill.accountNumber}
+          accountLabel={drill.accountLabel}
+          periodStart={drill.periodStart}
+          periodEnd={drill.periodEnd}
+        />
+      ) : null}
     </div>
   )
 }

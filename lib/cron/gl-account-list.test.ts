@@ -14,12 +14,21 @@ test('buildGlAccountList includes all P&L-typed catalog accounts', () => {
   assert.deepEqual(list.map((x) => x.accountNumber), ['40110', '50000', '60110', '99000', '99100'])
 })
 
-test('buildGlAccountList excludes non-P&L account types', () => {
+test('buildGlAccountList includes balance-sheet account types (BS drill support)', () => {
   const list = buildGlAccountList([], [
     { accountNumber: '40110', accountId: 'qb-1', accountType: 'Income' },
     { accountNumber: '11000', accountId: 'qb-2', accountType: 'Bank' },
     { accountNumber: '20000', accountId: 'qb-3', accountType: 'Accounts Payable' },
     { accountNumber: '30000', accountId: 'qb-4', accountType: 'Equity' },
+  ])
+  assert.deepEqual(list.map((x) => x.accountNumber), ['11000', '20000', '30000', '40110'])
+})
+
+test('buildGlAccountList still excludes unknown account types', () => {
+  const list = buildGlAccountList([], [
+    { accountNumber: '40110', accountId: 'qb-1', accountType: 'Income' },
+    { accountNumber: '88000', accountId: 'qb-9', accountType: 'Suspense Weirdness' },
+    { accountNumber: '89000', accountId: 'qb-10', accountType: null },
   ])
   assert.deepEqual(list.map((x) => x.accountNumber), ['40110'])
 })

@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/skeleton'
 import type { PnlAccount, PnlSection } from '@/lib/qb/pnl'
 import type { QboEntity } from '@/lib/qb/config'
 import type { PnlData } from '@/lib/qb/pnl-combine'
-import { GlDrillDrawer } from '@/app/pnl/gl-drill-drawer'
+import { GlDrillDrawer } from '@/components/gl-drill-drawer'
 import type { GlDrillScope } from '@/lib/qb/gl-data'
 
 export type EntityChoice = QboEntity | 'All'
@@ -79,7 +79,22 @@ function PnlRow({
           ) : null}
           <span>{node.glCode ? node.label.replace(/^\d{4,}\s*·?\s*/, '') : node.label}</span>
         </td>
-        <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtUSD(node.amount)}</td>
+        {/* Amount is clickable too (Kate's request) — same drill as the badge. */}
+        <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>
+          {handleClick ? (
+            <button
+              onClick={handleClick}
+              title="View transactions"
+              style={{
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 'inherit', color: 'var(--accent)',
+                textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: 3,
+              }}
+            >{fmtUSD(node.amount)}</button>
+          ) : (
+            fmtUSD(node.amount)
+          )}
+        </td>
       </tr>
     )
   }
