@@ -70,6 +70,32 @@ type DetailResponse = {
   }
 }
 
+type AuditEvent = {
+  id: string
+  action: string
+  at: string
+  actorEmail: string | null
+  metadata: Record<string, unknown>
+}
+
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  'approval.submitted': 'Submitted',
+  'approval.viewed': 'Opened for review',
+  'approval.approved': 'Approved',
+  'approval.rejected': 'Rejected',
+  'approval.paid': 'Marked paid',
+  'approval.cancelled': 'Cancelled',
+  'approval.attachment_downloaded': 'Attachment downloaded',
+}
+
+function fmtReviewMs(ms: unknown): string | null {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return null
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  return `${m}m ${s % 60}s`
+}
+
 const PAYMENT_TYPE_OPTIONS = [
   { value: '', label: '—' },
   { value: 'wire', label: 'Wire' },
@@ -129,6 +155,7 @@ export function ApprovalsPageClient() {
   // Detail/review modal
   const [detail, setDetail] = useState<DetailResponse | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[] | null>(null)
   const [decisionNote, setDecisionNote] = useState('')
   const [paymentRef, setPaymentRef] = useState('')
   const [actionBusy, setActionBusy] = useState(false)
@@ -158,10 +185,18 @@ export function ApprovalsPageClient() {
     setDetailError(null)
     setDecisionNote('')
     setPaymentRef('')
+    setAuditEvents(null)
     try {
       const res = await apiFetch<DetailResponse>(`/api/approvals/${id}`)
       setDetail(res)
       reviewStartRef.current = Date.now()
+      // Admins also get the SOX audit trail — fetched separately so a trail
+      // failure never blocks the request detail.
+      if (res.viewer.isAdmin) {
+        apiFetch<{ events: AuditEvent[] }>(`/api/approvals/${id}/audit`)
+          .then((a) => setAuditEvents(a.events))
+          .catch(() => setAuditEvents([]))
+      }
     } catch (e) {
       setDetailError(e instanceof Error ? e.message : 'Failed to load request')
     } finally {
@@ -173,6 +208,7 @@ export function ApprovalsPageClient() {
     setDetail(null)
     reviewStartRef.current = null
     setDetailError(null)
+    setAuditEvents(null)
   }
 
   async function submitNewRequest() {
@@ -597,6 +633,61 @@ export function ApprovalsPageClient() {
                       </ul>
                     )}
                   </div>
+
+                  {detail.viewer.isAdmin ? (
+                    <div style={{ marginTop: 18 }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        SOX audit trail
+                      </div>
+                      {auditEvents === null ? (
+                        <div style={{ color: 'var(--muted)', fontSize: '0.74rem' }}>Loading trail…</div>
+                      ) : auditEvents.length === 0 ? (
+                        <div style={{ color: 'var(--muted)', fontSize: '0.74rem' }}>No events recorded.</div>
+                      ) : (
+                        <div style={{
+                          border: '1px solid var(--border)', borderRadius: 6,
+                          maxHeight: 220, overflowY: 'auto',
+                          fontFamily: 'var(--mono)', fontSize: '0.68rem',
+                        }}>
+                          {auditEvents.map((ev, i) => {
+                            const meta = ev.metadata ?? {}
+                            const reviewS = fmtReviewMs((meta as { serverReviewMs?: unknown }).serverReviewMs)
+                            const reviewC = fmtReviewMs((meta as { clientReviewMs?: unknown }).clientReviewMs)
+                            const ip = (meta as { ip?: unknown }).ip
+                            const ua = (meta as { userAgent?: unknown }).userAgent
+                            const note = (meta as { note?: unknown }).note
+                            const payRef = (meta as { paymentReference?: unknown }).paymentReference
+                            const fname = (meta as { filename?: unknown }).filename
+                            return (
+                              <div key={ev.id} style={{
+                                padding: '8px 12px',
+                                borderBottom: i === auditEvents.length - 1 ? 'none' : '1px solid var(--border)',
+                              }}>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                                  <strong>{AUDIT_ACTION_LABELS[ev.action] ?? ev.action}</strong>
+                                  <span style={{ color: 'var(--muted)' }}>{ev.at.slice(0, 19).replace('T', ' ')} UTC</span>
+                                  <span style={{ color: 'var(--muted)' }}>· {ev.actorEmail ?? 'system'}</span>
+                                </div>
+                                <div style={{ color: 'var(--muted)', marginTop: 2, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                                  {typeof ip === 'string' && ip ? <span>IP {ip}</span> : null}
+                                  {reviewS ? <span>review {reviewS} (server)</span> : null}
+                                  {reviewC && !reviewS ? <span>review {reviewC} (client-only ⚠)</span> : null}
+                                  {typeof note === 'string' && note ? <span>note: “{note}”</span> : null}
+                                  {typeof payRef === 'string' && payRef ? <span>ref: {payRef}</span> : null}
+                                  {typeof fname === 'string' && fname ? <span>file: {fname}</span> : null}
+                                </div>
+                                {typeof ua === 'string' && ua ? (
+                                  <div style={{ color: 'var(--muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ua}>
+                                    {ua}
+                                  </div>
+                                ) : null}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
 
                   {detail.viewer.canDecide ? (
                     <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
