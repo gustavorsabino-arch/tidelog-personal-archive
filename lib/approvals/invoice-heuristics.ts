@@ -175,23 +175,47 @@ export function extractInvoiceFieldsFromText(raw: string): ExtractedInvoiceField
     if (later.length > 0) dueDate = later.sort()[0]
   }
 
-  // ── Vendor: "From:" line wins; otherwise the first header-ish line that
-  // isn't the word INVOICE, a date, or mostly digits.
+  // ── Vendor — the party being PAID, in confidence order:
+  //  1. "Account Name:" in the wire/payment details (the beneficiary IS the
+  //     vendor on invoices that carry bank instructions)
+  //  2. an explicit "From:" line
+  //  3. a company-suffix line (LLC/Ltd/PTE/GmbH/Inc/S.A./…) near the top
+  //  4. the first header-ish line
+  // Lines that are clearly OUR side (Orca/Altitude/Zagreus/Juku entities)
+  // or section headers (PAYMENT ADVICE etc.) are never vendor candidates.
+  const isOurEntity = (l: string) => /\b(orca|altitude|zagreus|juku)\b/i.test(l)
+  const isSectionHeader = (l: string) =>
+    /^(payment\s+(advice|information|details)|remittance|statement|wire\s+instructions?|bank\s+details?)\b/i.test(l)
+  const cleanVendor = (s: string): string | null => {
+    const v = s.trim().replace(/[.,;:]+$/, '').slice(0, 60)
+    return v && !isOurEntity(v) ? v : null
+  }
+
   let vendorName: string | null = null
-  const fromLine = lines.find((l) => /^from\s*[:\-]\s*\S/i.test(l))
-  if (fromLine) {
-    vendorName = fromLine.replace(/^from\s*[:\-]\s*/i, '').trim().slice(0, 60) || null
+  const accountName = text.match(/account\s+name\s*[:\-]\s*([^\n]{3,80})/i)
+  if (accountName) vendorName = cleanVendor(accountName[1])
+  if (!vendorName) {
+    const fromLine = lines.find((l) => /^from\s*[:\-]\s*\S/i.test(l))
+    if (fromLine) vendorName = cleanVendor(fromLine.replace(/^from\s*[:\-]\s*/i, ''))
+  }
+  if (!vendorName) {
+    const suffixLine = lines.slice(0, 14).find((l) =>
+      /\b(llc|ltd\.?|limited|pte\.?|gmbh|inc\.?|corp\.?|s\.?a\.?|sarl|bv|oy|ag)\b\.?$/i.test(l.trim())
+      && !isOurEntity(l) && !isSectionHeader(l) && l.length <= 70,
+    )
+    if (suffixLine) vendorName = cleanVendor(suffixLine)
   }
   if (!vendorName) {
     for (const l of lines.slice(0, 8)) {
       if (/^(tax\s+)?invoice\b/i.test(l)) continue
       if (/^(bill|ship|invoice)\s+to\b/i.test(l)) break // customer block starts — stop
       if (/invoice\s*(no|number|#|date)/i.test(l)) continue
+      if (isSectionHeader(l) || isOurEntity(l)) continue
       if (findDates(l).length > 0) continue
       const letters = (l.match(/[A-Za-z]/g) ?? []).length
       if (letters >= 3 && l.length <= 60 && letters > l.length / 3) {
-        vendorName = l
-        break
+        vendorName = cleanVendor(l)
+        if (vendorName) break
       }
     }
   }

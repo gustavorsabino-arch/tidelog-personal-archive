@@ -27,12 +27,21 @@ export async function extractInvoiceFieldsLocally(file: File): Promise<Extracted
     for (let p = 1; p <= pages; p++) {
       const page = await doc.getPage(p)
       const content = await page.getTextContent()
-      // pdf.js returns positioned fragments — rebuild lines by grouping on
-      // the Y coordinate so the heuristics see "Total Due $4,500.00" as one
-      // line instead of four fragments.
+      // pdf.js returns fragments in CONTENT-STREAM order, which can be
+      // arbitrary (footers first, columns interleaved). Sort by visual
+      // position — top-to-bottom (PDF Y grows upward), then left-to-right —
+      // and only then group fragments into lines by Y proximity, so the
+      // heuristics see the page the way a human reads it.
+      const fragments = content.items
+        .filter((item): item is typeof item & { str: string; transform: number[] } =>
+          'str' in item && !!item.str)
+      fragments.sort((a, b) => {
+        const dy = b.transform[5] - a.transform[5]
+        if (Math.abs(dy) > 2) return dy
+        return a.transform[4] - b.transform[4]
+      })
       let lastY: number | null = null
-      for (const item of content.items) {
-        if (!('str' in item) || !item.str) continue
+      for (const item of fragments) {
         const y = Math.round(item.transform[5])
         if (lastY !== null && Math.abs(y - lastY) > 2) text += '\n'
         else if (text && !text.endsWith('\n') && !text.endsWith(' ')) text += ' '

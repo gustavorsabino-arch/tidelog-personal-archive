@@ -87,6 +87,47 @@ describe('extractInvoiceFieldsFromText', () => {
     expect(f.invoiceDate).toBe('2026-07-15')
   })
 
+  test('KAST-style invoice: beneficiary account name wins over headers and our own entity', () => {
+    const text = [
+      'INVOICE',
+      'Orca Management Company S.A.',
+      'PH Peninsula Center, Oficina 705, 0801 Avenida Centenario, Ciudad de Panama Panama',
+      'Invoice Date 27 Jul 2026',
+      'Invoice Number INV-0008',
+      'K-Workplace and Building Services PTE. LTD',
+      '68 Circular Road Singapore 049422',
+      'Description Quantity Unit Price Tax Amount USD',
+      'Amazon web Services, Inc. 1.00 10,242.30 No Tax 10,242.30',
+      'Subtotal 10,242.30',
+      'TOTAL USD 10,242.30',
+      'Due Date: 27 Aug 2026',
+      'Payment Information',
+      'finance@kastcard.com',
+      'Account Name: K-WORKPLACE AND BUILDING SERVICES PTE LTD',
+      'Account Number/IBAN : GB58TCCL04140433618466',
+      'PAYMENT ADVICE',
+      'To: K-Workplace and Building Services PTE. LTD',
+    ].join('\n')
+    const f = extractInvoiceFieldsFromText(text)
+    expect(f.vendorName).toBe('K-WORKPLACE AND BUILDING SERVICES PTE LTD')
+    expect(f.amount).toBe(10242.3)
+    expect(f.currency).toBe('USD')
+    expect(f.invoiceNumber).toBe('INV-0008')
+    expect(f.invoiceDate).toBe('2026-07-27')
+    expect(f.dueDate).toBe('2026-08-27')
+  })
+
+  test('vendor never resolves to our own entities or section headers', () => {
+    const text = [
+      'PAYMENT ADVICE',
+      'Orca OpCo Ltd',
+      'Some Vendor GmbH',
+      'Total 500.00',
+    ].join('\n')
+    const f = extractInvoiceFieldsFromText(text)
+    expect(f.vendorName).toBe('Some Vendor GmbH')
+  })
+
   test('total tier beats subtotal and bigger unrelated numbers are ignored', () => {
     const text = [
       'Vendor Co',

@@ -450,9 +450,16 @@ export function ApprovalsPageClient() {
     XLSX.writeFile(wb, `${r.refNumber}-approval.xlsx`)
   }
 
-  async function prefillFromInvoice() {
-    const file = files.find((f) => f.type === 'application/pdf' || f.type.startsWith('image/')) ?? files[0]
-    if (!file) { setFormError('Attach the invoice first, then prefill'); return }
+  /** File selection: store the files and, on Payment requests, kick off
+   * the invoice prefill automatically — no button, no extra click. */
+  function handleFilesSelected(selected: File[]) {
+    setFiles(selected)
+    if (requestType !== 'payment') return
+    const invoice = selected.find((f) => f.type === 'application/pdf' || f.type.startsWith('image/'))
+    if (invoice) void prefillFromInvoice(invoice)
+  }
+
+  async function prefillFromInvoice(file: File) {
     setPrefillBusy(true)
     setFormError(null)
 
@@ -461,15 +468,20 @@ export function ApprovalsPageClient() {
       currency: string | null; invoiceNumber: string | null
       invoiceDate: string | null; dueDate: string | null
     }
+    // Auto-prefill fills EMPTY fields only — it must never overwrite
+    // something the submitter already typed. (Currency's default 'USD'
+    // counts as empty for this purpose.)
     const apply = (f: PrefillFields) => setForm((p) => ({
       ...p,
-      vendorName: f.vendorName ?? p.vendorName,
-      description: f.description ?? p.description,
-      amount: f.amount != null ? String(f.amount) : p.amount,
-      currency: f.currency && ['USD', 'USDC', 'EUR', 'GBP', 'MYR', 'AED'].includes(f.currency) ? f.currency : p.currency,
-      invoiceNumber: f.invoiceNumber ?? p.invoiceNumber,
-      invoiceDate: f.invoiceDate ?? p.invoiceDate,
-      dueDate: f.dueDate ?? p.dueDate,
+      vendorName: p.vendorName || (f.vendorName ?? ''),
+      description: p.description || (f.description ?? ''),
+      amount: p.amount || (f.amount != null ? String(f.amount) : ''),
+      currency: p.currency === 'USD' && f.currency && ['USD', 'USDC', 'EUR', 'GBP', 'MYR', 'AED'].includes(f.currency)
+        ? f.currency
+        : p.currency,
+      invoiceNumber: p.invoiceNumber || (f.invoiceNumber ?? ''),
+      invoiceDate: p.invoiceDate || (f.invoiceDate ?? ''),
+      dueDate: p.dueDate || (f.dueDate ?? ''),
     }))
 
     try {
@@ -811,6 +823,36 @@ export function ApprovalsPageClient() {
                 ))}
               </div>
 
+              {/* Attachments FIRST — attaching an invoice on a Payment
+                  request auto-prefills the fields below (empty ones only). */}
+              <div style={{ marginBottom: 16, padding: '12px 14px', border: '1px dashed var(--border)', borderRadius: 8 }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600 }}>
+                  {requestType === 'payment'
+                    ? '1 · Attach the invoice first (PDF) — the fields below fill in automatically'
+                    : 'Attachments (optional — up to 5 files, 4 MB each)'}
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.png,.jpg,.jpeg,.xlsx,.csv,.eml,.msg"
+                  onChange={(e) => handleFilesSelected(Array.from(e.target.files ?? []).slice(0, 5))}
+                  disabled={submitting}
+                />
+                {files.length > 0 ? (
+                  <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.72rem', color: 'var(--muted)' }}>
+                    {files.map((f) => (
+                      <li key={f.name}>{f.name} · {(f.size / 1024).toFixed(0)} KB</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {prefillBusy ? (
+                  <div style={{ marginTop: 8, fontSize: '0.7rem', color: 'var(--accent)' }}>
+                    Reading invoice…
+                  </div>
+                ) : null}
+              </div>
+
               {requestType === 'funding' ? (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <label style={{ display: 'grid', gap: 4 }}>
@@ -904,43 +946,6 @@ export function ApprovalsPageClient() {
                 </label>
               </div>
               )}
-
-              <div style={{ marginTop: 16 }}>
-                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6 }}>
-                  Attachments (invoice PDF etc — up to 5 files, 4 MB each)
-                </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept=".pdf,.png,.jpg,.jpeg,.xlsx,.csv,.eml,.msg"
-                  onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 5))}
-                />
-                {files.length > 0 ? (
-                  <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.72rem', color: 'var(--muted)' }}>
-                    {files.map((f) => (
-                      <li key={f.name}>{f.name} · {(f.size / 1024).toFixed(0)} KB</li>
-                    ))}
-                  </ul>
-                ) : null}
-                {requestType === 'payment' ? (
-                  <div style={{ marginTop: 8 }}>
-                    <button
-                      className="fsel"
-                      onClick={() => void prefillFromInvoice()}
-                      disabled={prefillBusy || submitting || files.length === 0}
-                      title={files.length === 0
-                        ? 'Attach the invoice (PDF or photo) first'
-                        : 'Read the attached invoice and prefill the fields above'}
-                    >
-                      {prefillBusy ? 'Reading invoice…' : '✨ Prefill from invoice'}
-                    </button>
-                    <span style={{ marginLeft: 8, fontSize: '0.66rem', color: 'var(--muted)' }}>
-                      Fills vendor, amount, dates from the attached invoice — always review before submitting.
-                    </span>
-                  </div>
-                ) : null}
-              </div>
 
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6 }}>
