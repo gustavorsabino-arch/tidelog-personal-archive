@@ -13,12 +13,24 @@ import { QboHttpError, fetchQboJson, qbFetchReport, type QbReportType } from '@/
 import { getQboRealmId, isQboEntity, type QboEntity } from '@/lib/qb/config'
 import { mapQbClassesToRows, mapQbVendorsToRows } from '@/lib/qb/catalog-map'
 import { buildGlAccountList } from './gl-account-list.ts'
+import { parseQboGeneralLedgerRows } from '@/lib/budget/qb-general-ledger'
 
 /**
  * How long to trust a non-closed (moving-window or current-month) cache row
  * before re-fetching. Closed-month rows are never re-fetched once cached.
  */
 const CACHE_STALE_MS = 48 * 60 * 60 * 1000
+
+/**
+ * Retroactive-booking self-heal window. The operator books months weeks
+ * late (July's JEs get posted to QB in mid-August), so a closed month's GL
+ * report cached BEFORE the posting is empty — and "closed months are cached
+ * forever" would freeze that emptiness permanently. Any closed-month GL row
+ * that parses to ZERO transactions and whose period ended within this
+ * window is re-verified on the normal CACHE_STALE_MS cadence instead.
+ * Older empty months are assumed legitimately empty and stay frozen.
+ */
+const EMPTY_GL_RECHECK_WINDOW_MS = 60 * 24 * 60 * 60 * 1000
 
 /**
  * How long we trust the account catalog before refreshing. Accounts rarely
@@ -747,10 +759,24 @@ export async function fetchQbReportsJob(
     // stale). Force-range specs always pass through (force re-fetches them).
     // Missing closed-month specs (e.g., new accounts, post-partial-crash
     // recovery) also pass through and get processed normally.
+    // Closed GL specs whose cached report is EMPTY and whose month ended
+    // within the retroactive-booking recheck window also pass through — the
+    // main loop decides whether they're stale enough to re-verify (the
+    // self-heal for months booked to QB weeks after they closed).
     const filteredSpecs = specs.filter((spec) => {
       if (!spec.isClosed) return true
       if (forceFromDate !== null && spec.periodStart >= forceFromDate) return true
-      return !cacheMap.has(cacheKey(spec.reportType, spec.periodStart, spec.periodEnd, spec.filterParams))
+      const cached = cacheMap.get(cacheKey(spec.reportType, spec.periodStart, spec.periodEnd, spec.filterParams))
+      if (!cached) return true
+      if (spec.reportType === 'general_ledger') {
+        const monthEndMs = Date.parse(`${spec.periodEnd}T23:59:59Z`)
+        if (Number.isFinite(monthEndMs) && now.getTime() - monthEndMs < EMPTY_GL_RECHECK_WINDOW_MS) {
+          try {
+            if (parseQboGeneralLedgerRows(cached.data as never).length === 0) return true
+          } catch { /* unparseable → treat as cached */ }
+        }
+      }
+      return false
     })
 
     console.log(
@@ -775,8 +801,32 @@ export async function fetchQbReportsJob(
       } else if (!existingMatch) {
         shouldFetch = true
       } else if (spec.isClosed) {
-        data = existingMatch.data
-        skipped++
+        // Retroactive-booking self-heal: a closed month's GL row that parses
+        // to ZERO transactions may have been cached before the operator
+        // posted that month's JEs (bookings land weeks late). Within the
+        // recheck window, re-verify empty GL rows on the normal stale
+        // cadence instead of trusting them forever. Legitimately-empty
+        // months outside the window stay frozen (no extra QB calls).
+        let refetchEmptyGl = false
+        if (spec.reportType === 'general_ledger') {
+          const monthEndMs = Date.parse(`${spec.periodEnd}T23:59:59Z`)
+          const withinWindow = Number.isFinite(monthEndMs)
+            && now.getTime() - monthEndMs < EMPTY_GL_RECHECK_WINDOW_MS
+          const isStale = now.getTime() - existingMatch.fetchedAt.getTime() >= CACHE_STALE_MS
+          if (withinWindow && isStale) {
+            try {
+              refetchEmptyGl = parseQboGeneralLedgerRows(existingMatch.data as never).length === 0
+            } catch {
+              refetchEmptyGl = false
+            }
+          }
+        }
+        if (refetchEmptyGl) {
+          shouldFetch = true
+        } else {
+          data = existingMatch.data
+          skipped++
+        }
       } else if (now.getTime() - existingMatch.fetchedAt.getTime() < CACHE_STALE_MS) {
         data = existingMatch.data
         skipped++
