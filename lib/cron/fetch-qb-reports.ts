@@ -163,10 +163,21 @@ async function buildSpecsForEntity(
   }).from(qbAccountCatalog).where(eq(qbAccountCatalog.entityId, entityId))
 
   const allAccounts = buildGlAccountList(budgetAccountNumbers, catalog)
-  const accounts = accountScope === 'budget-mapped'
+  const scoped = accountScope === 'budget-mapped'
     ? allAccounts.filter((a) => new Set(budgetAccountNumbers).has(a.accountNumber))
     : allAccounts
-  if (accounts.length === 0) return specs
+  if (scoped.length === 0) return specs
+
+  // Fairness rotation: buildGlAccountList returns accounts in a fixed
+  // alphabetical order, so when a run is wall-killed (Vercel maxDuration)
+  // partway through the GL specs, the SAME late-list accounts (70xxx/71xxx)
+  // starve forever — their newer months never reach the cache and the P&L
+  // drill shows stale data. Rotating the start offset by the current hour
+  // means successive hourly runs begin at different points in the list, so
+  // every account gets first-in-line treatment within any 24h window.
+  // Closed-month idempotence makes the re-visits nearly free.
+  const offset = (now.getUTCDate() * 24 + now.getUTCHours()) % scoped.length
+  const accounts = [...scoped.slice(offset), ...scoped.slice(0, offset)]
 
   for (const { accountNumber, accountId } of accounts) {
     for (const m of months) {
