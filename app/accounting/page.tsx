@@ -136,8 +136,6 @@ export default function AccountingPage() {
   const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
   const glTotal = data?.bs?.totals.assets ?? 0
-  const onchainTotal = data?.onchain?.totalUsd ?? 0
-  const hasOnchain = (data?.onchain?.byToken?.length ?? 0) > 0
 
   const rows = useMemo(() => data?.bs?.sections ?? [], [data])
 
@@ -221,13 +219,11 @@ export default function AccountingPage() {
 
       {loading && !data ? (
         <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-          {[0, 1].map((i) => (
-            <div key={i} className="card">
-              <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
-              <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
-              <Skeleton width={180} height={10} />
-            </div>
-          ))}
+          <div className="card">
+            <Skeleton width={90} height={10} style={{ marginBottom: 10 }} />
+            <Skeleton width={140} height={22} style={{ marginBottom: 8 }} />
+            <Skeleton width={180} height={10} />
+          </div>
         </div>
       ) : (
       <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
@@ -242,17 +238,6 @@ export default function AccountingPage() {
             <div className="card-sub" style={{ color: 'var(--red)' }}>QB error</div>
           ) : null}
         </div>
-        <div className="card">
-          <div className="card-label">On-Chain Total</div>
-          <div className={`card-value${hasOnchain ? '' : ' orange'}`} style={hasOnchain ? undefined : { color: 'var(--muted)' }}>
-            {hasOnchain ? fmtUSD(onchainTotal, 0) : '—'}
-          </div>
-          <div className="card-sub">
-            {hasOnchain
-              ? `${data?.onchain?.walletCount ?? 0} wallets · snapshot ${data?.onchain?.snapshotDate ?? '—'}`
-              : 'Run fetch-balances cron'}
-          </div>
-        </div>
       </div>
       )}
 
@@ -263,84 +248,7 @@ export default function AccountingPage() {
         </div>
       ) : null}
 
-      {data?.onchainError ? (
-        <div style={{
-          marginTop: 12, padding: '8px 12px', borderRadius: 'var(--radius)',
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          color: 'var(--red)', fontSize: '0.75rem',
-        }}>
-          On-chain summary unavailable: {data.onchainError}
-        </div>
-      ) : null}
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, marginTop: 16 }}>
-        {/* On-chain per-token */}
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: '0.85rem', fontWeight: 600 }}>
-            On-Chain Balances
-          </div>
-          {loading && !data ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-              <tbody>
-                {[0, 1, 2, 3, 4].map((i) => (
-                  <tr key={i}>
-                    <td style={{ padding: '6px 10px' }}><Skeleton width={60} height={12} /></td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={70} height={12} /></td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right' }}><Skeleton width={80} height={12} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : data?.onchain && data.onchain.byToken.length > 0 ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-              <thead>
-                <tr style={{ background: 'var(--surface2)' }}>
-                  <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: '0.65rem', color: 'var(--muted)', textTransform: 'uppercase' }}>Token</th>
-                  <th style={{ padding: '8px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--muted)', textTransform: 'uppercase' }}>Amount</th>
-                  <th style={{ padding: '8px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--muted)', textTransform: 'uppercase' }}>Price</th>
-                  <th style={{ padding: '8px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--muted)', textTransform: 'uppercase' }}>USD</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.onchain.byToken.map((t) => {
-                  const missingPrice = t.priceUsd === 0 && !STABLE_TOKENS.has(t.token) && t.amount > 0
-                  return (
-                    <tr key={t.token}>
-                      <td style={{ padding: '6px 10px' }}>
-                        <span style={{
-                          display: 'inline-block', width: 8, height: 8, borderRadius: 4,
-                          background: TOKEN_COLORS[t.token] ?? TOKEN_COLORS.default, marginRight: 8,
-                        }} />
-                        {t.token}
-                      </td>
-                      <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtNum(t.amount, 4)}</td>
-                      <td
-                        style={{
-                          padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)',
-                        }}
-                        title={missingPrice ? 'No price available — USD treated as 0' : undefined}
-                      >
-                        <PriceWithSource
-                          value={missingPrice ? null : t.priceUsd}
-                          source={t.source}
-                          kind={data?.onchain?.kind ?? 'live'}
-                          asOfDate={data?.onchain?.snapshotDate ?? null}
-                        />
-                      </td>
-                      <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtUSD(t.usd, 0)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          ) : (
-            <div className="empty" style={{ padding: 24 }}>
-              <div style={{ fontSize: '0.75rem' }}>No on-chain snapshot yet for {entity}.</div>
-            </div>
-          )}
-        </div>
-
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16, marginTop: 16 }}>
         {/* QB BS tree */}
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: '0.85rem', fontWeight: 600 }}>
