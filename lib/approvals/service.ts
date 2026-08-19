@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { and, desc, eq, gte, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, ne, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { approvalRequest, approvalAttachment, auditLog } from '@/lib/db/schema'
+import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, auditLog, user } from '@/lib/db/schema'
 import type { SoxRequestContext } from './request-context'
 
 /**
@@ -19,10 +19,20 @@ export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number]
 export const PAYMENT_TYPES = ['wire', 'ach', 'crypto', 'card', 'check', 'other'] as const
 export type PaymentType = (typeof PAYMENT_TYPES)[number]
 
+export const REQUEST_TYPES = ['payment', 'funding'] as const
+export type RequestType = (typeof REQUEST_TYPES)[number]
+
+export const FUNDING_NETWORKS = ['ethereum', 'solana', 'tron'] as const
+export type FundingNetwork = (typeof FUNDING_NETWORKS)[number]
+
+export const FUNDING_TOKENS = ['USDC', 'USDT', 'ORCA', 'SOL', 'ETH'] as const
+export type FundingToken = (typeof FUNDING_TOKENS)[number]
+
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024   // 4 MB per file (Vercel body budget)
 export const MAX_ATTACHMENTS_PER_REQUEST = 5
 
 export type NewApprovalRequestInput = {
+  requestType?: RequestType    // defaults to 'payment'
   vendorName: string
   description?: string | null
   amount: number
@@ -34,6 +44,10 @@ export type NewApprovalRequestInput = {
   department?: string | null
   entity?: string | null
   paymentType?: PaymentType | null
+  // Funding-only (wallet top-up)
+  network?: FundingNetwork | null
+  token?: FundingToken | null
+  walletAddress?: string | null
 }
 
 export type NewAttachmentInput = {
@@ -74,11 +88,40 @@ export async function createApprovalRequest(
     }
   }
 
+  const requestType: RequestType = input.requestType ?? 'payment'
+  if (requestType === 'funding') {
+    if (!input.network || !(FUNDING_NETWORKS as readonly string[]).includes(input.network)) {
+      throw Object.assign(new Error('Funding requests need a network (ethereum, solana, tron)'), { statusCode: 400 })
+    }
+    if (!input.token || !(FUNDING_TOKENS as readonly string[]).includes(input.token)) {
+      throw Object.assign(new Error('Funding requests need a token (USDC, USDT, ORCA, SOL, ETH)'), { statusCode: 400 })
+    }
+    if (!input.walletAddress?.trim()) {
+      throw Object.assign(new Error('Funding requests need a wallet address'), { statusCode: 400 })
+    }
+    if (!input.description?.trim()) {
+      throw Object.assign(new Error('Funding requests need a description'), { statusCode: 400 })
+    }
+  }
+
+  // Approver snapshot: every non-banned admin except the submitter, frozen
+  // at submission time so a role change mid-flight can't alter how many
+  // approvals this request needs (SOX determinism). Queried OUTSIDE the
+  // transaction — it's a read.
+  const admins = await db
+    .select({ id: user.id, email: user.email })
+    .from(user)
+    .where(and(eq(user.role, 'admin'), eq(user.banned, false), ne(user.id, actor.id)))
+
   return await db.transaction(async (tx) => {
     const refNumber = await nextRefNumber(tx)
     const [created] = await tx.insert(approvalRequest).values({
       refNumber,
       submitterId: actor.id,
+      requestType,
+      network: requestType === 'funding' ? input.network : null,
+      token: requestType === 'funding' ? input.token : null,
+      walletAddress: requestType === 'funding' ? input.walletAddress!.trim() : null,
       vendorName: input.vendorName,
       description: input.description ?? null,
       amount: input.amount.toFixed(2),
@@ -107,6 +150,12 @@ export async function createApprovalRequest(
       attachmentMeta.push({ filename: a.filename, sha256: digest, sizeBytes: a.bytes.length })
     }
 
+    if (admins.length > 0) {
+      await tx.insert(approvalAssignee).values(
+        admins.map((a) => ({ requestId: created.id, userId: a.id, email: a.email })),
+      )
+    }
+
     // Transactional audit row — commits or rolls back with the request.
     await tx.insert(auditLog).values({
       userId: actor.id === 'dev-user' ? null : actor.id,
@@ -116,9 +165,16 @@ export async function createApprovalRequest(
       metadata: {
         refNumber,
         byEmail: actor.email,
+        requestType,
         vendorName: input.vendorName,
         amount: input.amount,
         currency: input.currency || 'USD',
+        ...(requestType === 'funding' ? {
+          network: input.network,
+          token: input.token,
+          walletAddress: input.walletAddress?.trim(),
+        } : {}),
+        assignedApprovers: admins.map((a) => a.email),
         attachments: attachmentMeta,
         ip: ctx.ip,
         userAgent: ctx.userAgent,
@@ -165,6 +221,15 @@ export async function recordApprovalView(
  *  - server-side review duration = decidedAt − latest 'approval.viewed' row
  *    for this (user, request); client-reported ms stored as corroboration
  *  - audit row is transactional with the status flip
+ *
+ * Multi-approver: when the request has assignee rows (snapshotted at
+ * submission), each assignee casts one vote in approval_decision (composite
+ * PK blocks re-votes). The request flips to 'approved' only when EVERY
+ * assignee approved; any single rejection (note mandatory) flips it to
+ * 'rejected' immediately. decided_by/decided_at/decision_note stay the
+ * FINAL word — the last approver or the rejector. Requests created before
+ * the snapshot existed have no assignees and keep the V1 single-decision
+ * behavior.
  */
 export async function decideApprovalRequest(
   actor: Actor,
@@ -174,6 +239,9 @@ export async function decideApprovalRequest(
   clientReviewMs: number | null,
   ctx: SoxRequestContext,
 ) {
+  if (decision === 'rejected' && !note?.trim()) {
+    throw Object.assign(new Error('A comment is required when rejecting a request'), { statusCode: 400 })
+  }
   // Latest viewed event BEFORE the transaction so the delta excludes our
   // own writes. Absence is recorded honestly as serverReviewMs=null (the
   // approver decided without opening the detail — an auditor red flag the
@@ -210,15 +278,63 @@ export async function decideApprovalRequest(
     const now = new Date()
     const serverReviewMs = lastViewedAt ? now.getTime() - lastViewedAt.getTime() : null
 
+    // Assignee snapshot + votes so far (read under the FOR UPDATE lock, so
+    // two concurrent last-votes can't both see "one missing").
+    const assignees = await tx
+      .select({ userId: approvalAssignee.userId, email: approvalAssignee.email })
+      .from(approvalAssignee)
+      .where(eq(approvalAssignee.requestId, requestId))
+    const votes = await tx
+      .select({ approverId: approvalDecision.approverId, decision: approvalDecision.decision })
+      .from(approvalDecision)
+      .where(eq(approvalDecision.requestId, requestId))
+
+    let statusAfter: 'pending' | 'approved' | 'rejected'
+    let pendingApprovers: string[] = []
+
+    if (assignees.length > 0) {
+      if (!assignees.some((a) => a.userId === actor.id)) {
+        throw Object.assign(new Error('You are not an assigned approver for this request'), { statusCode: 403 })
+      }
+      if (votes.some((v) => v.approverId === actor.id)) {
+        throw Object.assign(new Error('You already decided on this request'), { statusCode: 409 })
+      }
+
+      await tx.insert(approvalDecision).values({
+        requestId,
+        approverId: actor.id,
+        decision,
+        note: note?.trim() || null,
+        decidedAt: now,
+      })
+
+      const approvedIds = new Set(
+        votes.filter((v) => v.decision === 'approved').map((v) => v.approverId),
+      )
+      if (decision === 'approved') approvedIds.add(actor.id)
+
+      statusAfter = decision === 'rejected'
+        ? 'rejected'
+        : assignees.every((a) => approvedIds.has(a.userId)) ? 'approved' : 'pending'
+      pendingApprovers = assignees
+        .filter((a) => !approvedIds.has(a.userId))
+        .map((a) => a.email)
+    } else {
+      // Legacy V1 request (no assignee snapshot): single decision closes it.
+      statusAfter = decision
+    }
+
     const [updated] = await tx
       .update(approvalRequest)
-      .set({
-        status: decision,
-        decidedById: actor.id,
-        decidedAt: now,
-        decisionNote: note,
-        updatedAt: now,
-      })
+      .set(statusAfter === 'pending'
+        ? { updatedAt: now }
+        : {
+            status: statusAfter,
+            decidedById: actor.id,
+            decidedAt: now,
+            decisionNote: note,
+            updatedAt: now,
+          })
       .where(eq(approvalRequest.id, requestId))
       .returning()
 
@@ -231,6 +347,8 @@ export async function decideApprovalRequest(
         refNumber: existing.refNumber,
         byEmail: actor.email,
         note,
+        requestStatusAfter: statusAfter,
+        ...(assignees.length > 0 ? { pendingApprovers, totalApprovers: assignees.length } : {}),
         serverReviewMs,
         clientReviewMs,
         reviewMismatch: serverReviewMs !== null && clientReviewMs !== null

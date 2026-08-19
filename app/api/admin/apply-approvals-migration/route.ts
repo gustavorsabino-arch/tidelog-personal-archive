@@ -78,6 +78,39 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS "approval_attachment_request_idx" ON "app"."approval_attachment" USING btree ("request_id")`,
   `CREATE INDEX IF NOT EXISTS "approval_submitter_idx" ON "app"."approval_request" USING btree ("submitter_id","submitted_at")`,
   `CREATE INDEX IF NOT EXISTS "approval_status_idx" ON "app"."approval_request" USING btree ("status","submitted_at")`,
+
+  // ── Migration 0024: Payment/Funding types + multi-approver tables ──
+  `ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "request_type" text DEFAULT 'payment' NOT NULL`,
+  `ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "network" text`,
+  `ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "token" text`,
+  `ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "wallet_address" text`,
+  `CREATE TABLE IF NOT EXISTS "app"."approval_assignee" (
+    "request_id" uuid NOT NULL,
+    "user_id" text NOT NULL,
+    "email" text NOT NULL,
+    "assigned_at" timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT "approval_assignee_request_id_user_id_pk" PRIMARY KEY("request_id","user_id")
+  )`,
+  `CREATE TABLE IF NOT EXISTS "app"."approval_decision" (
+    "request_id" uuid NOT NULL,
+    "approver_id" text NOT NULL,
+    "decision" text NOT NULL,
+    "note" text,
+    "decided_at" timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT "approval_decision_request_id_approver_id_pk" PRIMARY KEY("request_id","approver_id")
+  )`,
+  `DO $$ BEGIN
+    ALTER TABLE "app"."approval_assignee" ADD CONSTRAINT "approval_assignee_request_id_approval_request_id_fk" FOREIGN KEY ("request_id") REFERENCES "app"."approval_request"("id") ON DELETE cascade ON UPDATE no action;
+  EXCEPTION WHEN duplicate_object THEN null; END $$`,
+  `DO $$ BEGIN
+    ALTER TABLE "app"."approval_assignee" ADD CONSTRAINT "approval_assignee_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "app"."user"("id") ON DELETE no action ON UPDATE no action;
+  EXCEPTION WHEN duplicate_object THEN null; END $$`,
+  `DO $$ BEGIN
+    ALTER TABLE "app"."approval_decision" ADD CONSTRAINT "approval_decision_request_id_approval_request_id_fk" FOREIGN KEY ("request_id") REFERENCES "app"."approval_request"("id") ON DELETE cascade ON UPDATE no action;
+  EXCEPTION WHEN duplicate_object THEN null; END $$`,
+  `DO $$ BEGIN
+    ALTER TABLE "app"."approval_decision" ADD CONSTRAINT "approval_decision_approver_id_user_id_fk" FOREIGN KEY ("approver_id") REFERENCES "app"."user"("id") ON DELETE no action ON UPDATE no action;
+  EXCEPTION WHEN duplicate_object THEN null; END $$`,
 ]
 
 export async function GET(req: Request) {

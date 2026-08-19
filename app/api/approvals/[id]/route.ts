@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { approvalRequest, approvalAttachment, user } from '@/lib/db/schema'
+import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, user } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { hasPermission } from '@/lib/auth/permissions'
 import { getSoxRequestContext } from '@/lib/approvals/request-context'
@@ -53,6 +53,31 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     .from(approvalAttachment)
     .where(eq(approvalAttachment.requestId, id))
 
+  // Approver panel: assignee snapshot + each one's vote (if cast).
+  const assignees = await db
+    .select({ userId: approvalAssignee.userId, email: approvalAssignee.email })
+    .from(approvalAssignee)
+    .where(eq(approvalAssignee.requestId, id))
+  const votes = await db
+    .select({
+      approverId: approvalDecision.approverId,
+      decision: approvalDecision.decision,
+      note: approvalDecision.note,
+      decidedAt: approvalDecision.decidedAt,
+    })
+    .from(approvalDecision)
+    .where(eq(approvalDecision.requestId, id))
+  const voteById = new Map(votes.map((v) => [v.approverId, v]))
+  const approvers = assignees.map((a) => {
+    const vote = voteById.get(a.userId)
+    return {
+      email: a.email,
+      state: (vote ? vote.decision : 'pending') as 'approved' | 'rejected' | 'pending',
+      note: vote?.note ?? null,
+      decidedAt: vote?.decidedAt ?? null,
+    }
+  })
+
   // Record the review-view for eligible approvers (never for the submitter
   // looking at their own request — that's not a review).
   const canApprove = hasPermission(actor.role, 'approvals:approve')
@@ -64,13 +89,22 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     ).catch(() => {}) // view-tracking must never block the read
   }
 
+  // Multi-approver requests: only an assignee who hasn't voted may decide.
+  // Legacy (assignee-less) requests keep the V1 rule: any approver but the
+  // submitter.
+  const isAssignee = assignees.some((a) => a.userId === actor.id)
+  const hasVoted = voteById.has(actor.id)
+  const canDecide = canApprove && !isSubmitter && row.request.status === 'pending'
+    && (assignees.length === 0 || (isAssignee && !hasVoted))
+
   return NextResponse.json({
     request: { ...row.request, submitterEmail: row.submitterEmail },
     attachments,
+    approvers,
     viewer: {
       isAdmin,
       isSubmitter,
-      canDecide: canApprove && !isSubmitter && row.request.status === 'pending',
+      canDecide,
       canPay: canApprove && row.request.status === 'approved',
       canCancel: isSubmitter && row.request.status === 'pending',
     },

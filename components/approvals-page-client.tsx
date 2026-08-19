@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import * as XLSX from 'xlsx'
 import { apiFetch, apiFormFetch } from '@/lib/api'
 import { useSharedAccess } from '@/lib/access-context'
 import { hasPermission } from '@/lib/auth/permissions'
@@ -24,12 +25,23 @@ import { fmtUSD } from '@/lib/format'
  * server-computed duration (server side is authoritative).
  */
 
+type ApproverState = {
+  email: string
+  state: 'approved' | 'rejected' | 'pending'
+  note: string | null
+  decidedAt: string | null
+}
+
 type ApprovalRow = {
   id: string
   refNumber: string
   submitterId: string
   submitterEmail: string | null
   status: 'pending' | 'approved' | 'rejected' | 'paid' | 'cancelled'
+  requestType: 'payment' | 'funding'
+  network: string | null
+  token: string | null
+  walletAddress: string | null
   vendorName: string
   description: string | null
   amount: string
@@ -47,6 +59,7 @@ type ApprovalRow = {
   paidAt: string | null
   paymentReference: string | null
   attachmentCount: number
+  approvers?: ApproverState[]
 }
 
 type AttachmentMeta = {
@@ -61,6 +74,7 @@ type AttachmentMeta = {
 type DetailResponse = {
   request: ApprovalRow
   attachments: AttachmentMeta[]
+  approvers: ApproverState[]
   viewer: {
     isAdmin: boolean
     isSubmitter: boolean
@@ -126,12 +140,51 @@ type NewRequestForm = {
   department: string
   entity: string
   paymentType: string
+  network: string
+  token: string
+  walletAddress: string
 }
 
 const EMPTY_FORM: NewRequestForm = {
   vendorName: '', description: '', amount: '', currency: 'USD',
   invoiceNumber: '', invoiceDate: '', dueDate: '',
   glAccount: '', department: '', entity: '', paymentType: '',
+  network: '', token: '', walletAddress: '',
+}
+
+const FUNDING_NETWORK_OPTIONS = ['ethereum', 'solana', 'tron'] as const
+const FUNDING_TOKEN_OPTIONS = ['USDC', 'USDT', 'ORCA', 'SOL', 'ETH'] as const
+
+const APPROVER_CHIP_STYLE: Record<ApproverState['state'], { bg: string; fg: string; icon: string }> = {
+  approved: { bg: 'rgba(6,214,160,0.15)',  fg: '#06D6A0',      icon: '✓' },
+  rejected: { bg: 'rgba(217,48,37,0.12)',  fg: '#d93025',      icon: '✗' },
+  pending:  { bg: 'rgba(136,136,136,0.12)', fg: 'var(--muted)', icon: '○' },
+}
+
+function ApproverChips({ approvers }: { approvers: ApproverState[] | undefined }) {
+  if (!approvers || approvers.length === 0) {
+    return <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>—</span>
+  }
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {approvers.map((a) => {
+        const s = APPROVER_CHIP_STYLE[a.state]
+        return (
+          <span
+            key={a.email}
+            title={`${a.email} — ${a.state}${a.note ? ` · “${a.note}”` : ''}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '1px 8px', borderRadius: 999, background: s.bg, color: s.fg,
+              fontSize: '0.68rem', fontWeight: 600, fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
+            }}
+          >
+            {s.icon} {a.email.split('@')[0]}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 export function ApprovalsPageClient() {
@@ -146,6 +199,7 @@ export function ApprovalsPageClient() {
 
   // New-request modal
   const [formOpen, setFormOpen] = useState(false)
+  const [requestType, setRequestType] = useState<'payment' | 'funding'>('payment')
   const [form, setForm] = useState<NewRequestForm>(EMPTY_FORM)
   const [files, setFiles] = useState<File[]>([])
   const [submitting, setSubmitting] = useState(false)
@@ -160,6 +214,8 @@ export function ApprovalsPageClient() {
   const [paymentRef, setPaymentRef] = useState('')
   const [actionBusy, setActionBusy] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  // Audit-trail rows whose full user-agent is expanded (default: truncated).
+  const [expandedUa, setExpandedUa] = useState<Set<string>>(new Set())
   // SOX client-side review timer — started when the detail modal opens.
   const reviewStartRef = useRef<number | null>(null)
 
@@ -209,17 +265,103 @@ export function ApprovalsPageClient() {
     reviewStartRef.current = null
     setDetailError(null)
     setAuditEvents(null)
+    setExpandedUa(new Set())
+  }
+
+  // Export the whole detail screen — request fields, approvers, attachments,
+  // and (admins) the SOX audit trail — as one .xlsx.
+  function exportDetail() {
+    if (!detail) return
+    const r = detail.request
+    const wb = XLSX.utils.book_new()
+
+    const fields: (string | number)[][] = [
+      ['Field', 'Value'],
+      ['Ref', r.refNumber],
+      ['Type', r.requestType === 'funding' ? 'Funding' : 'Payment'],
+      ['Status', r.status],
+      ['Vendor', r.vendorName],
+      ['Description', r.description ?? ''],
+      ['Amount', Number(r.amount)],
+      ['Currency', r.currency],
+      ...(r.requestType === 'funding' ? [
+        ['Network', r.network ?? ''],
+        ['Token', r.token ?? ''],
+        ['Wallet address', r.walletAddress ?? ''],
+      ] as (string | number)[][] : [
+        ['Invoice #', r.invoiceNumber ?? ''],
+        ['Invoice date', r.invoiceDate ?? ''],
+        ['Due date', r.dueDate ?? ''],
+        ['GL account', r.glAccount ?? ''],
+        ['Payment type', r.paymentType ?? ''],
+      ] as (string | number)[][]),
+      ['Entity', r.entity ?? ''],
+      ['Department', r.department ?? ''],
+      ['Submitter', r.submitterEmail ?? ''],
+      ['Submitted at', r.submittedAt ?? ''],
+      ['Decided at', r.decidedAt ?? ''],
+      ['Decision note', r.decisionNote ?? ''],
+      ['Paid at', r.paidAt ?? ''],
+      ['Payment reference', r.paymentReference ?? ''],
+    ]
+    fields.push([''], ['Approver', 'Decision'])
+    for (const a of detail.approvers ?? []) {
+      fields.push([a.email, `${a.state}${a.decidedAt ? ` at ${String(a.decidedAt).slice(0, 19).replace('T', ' ')} UTC` : ''}${a.note ? ` — “${a.note}”` : ''}`])
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(fields), 'Request')
+
+    if (detail.attachments.length > 0) {
+      const att: (string | number)[][] = [['Filename', 'Size (KB)', 'SHA-256', 'Uploaded at']]
+      for (const a of detail.attachments) {
+        att.push([a.filename, Math.round(a.sizeBytes / 1024), a.sha256, a.uploadedAt])
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(att), 'Attachments')
+    }
+
+    if (auditEvents && auditEvents.length > 0) {
+      const trail: (string | number)[][] = [['When (UTC)', 'Action', 'Actor', 'IP', 'User agent', 'Note', 'Review (server)', 'Review (client)', 'Details']]
+      for (const ev of auditEvents) {
+        const m = (ev.metadata ?? {}) as Record<string, unknown>
+        const extra: string[] = []
+        if (typeof m.paymentReference === 'string' && m.paymentReference) extra.push(`ref: ${m.paymentReference}`)
+        if (typeof m.filename === 'string' && m.filename) extra.push(`file: ${m.filename}`)
+        if (typeof m.requestStatusAfter === 'string') extra.push(`status after: ${m.requestStatusAfter}`)
+        if (Array.isArray(m.pendingApprovers) && m.pendingApprovers.length > 0) extra.push(`waiting on: ${(m.pendingApprovers as string[]).join(', ')}`)
+        trail.push([
+          ev.at.slice(0, 19).replace('T', ' '),
+          AUDIT_ACTION_LABELS[ev.action] ?? ev.action,
+          ev.actorEmail ?? 'system',
+          typeof m.ip === 'string' ? m.ip : '',
+          typeof m.userAgent === 'string' ? m.userAgent : '',
+          typeof m.note === 'string' ? m.note : '',
+          fmtReviewMs(m.serverReviewMs) ?? '',
+          fmtReviewMs(m.clientReviewMs) ?? '',
+          extra.join(' · '),
+        ])
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(trail), 'Audit trail')
+    }
+
+    XLSX.writeFile(wb, `${r.refNumber}-approval.xlsx`)
   }
 
   async function submitNewRequest() {
     setFormError(null)
-    if (!form.vendorName.trim()) { setFormError('Vendor is required'); return }
+    if (requestType === 'funding') {
+      if (!form.network) { setFormError('Network is required'); return }
+      if (!form.token) { setFormError('Token is required'); return }
+      if (!form.walletAddress.trim()) { setFormError('Wallet address is required'); return }
+      if (!form.description.trim()) { setFormError('Description is required'); return }
+    } else {
+      if (!form.vendorName.trim()) { setFormError('Vendor is required'); return }
+    }
     const amount = parseFloat(form.amount)
     if (!Number.isFinite(amount) || amount <= 0) { setFormError('Amount must be a positive number'); return }
 
     setSubmitting(true)
     try {
       const fd = new FormData()
+      fd.append('requestType', requestType)
       for (const [k, v] of Object.entries(form)) {
         if (v) fd.append(k, v)
       }
@@ -252,7 +394,9 @@ export function ApprovalsPageClient() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ decision, note: decisionNote.trim() || undefined, clientReviewMs }),
       })
-      flash(decision === 'approved' ? `✓ ${detail.request.refNumber} approved` : `✗ ${detail.request.refNumber} rejected`)
+      flash(decision === 'approved'
+        ? `✓ Your approval on ${detail.request.refNumber} was recorded`
+        : `✗ ${detail.request.refNumber} rejected`)
       closeDetail()
       void loadList()
     } catch (e) {
@@ -321,14 +465,42 @@ export function ApprovalsPageClient() {
       },
     },
     {
-      key: 'vendorName', label: 'Vendor', sortable: true,
+      key: 'requestType', label: 'Type', width: '86px',
+      render: (r: ApprovalRow) => (
+        <span style={{
+          display: 'inline-block', padding: '2px 8px', borderRadius: 4,
+          background: r.requestType === 'funding' ? 'rgba(39,117,202,0.12)' : 'rgba(136,136,136,0.12)',
+          color: r.requestType === 'funding' ? '#2775ca' : 'var(--muted)',
+          fontSize: '0.68rem', fontWeight: 600, fontFamily: 'var(--mono)',
+        }}>{r.requestType === 'funding' ? 'Funding' : 'Payment'}</span>
+      ),
+    },
+    {
+      key: 'vendorName', label: 'Vendor / Target', sortable: true,
       render: (r: ApprovalRow) => (
         <div>
           <div style={{ fontWeight: 600 }}>{r.vendorName}</div>
-          {r.invoiceNumber ? (
+          {r.requestType === 'funding' && r.walletAddress ? (
+            <div style={{ fontSize: '0.66rem', color: 'var(--muted)', fontFamily: 'var(--mono)' }} title={r.walletAddress}>
+              {r.walletAddress.slice(0, 6)}…{r.walletAddress.slice(-4)}
+            </div>
+          ) : r.invoiceNumber ? (
             <div style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>Inv {r.invoiceNumber}</div>
           ) : null}
         </div>
+      ),
+    },
+    {
+      key: 'description', label: 'Description',
+      render: (r: ApprovalRow) => (
+        <span
+          title={r.description || undefined}
+          style={{
+            display: 'inline-block', maxWidth: 220, overflow: 'hidden',
+            textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            color: r.description ? undefined : 'var(--muted)', fontSize: '0.75rem', verticalAlign: 'bottom',
+          }}
+        >{r.description || '—'}</span>
       ),
     },
     {
@@ -340,13 +512,17 @@ export function ApprovalsPageClient() {
       ),
     },
     {
-      key: 'entity', label: 'Entity', width: '110px',
+      key: 'entity', label: 'Entity', width: '100px',
       render: (r: ApprovalRow) => <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>{r.entity || '—'}</span>,
     },
     ...(isAdmin ? [{
       key: 'submitterEmail', label: 'Submitter', sortable: true,
       render: (r: ApprovalRow) => <span style={{ fontSize: '0.75rem' }}>{r.submitterEmail || '—'}</span>,
     }] : []),
+    {
+      key: 'approvers', label: 'Approvers',
+      render: (r: ApprovalRow) => <ApproverChips approvers={r.approvers} />,
+    },
     {
       key: 'submittedAt', label: 'Submitted', sortable: true, width: '110px',
       render: (r: ApprovalRow) => (
@@ -379,10 +555,10 @@ export function ApprovalsPageClient() {
         <div>
           <div className="page-title">Approvals</div>
           <div className="page-sub">
-            {isAdmin ? 'All payment requests · SOX audit trail on every action' : 'Your payment requests'}
+            {isAdmin ? 'All payment & funding requests · SOX audit trail on every action' : 'Your payment & funding requests'}
           </div>
         </div>
-        <button className="btn-primary" onClick={() => { setForm(EMPTY_FORM); setFiles([]); setFormError(null); setFormOpen(true) }}>
+        <button className="btn-primary" onClick={() => { setForm(EMPTY_FORM); setFiles([]); setFormError(null); setRequestType('payment'); setFormOpen(true) }}>
           + New Request
         </button>
       </div>
@@ -438,14 +614,73 @@ export function ApprovalsPageClient() {
           <div className="modal" style={{ width: 620, maxWidth: '95vw' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <span className="modal-title">New payment request</span>
+                <span className="modal-title">{requestType === 'funding' ? 'New funding request' : 'New payment request'}</span>
                 <div className="modal-sub" style={{ marginTop: 4 }}>
-                  Submitted requests go to an admin for approval. All actions are audit-logged.
+                  Submitted requests go to the admins for approval. All actions are audit-logged.
                 </div>
               </div>
               <button className="modal-close" onClick={() => { if (!submitting) setFormOpen(false) }} aria-label="Close">×</button>
             </div>
             <div className="modal-body" style={{ padding: 20 }}>
+              {/* Request-type chooser */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+                {([
+                  { value: 'payment' as const, title: 'Payment', sub: 'Vendor / invoice payment' },
+                  { value: 'funding' as const, title: 'Funding', sub: 'Wallet top-up (was Slack)' },
+                ]).map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => { setRequestType(opt.value); setFormError(null) }}
+                    disabled={submitting}
+                    style={{
+                      padding: '10px 12px', borderRadius: 8, cursor: 'pointer', textAlign: 'left',
+                      border: `2px solid ${requestType === opt.value ? 'var(--accent)' : 'var(--border)'}`,
+                      background: requestType === opt.value ? 'rgba(39,117,202,0.08)' : 'transparent',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{opt.title}</div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--muted)', marginTop: 2 }}>{opt.sub}</div>
+                  </button>
+                ))}
+              </div>
+
+              {requestType === 'funding' ? (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>Network *</span>
+                  <select className="fsel" value={form.network} onChange={(e) => setForm((p) => ({ ...p, network: e.target.value }))}>
+                    <option value="">—</option>
+                    {FUNDING_NETWORK_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>Token *</span>
+                  <select className="fsel" value={form.token} onChange={(e) => setForm((p) => ({ ...p, token: e.target.value }))}>
+                    <option value="">—</option>
+                    {FUNDING_TOKEN_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>Amount ({form.token || 'token'} units) *</span>
+                  <input className="fsearch" type="number" step="0.000001" min="0" value={form.amount} onChange={(e) => setForm((p) => ({ ...p, amount: e.target.value }))} placeholder="0.00" />
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>Entity (optional)</span>
+                  <select className="fsel" value={form.entity} onChange={(e) => setForm((p) => ({ ...p, entity: e.target.value }))}>
+                    <option value="">—</option>
+                    {ENTITIES.map((e) => <option key={e} value={e}>{e}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'grid', gap: 4, gridColumn: '1 / -1' }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>Wallet address *</span>
+                  <input className="fsearch" style={{ fontFamily: 'var(--mono)' }} value={form.walletAddress} onChange={(e) => setForm((p) => ({ ...p, walletAddress: e.target.value }))} placeholder="Destination wallet address" />
+                </label>
+                <label style={{ display: 'grid', gap: 4, gridColumn: '1 / -1' }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>Description *</span>
+                  <input className="fsearch" value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} placeholder="What is this top-up for?" />
+                </label>
+              </div>
+              ) : (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <label style={{ display: 'grid', gap: 4 }}>
                   <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>Vendor *</span>
@@ -501,6 +736,7 @@ export function ApprovalsPageClient() {
                   <input className="fsearch" value={form.glAccount} onChange={(e) => setForm((p) => ({ ...p, glAccount: e.target.value }))} placeholder="e.g. 62010 Professional Services" />
                 </label>
               </div>
+              )}
 
               <div style={{ marginTop: 16 }}>
                 <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6 }}>
@@ -584,14 +820,31 @@ export function ApprovalsPageClient() {
                           : `${Number(detail.request.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })} ${detail.request.currency}`}
                       </strong>
                     </Field>
+                    <Field label="Type">{detail.request.requestType === 'funding' ? 'Funding (wallet top-up)' : 'Payment'}</Field>
                     <Field label="Description">{detail.request.description || '—'}</Field>
-                    <Field label="Payment type">{detail.request.paymentType || '—'}</Field>
-                    <Field label="Invoice #">{detail.request.invoiceNumber || '—'}</Field>
-                    <Field label="Invoice date">{detail.request.invoiceDate || '—'}</Field>
-                    <Field label="Due date">{detail.request.dueDate || '—'}</Field>
+                    {detail.request.requestType === 'funding' ? (
+                      <>
+                        <Field label="Network">{detail.request.network || '—'}</Field>
+                        <Field label="Token">{detail.request.token || '—'}</Field>
+                        <div style={{ gridColumn: '1 / -1' }}>
+                          <Field label="Wallet address">
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '0.76rem', wordBreak: 'break-all' }}>
+                              {detail.request.walletAddress || '—'}
+                            </span>
+                          </Field>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <Field label="Payment type">{detail.request.paymentType || '—'}</Field>
+                        <Field label="Invoice #">{detail.request.invoiceNumber || '—'}</Field>
+                        <Field label="Invoice date">{detail.request.invoiceDate || '—'}</Field>
+                        <Field label="Due date">{detail.request.dueDate || '—'}</Field>
+                        <Field label="GL account">{detail.request.glAccount || '—'}</Field>
+                      </>
+                    )}
                     <Field label="Entity">{detail.request.entity || '—'}</Field>
                     <Field label="Department">{detail.request.department || '—'}</Field>
-                    <Field label="GL account">{detail.request.glAccount || '—'}</Field>
                     {detail.request.decidedAt ? (
                       <>
                         <Field label="Decided">{detail.request.decidedAt.slice(0, 16).replace('T', ' ')} UTC</Field>
@@ -605,6 +858,39 @@ export function ApprovalsPageClient() {
                       </>
                     ) : null}
                   </div>
+
+                  {(detail.approvers?.length ?? 0) > 0 ? (
+                    <div style={{ marginTop: 18 }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        Approvers ({detail.approvers.filter((a) => a.state === 'approved').length}/{detail.approvers.length} approved)
+                      </div>
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        {detail.approvers.map((a) => {
+                          const s = APPROVER_CHIP_STYLE[a.state]
+                          return (
+                            <div key={a.email} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: '0.78rem', flexWrap: 'wrap' }}>
+                              <span style={{
+                                display: 'inline-block', width: 20, textAlign: 'center', borderRadius: 999,
+                                background: s.bg, color: s.fg, fontWeight: 700, fontFamily: 'var(--mono)',
+                              }}>{s.icon}</span>
+                              <span style={{ fontWeight: 600 }}>{a.email}</span>
+                              <span style={{ color: s.fg, fontSize: '0.7rem', fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>
+                                {a.state === 'pending' ? 'awaiting' : a.state}
+                              </span>
+                              {a.decidedAt ? (
+                                <span style={{ color: 'var(--muted)', fontSize: '0.68rem', fontFamily: 'var(--mono)' }}>
+                                  {String(a.decidedAt).slice(0, 16).replace('T', ' ')} UTC
+                                </span>
+                              ) : null}
+                              {a.note ? (
+                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>“{a.note}”</span>
+                              ) : null}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div style={{ marginTop: 18 }}>
                     <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -677,8 +963,21 @@ export function ApprovalsPageClient() {
                                   {typeof fname === 'string' && fname ? <span>file: {fname}</span> : null}
                                 </div>
                                 {typeof ua === 'string' && ua ? (
-                                  <div style={{ color: 'var(--muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ua}>
-                                    {ua}
+                                  <div
+                                    onClick={() => setExpandedUa((prev) => {
+                                      const next = new Set(prev)
+                                      if (next.has(ev.id)) next.delete(ev.id); else next.add(ev.id)
+                                      return next
+                                    })}
+                                    title={expandedUa.has(ev.id) ? 'Click to collapse' : 'Click to show the full user agent'}
+                                    style={{
+                                      color: 'var(--muted)', marginTop: 2, cursor: 'pointer',
+                                      ...(expandedUa.has(ev.id)
+                                        ? { whiteSpace: 'normal' as const, wordBreak: 'break-all' as const }
+                                        : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }),
+                                    }}
+                                  >
+                                    <span style={{ userSelect: 'none' }}>{expandedUa.has(ev.id) ? '▾ ' : '▸ '}</span>{ua}
                                   </div>
                                 ) : null}
                               </div>
@@ -737,6 +1036,9 @@ export function ApprovalsPageClient() {
 
             {detail ? (
               <div className="modal-footer">
+                <button className="fsel" onClick={exportDetail} disabled={actionBusy} title="Download this request (fields, approvers, attachments list, audit trail) as .xlsx">
+                  ⬇ Export
+                </button>
                 {detail.viewer.canCancel ? (
                   <button className="fsel" onClick={() => void cancelRequest()} disabled={actionBusy} style={{ color: '#d93025' }}>
                     Cancel request

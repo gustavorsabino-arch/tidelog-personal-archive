@@ -1,4 +1,4 @@
-import { pgSchema, text, uuid, timestamp, numeric, integer, date, index, check, customType } from 'drizzle-orm/pg-core'
+import { pgSchema, text, uuid, timestamp, numeric, integer, date, index, check, customType, primaryKey } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 import { user } from './auth'
 
@@ -35,6 +35,18 @@ export const approvalRequest = app.table(
     status: text('status', {
       enum: ['pending', 'approved', 'rejected', 'paid', 'cancelled'],
     }).notNull().default('pending'),
+
+    // 'payment' = invoice/vendor payment (full accounting fields);
+    // 'funding' = internal wallet top-up (network/token/walletAddress),
+    // the flow that used to live in Slack.
+    requestType: text('request_type', {
+      enum: ['payment', 'funding'],
+    }).notNull().default('payment'),
+
+    // Funding-only fields (null on payments).
+    network: text('network', { enum: ['ethereum', 'solana', 'tron'] }),
+    token: text('token'),
+    walletAddress: text('wallet_address'),
 
     // What is being paid.
     vendorName: text('vendor_name').notNull(),
@@ -97,4 +109,44 @@ export const approvalAttachment = app.table(
     uploadedAt: timestamp('uploaded_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('approval_attachment_request_idx').on(t.requestId)],
+)
+
+/**
+ * Who must approve a request — snapshotted at submission time (every admin
+ * except the submitter). Snapshotting keeps the requirement deterministic
+ * for SOX: hiring a new admin mid-flight doesn't retroactively change how
+ * many approvals an in-flight request needs. Email denormalized so the
+ * trail stays readable even if the user row is later renamed.
+ */
+export const approvalAssignee = app.table(
+  'approval_assignee',
+  {
+    requestId: uuid('request_id').notNull().references(() => approvalRequest.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull().references(() => user.id),
+    email: text('email').notNull(),
+    assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.requestId, t.userId] }),
+  ],
+)
+
+/**
+ * Per-approver decisions. A request is 'approved' only when EVERY assignee
+ * has an 'approved' row; any single 'rejected' row (note required) flips
+ * the request to rejected. One decision per (request, approver) — the PK
+ * makes double-voting impossible at the storage layer.
+ */
+export const approvalDecision = app.table(
+  'approval_decision',
+  {
+    requestId: uuid('request_id').notNull().references(() => approvalRequest.id, { onDelete: 'cascade' }),
+    approverId: text('approver_id').notNull().references(() => user.id),
+    decision: text('decision', { enum: ['approved', 'rejected'] }).notNull(),
+    note: text('note'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.requestId, t.approverId] }),
+  ],
 )

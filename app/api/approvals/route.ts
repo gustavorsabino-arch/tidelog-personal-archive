@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { desc, eq, sql } from 'drizzle-orm'
+import { desc, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { approvalRequest, approvalAttachment, user } from '@/lib/db/schema'
+import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, user } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { hasPermission } from '@/lib/auth/permissions'
 import { getSoxRequestContext } from '@/lib/approvals/request-context'
 import {
   createApprovalRequest,
+  FUNDING_NETWORKS,
+  FUNDING_TOKENS,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_PER_REQUEST,
   PAYMENT_TYPES,
+  type FundingNetwork,
+  type FundingToken,
   type PaymentType,
 } from '@/lib/approvals/service'
 
@@ -45,11 +49,52 @@ export async function GET(req: NextRequest) {
     .orderBy(desc(approvalRequest.submittedAt))
     .limit(500)
 
+  // Per-approver state for the Approvers column: assignee snapshot + votes,
+  // grouped in memory (bounded by the 500-row cap above).
+  const ids = rows.map((r) => r.request.id)
+  const assigneeRows = ids.length > 0
+    ? await db
+        .select({
+          requestId: approvalAssignee.requestId,
+          userId: approvalAssignee.userId,
+          email: approvalAssignee.email,
+        })
+        .from(approvalAssignee)
+        .where(inArray(approvalAssignee.requestId, ids))
+    : []
+  const decisionRows = ids.length > 0
+    ? await db
+        .select({
+          requestId: approvalDecision.requestId,
+          approverId: approvalDecision.approverId,
+          decision: approvalDecision.decision,
+          note: approvalDecision.note,
+          decidedAt: approvalDecision.decidedAt,
+        })
+        .from(approvalDecision)
+        .where(inArray(approvalDecision.requestId, ids))
+    : []
+
+  const voteByKey = new Map(decisionRows.map((d) => [`${d.requestId}:${d.approverId}`, d]))
+  const approversByRequest = new Map<string, { email: string; state: 'approved' | 'rejected' | 'pending'; note: string | null; decidedAt: Date | null }[]>()
+  for (const a of assigneeRows) {
+    const vote = voteByKey.get(`${a.requestId}:${a.userId}`)
+    const list = approversByRequest.get(a.requestId) ?? []
+    list.push({
+      email: a.email,
+      state: vote ? vote.decision : 'pending',
+      note: vote?.note ?? null,
+      decidedAt: vote?.decidedAt ?? null,
+    })
+    approversByRequest.set(a.requestId, list)
+  }
+
   return NextResponse.json({
     requests: rows.map((r) => ({
       ...r.request,
       submitterEmail: r.submitterEmail,
       attachmentCount: r.attachmentCount,
+      approvers: approversByRequest.get(r.request.id) ?? [],
     })),
     isAdmin,
   })
@@ -77,9 +122,32 @@ export async function POST(req: NextRequest) {
     return typeof v === 'string' && v.trim() ? v.trim() : null
   }
 
-  const vendorName = str('vendorName')
-  const amountRaw = str('amount')
+  const requestType = str('requestType') === 'funding' ? 'funding' as const : 'payment' as const
+
+  const networkRaw = str('network')
+  const network: FundingNetwork | null = networkRaw && (FUNDING_NETWORKS as readonly string[]).includes(networkRaw)
+    ? networkRaw as FundingNetwork
+    : null
+  const tokenRaw = str('token')?.toUpperCase() ?? null
+  const token: FundingToken | null = tokenRaw && (FUNDING_TOKENS as readonly string[]).includes(tokenRaw)
+    ? tokenRaw as FundingToken
+    : null
+  const walletAddress = str('walletAddress')
+
+  if (requestType === 'funding') {
+    if (!network) return NextResponse.json({ error: 'network must be ethereum, solana, or tron' }, { status: 400 })
+    if (!token) return NextResponse.json({ error: 'token must be one of USDC, USDT, ORCA, SOL, ETH' }, { status: 400 })
+    if (!walletAddress) return NextResponse.json({ error: 'walletAddress is required' }, { status: 400 })
+    if (!str('description')) return NextResponse.json({ error: 'description is required for funding requests' }, { status: 400 })
+  }
+
+  // Fundings have no vendor — synthesize a readable label so the shared
+  // NOT NULL column and the list view both stay meaningful.
+  const vendorName = requestType === 'funding'
+    ? `Wallet funding · ${token} on ${network}`
+    : str('vendorName')
   if (!vendorName) return NextResponse.json({ error: 'vendorName is required' }, { status: 400 })
+  const amountRaw = str('amount')
   const amount = amountRaw ? parseFloat(amountRaw) : NaN
   if (!Number.isFinite(amount) || amount <= 0) {
     return NextResponse.json({ error: 'amount must be a positive number' }, { status: 400 })
@@ -117,17 +185,21 @@ export async function POST(req: NextRequest) {
     const created = await createApprovalRequest(
       { id: actor.id, email: actor.email },
       {
+        requestType,
         vendorName,
         description: str('description'),
         amount,
-        currency: str('currency') || 'USD',
+        currency: requestType === 'funding' ? (token ?? 'USD') : (str('currency') || 'USD'),
         invoiceNumber: str('invoiceNumber'),
         invoiceDate,
         dueDate,
         glAccount: str('glAccount'),
         department: str('department'),
         entity: str('entity'),
-        paymentType,
+        paymentType: requestType === 'funding' ? 'crypto' : paymentType,
+        network,
+        token,
+        walletAddress,
       },
       attachments,
       getSoxRequestContext(req),
