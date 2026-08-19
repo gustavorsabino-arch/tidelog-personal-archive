@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requirePermission } from '@/lib/auth/require-permission'
+import { hasPermission } from '@/lib/auth/permissions'
 import { getSoxRequestContext } from '@/lib/approvals/request-context'
 import { decideApprovalRequest } from '@/lib/approvals/service'
 
@@ -9,14 +10,19 @@ export const runtime = 'nodejs'
  * POST /api/approvals/[id]/decide
  * Body: { decision: 'approved' | 'rejected', note?: string, clientReviewMs?: number }
  *
+ * Gate is approvals:submit (so budget_viewer department heads can cast
+ * their head-stage vote) — the SERVICE enforces the real authority: the
+ * actor must be a snapshotted assignee of this request, in the right
+ * stage, who hasn't voted. Legacy assignee-less requests still require the
+ * full approvals:approve permission (admin), passed as actorCanApproveAll.
+ *
  * SOX guarantees enforced here + in the service layer:
- *  - approvals:approve permission required (admin-only in V1)
  *  - submitter can never decide their own request (endpoint + DB CHECK)
  *  - decision + audit row commit in one transaction
  *  - server-side review duration computed from the 'approval.viewed' trail
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { user: actor, deny } = await requirePermission('approvals:approve', req)
+  const { user: actor, deny } = await requirePermission('approvals:submit', req)
   if (deny) return deny
   const { id } = await params
 
@@ -46,6 +52,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       note,
       clientReviewMs,
       getSoxRequestContext(req),
+      hasPermission(actor.role, 'approvals:approve'),
     )
     return NextResponse.json({ ok: true, request: updated })
   } catch (err) {

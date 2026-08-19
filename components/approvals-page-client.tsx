@@ -27,6 +27,7 @@ import { fmtUSD } from '@/lib/format'
 
 type ApproverState = {
   email: string
+  stage: 'head' | 'finance'
   state: 'approved' | 'rejected' | 'pending'
   note: string | null
   decidedAt: string | null
@@ -58,6 +59,8 @@ type ApprovalRow = {
   decisionNote: string | null
   paidAt: string | null
   paymentReference: string | null
+  requiredHeadApprovals: number | null
+  requiredFinanceApprovals: number | null
   attachmentCount: number
   approvers?: ApproverState[]
 }
@@ -75,10 +78,17 @@ type DetailResponse = {
   request: ApprovalRow
   attachments: AttachmentMeta[]
   approvers: ApproverState[]
+  stageState: {
+    headSatisfied: boolean
+    headApproved: number
+    requiredHead: number
+    requiredFinance: number | null
+  }
   viewer: {
     isAdmin: boolean
     isSubmitter: boolean
     canDecide: boolean
+    canApproveNow: boolean
     canPay: boolean
     canCancel: boolean
   }
@@ -99,6 +109,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'approval.rejected': 'Rejected',
   'approval.paid': 'Marked paid',
   'approval.cancelled': 'Cancelled',
+  'approval.cancelled_by_admin': 'Cancelled by admin',
   'approval.attachment_downloaded': 'Attachment downloaded',
 }
 
@@ -161,28 +172,51 @@ const APPROVER_CHIP_STYLE: Record<ApproverState['state'], { bg: string; fg: stri
   pending:  { bg: 'rgba(136,136,136,0.12)', fg: 'var(--muted)', icon: '○' },
 }
 
-function ApproverChips({ approvers }: { approvers: ApproverState[] | undefined }) {
+function ApproverChip({ a }: { a: ApproverState }) {
+  const s = APPROVER_CHIP_STYLE[a.state]
+  return (
+    <span
+      title={`${a.email} — ${a.state}${a.note ? ` · “${a.note}”` : ''}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '1px 8px', borderRadius: 999, background: s.bg, color: s.fg,
+        fontSize: '0.68rem', fontWeight: 600, fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
+      }}
+    >
+      {s.icon} {a.email.split('@')[0]}
+    </span>
+  )
+}
+
+/** Two-stage approver display: department head sign-off first (1 suffices),
+ * then the finance quorum with an "x/N" progress count. Legacy rows without
+ * a matrix (requiredFinance null) just list everyone — all must approve. */
+function ApproverChips({ approvers, requiredFinance }: { approvers: ApproverState[] | undefined; requiredFinance: number | null }) {
   if (!approvers || approvers.length === 0) {
     return <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>—</span>
   }
+  const heads = approvers.filter((a) => a.stage === 'head')
+  const finance = approvers.filter((a) => a.stage !== 'head')
+  const financeApproved = finance.filter((a) => a.state === 'approved').length
+  const label = (text: string) => (
+    <span style={{ fontSize: '0.58rem', color: 'var(--muted)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      {text}
+    </span>
+  )
   return (
-    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-      {approvers.map((a) => {
-        const s = APPROVER_CHIP_STYLE[a.state]
-        return (
-          <span
-            key={a.email}
-            title={`${a.email} — ${a.state}${a.note ? ` · “${a.note}”` : ''}`}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-              padding: '1px 8px', borderRadius: 999, background: s.bg, color: s.fg,
-              fontSize: '0.68rem', fontWeight: 600, fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
-            }}
-          >
-            {s.icon} {a.email.split('@')[0]}
-          </span>
-        )
-      })}
+    <div style={{ display: 'grid', gap: 3 }}>
+      {heads.length > 0 ? (
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+          {label('head')}
+          {heads.map((a) => <ApproverChip key={a.email} a={a} />)}
+        </div>
+      ) : null}
+      {finance.length > 0 ? (
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+          {label(requiredFinance != null ? `fin ${Math.min(financeApproved, requiredFinance)}/${requiredFinance}` : 'fin')}
+          {finance.map((a) => <ApproverChip key={a.email} a={a} />)}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -304,9 +338,15 @@ export function ApprovalsPageClient() {
       ['Paid at', r.paidAt ?? ''],
       ['Payment reference', r.paymentReference ?? ''],
     ]
-    fields.push([''], ['Approver', 'Decision'])
+    if (r.requiredHeadApprovals != null || r.requiredFinanceApprovals != null) {
+      fields.push(
+        ['Required head approvals', r.requiredHeadApprovals ?? 0],
+        ['Required finance approvals', r.requiredFinanceApprovals ?? ''],
+      )
+    }
+    fields.push([''], ['Approver', 'Stage / Decision'])
     for (const a of detail.approvers ?? []) {
-      fields.push([a.email, `${a.state}${a.decidedAt ? ` at ${String(a.decidedAt).slice(0, 19).replace('T', ' ')} UTC` : ''}${a.note ? ` — “${a.note}”` : ''}`])
+      fields.push([a.email, `[${a.stage}] ${a.state}${a.decidedAt ? ` at ${String(a.decidedAt).slice(0, 19).replace('T', ' ')} UTC` : ''}${a.note ? ` — “${a.note}”` : ''}`])
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(fields), 'Request')
 
@@ -521,7 +561,7 @@ export function ApprovalsPageClient() {
     }] : []),
     {
       key: 'approvers', label: 'Approvers',
-      render: (r: ApprovalRow) => <ApproverChips approvers={r.approvers} />,
+      render: (r: ApprovalRow) => <ApproverChips approvers={r.approvers} requiredFinance={r.requiredFinanceApprovals} />,
     },
     {
       key: 'submittedAt', label: 'Submitted', sortable: true, width: '110px',
@@ -541,11 +581,14 @@ export function ApprovalsPageClient() {
     },
     {
       key: 'id', label: '', width: '90px',
-      render: (r: ApprovalRow) => (
-        <button className="btn-secondary" style={{ fontSize: '0.72rem', padding: '3px 12px' }} onClick={() => void openDetail(r.id)}>
-          {canApprove && r.status === 'pending' && r.submitterEmail !== access?.email ? 'Review' : 'View'}
-        </button>
-      ),
+      render: (r: ApprovalRow) => {
+        const awaitingMe = r.approvers?.some((a) => a.email === access?.email && a.state === 'pending') ?? false
+        return (
+          <button className="btn-secondary" style={{ fontSize: '0.72rem', padding: '3px 12px' }} onClick={() => void openDetail(r.id)}>
+            {(canApprove || awaitingMe) && r.status === 'pending' && r.submitterEmail !== access?.email ? 'Review' : 'View'}
+          </button>
+        )
+      },
     },
   ]
 
@@ -555,7 +598,7 @@ export function ApprovalsPageClient() {
         <div>
           <div className="page-title">Approvals</div>
           <div className="page-sub">
-            {isAdmin ? 'All payment & funding requests · SOX audit trail on every action' : 'Your payment & funding requests'}
+            {isAdmin ? 'All payment & funding requests · SOX audit trail on every action' : 'Your requests + requests awaiting your approval'}
           </div>
         </div>
         <button className="btn-primary" onClick={() => { setForm(EMPTY_FORM); setFiles([]); setFormError(null); setRequestType('payment'); setFormOpen(true) }}>
@@ -859,38 +902,64 @@ export function ApprovalsPageClient() {
                     ) : null}
                   </div>
 
-                  {(detail.approvers?.length ?? 0) > 0 ? (
-                    <div style={{ marginTop: 18 }}>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        Approvers ({detail.approvers.filter((a) => a.state === 'approved').length}/{detail.approvers.length} approved)
-                      </div>
-                      <div style={{ display: 'grid', gap: 6 }}>
-                        {detail.approvers.map((a) => {
-                          const s = APPROVER_CHIP_STYLE[a.state]
-                          return (
-                            <div key={a.email} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: '0.78rem', flexWrap: 'wrap' }}>
-                              <span style={{
-                                display: 'inline-block', width: 20, textAlign: 'center', borderRadius: 999,
-                                background: s.bg, color: s.fg, fontWeight: 700, fontFamily: 'var(--mono)',
-                              }}>{s.icon}</span>
-                              <span style={{ fontWeight: 600 }}>{a.email}</span>
-                              <span style={{ color: s.fg, fontSize: '0.7rem', fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>
-                                {a.state === 'pending' ? 'awaiting' : a.state}
-                              </span>
-                              {a.decidedAt ? (
-                                <span style={{ color: 'var(--muted)', fontSize: '0.68rem', fontFamily: 'var(--mono)' }}>
-                                  {String(a.decidedAt).slice(0, 16).replace('T', ' ')} UTC
-                                </span>
-                              ) : null}
-                              {a.note ? (
-                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>“{a.note}”</span>
-                              ) : null}
+                  {(detail.approvers?.length ?? 0) > 0 ? (() => {
+                    const heads = detail.approvers.filter((a) => a.stage === 'head')
+                    const finance = detail.approvers.filter((a) => a.stage !== 'head')
+                    const financeApproved = finance.filter((a) => a.state === 'approved').length
+                    const ss = detail.stageState
+                    const renderRow = (a: ApproverState, muted: boolean) => {
+                      const s = APPROVER_CHIP_STYLE[a.state]
+                      return (
+                        <div key={a.email} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: '0.78rem', flexWrap: 'wrap', opacity: muted ? 0.55 : 1 }}>
+                          <span style={{
+                            display: 'inline-block', width: 20, textAlign: 'center', borderRadius: 999,
+                            background: s.bg, color: s.fg, fontWeight: 700, fontFamily: 'var(--mono)',
+                          }}>{s.icon}</span>
+                          <span style={{ fontWeight: 600 }}>{a.email}</span>
+                          <span style={{ color: s.fg, fontSize: '0.7rem', fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>
+                            {a.state === 'pending' ? 'awaiting' : a.state}
+                          </span>
+                          {a.decidedAt ? (
+                            <span style={{ color: 'var(--muted)', fontSize: '0.68rem', fontFamily: 'var(--mono)' }}>
+                              {String(a.decidedAt).slice(0, 16).replace('T', ' ')} UTC
+                            </span>
+                          ) : null}
+                          {a.note ? (
+                            <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>“{a.note}”</span>
+                          ) : null}
+                        </div>
+                      )
+                    }
+                    return (
+                      <div style={{ marginTop: 18 }}>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          Approvers
+                        </div>
+                        {heads.length > 0 ? (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: '0.66rem', color: 'var(--muted)', marginBottom: 4, fontFamily: 'var(--mono)' }}>
+                              1 · Department head — one approval needed {ss?.headSatisfied ? '· ✓ satisfied' : '· waiting'}
                             </div>
-                          )
-                        })}
+                            <div style={{ display: 'grid', gap: 6 }}>{heads.map((a) => renderRow(a, false))}</div>
+                          </div>
+                        ) : null}
+                        {finance.length > 0 ? (
+                          <div>
+                            <div style={{ fontSize: '0.66rem', color: 'var(--muted)', marginBottom: 4, fontFamily: 'var(--mono)' }}>
+                              {heads.length > 0 ? '2 · ' : ''}Finance — {detail.request.requiredFinanceApprovals != null
+                                ? `${Math.min(financeApproved, detail.request.requiredFinanceApprovals)}/${detail.request.requiredFinanceApprovals} approvals`
+                                : `${financeApproved}/${finance.length} approvals (all required)`}
+                              {heads.length > 0 && ss && !ss.headSatisfied && detail.request.status === 'pending'
+                                ? ' · unlocks after the head approval' : ''}
+                            </div>
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              {finance.map((a) => renderRow(a, heads.length > 0 && ss ? !ss.headSatisfied && a.state === 'pending' : false))}
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
-                    </div>
-                  ) : null}
+                    )
+                  })() : null}
 
                   <div style={{ marginTop: 18 }}>
                     <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -1002,6 +1071,9 @@ export function ApprovalsPageClient() {
                       />
                       <div style={{ fontSize: '0.66rem', color: 'var(--muted)', marginTop: 6 }}>
                         Your review time, IP, and device are recorded in the SOX audit trail.
+                        {!detail.viewer.canApproveNow
+                          ? ' Approval unlocks after the department head signs off — you can still reject now.'
+                          : ''}
                       </div>
                     </div>
                   ) : null}
@@ -1059,8 +1131,12 @@ export function ApprovalsPageClient() {
                     <button
                       className="fsel"
                       onClick={() => void decide('approved')}
-                      disabled={actionBusy}
-                      style={{ background: '#06D6A0', color: '#fff', borderColor: '#06D6A0', fontWeight: 600 }}
+                      disabled={actionBusy || !detail.viewer.canApproveNow}
+                      title={!detail.viewer.canApproveNow ? 'Waiting for the department head approval' : undefined}
+                      style={{
+                        background: '#06D6A0', color: '#fff', borderColor: '#06D6A0', fontWeight: 600,
+                        opacity: detail.viewer.canApproveNow ? 1 : 0.45,
+                      }}
                     >
                       {actionBusy ? '…' : 'Approve'}
                     </button>

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { desc, eq, inArray, sql } from 'drizzle-orm'
+import { desc, eq, inArray, or, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, user } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { hasPermission } from '@/lib/auth/permissions'
+import { BUDGET_DEPTS } from '@/lib/constants'
 import { getSoxRequestContext } from '@/lib/approvals/request-context'
 import {
   createApprovalRequest,
@@ -45,7 +46,14 @@ export async function GET(req: NextRequest) {
     })
     .from(approvalRequest)
     .leftJoin(user, eq(approvalRequest.submitterId, user.id))
-    .where(isAdmin ? undefined : eq(approvalRequest.submitterId, actor.id))
+    .where(isAdmin ? undefined : or(
+      eq(approvalRequest.submitterId, actor.id),
+      // Department heads (budget_viewers) see the requests awaiting their
+      // sign-off — assignment is the visibility grant.
+      sql`${approvalRequest.id} IN (
+        SELECT aa."request_id" FROM "app"."approval_assignee" aa WHERE aa."user_id" = ${actor.id}
+      )`,
+    ))
     .orderBy(desc(approvalRequest.submittedAt))
     .limit(500)
 
@@ -58,6 +66,7 @@ export async function GET(req: NextRequest) {
           requestId: approvalAssignee.requestId,
           userId: approvalAssignee.userId,
           email: approvalAssignee.email,
+          stage: approvalAssignee.stage,
         })
         .from(approvalAssignee)
         .where(inArray(approvalAssignee.requestId, ids))
@@ -76,12 +85,13 @@ export async function GET(req: NextRequest) {
     : []
 
   const voteByKey = new Map(decisionRows.map((d) => [`${d.requestId}:${d.approverId}`, d]))
-  const approversByRequest = new Map<string, { email: string; state: 'approved' | 'rejected' | 'pending'; note: string | null; decidedAt: Date | null }[]>()
+  const approversByRequest = new Map<string, { email: string; stage: 'head' | 'finance'; state: 'approved' | 'rejected' | 'pending'; note: string | null; decidedAt: Date | null }[]>()
   for (const a of assigneeRows) {
     const vote = voteByKey.get(`${a.requestId}:${a.userId}`)
     const list = approversByRequest.get(a.requestId) ?? []
     list.push({
       email: a.email,
+      stage: a.stage,
       state: vote ? vote.decision : 'pending',
       note: vote?.note ?? null,
       decidedAt: vote?.decidedAt ?? null,
@@ -158,6 +168,18 @@ export async function POST(req: NextRequest) {
     ? paymentTypeRaw as PaymentType
     : null
 
+  // Department drives the mandatory head-approval stage, so it must be a
+  // canonical value — a case/spelling variant would silently skip the head
+  // sign-off (the heads lookup is an exact match against user_department).
+  const deptRaw = str('department')
+  let department: string | null = null
+  if (deptRaw) {
+    department = (BUDGET_DEPTS as readonly string[]).find((d) => d.toLowerCase() === deptRaw.toLowerCase()) ?? null
+    if (!department) {
+      return NextResponse.json({ error: 'department must be one of the budget departments' }, { status: 400 })
+    }
+  }
+
   const dateOk = (s: string | null) => s === null || /^\d{4}-\d{2}-\d{2}$/.test(s)
   const invoiceDate = str('invoiceDate')
   const dueDate = str('dueDate')
@@ -194,7 +216,7 @@ export async function POST(req: NextRequest) {
         invoiceDate,
         dueDate,
         glAccount: str('glAccount'),
-        department: str('department'),
+        department,
         entity: str('entity'),
         paymentType: requestType === 'funding' ? 'crypto' : paymentType,
         network,

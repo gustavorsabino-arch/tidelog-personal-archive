@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { and, desc, eq, gte, ne, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, auditLog, user } from '@/lib/db/schema'
+import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, auditLog, user, userDepartment } from '@/lib/db/schema'
 import type { SoxRequestContext } from './request-context'
 
 /**
@@ -64,10 +64,26 @@ function sha256Hex(bytes: Buffer): string {
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
-// APR-<zero-padded sequence>. Uses a count-based next number inside the
-// insert transaction; the UNIQUE constraint on ref_number turns any race
-// into a retryable conflict instead of a duplicate.
+/**
+ * USD value used ONLY to pick the finance-approval tier. There is no FX
+ * feed here, so the mapping is deliberately conservative (when in doubt,
+ * MORE approvers): USD-pegged at face value; EUR/GBP padded 1.5×; MYR/AED
+ * face value (their face amount already exceeds the USD value); anything
+ * volatile or unknown (SOL, ETH, ORCA, …) forces the strictest tier.
+ */
+function usdEquivalentForTier(amount: number, currency: string): number {
+  const c = currency.toUpperCase()
+  if (c === 'USD' || c === 'USDC' || c === 'USDT') return amount
+  if (c === 'EUR' || c === 'GBP') return amount * 1.5
+  if (c === 'MYR' || c === 'AED') return amount
+  return Number.POSITIVE_INFINITY
+}
+
+// APR-<zero-padded sequence>. The advisory xact-lock serializes concurrent
+// submissions so two transactions can't both read count=N and collide on
+// the UNIQUE ref_number (the lock releases automatically at commit/abort).
 async function nextRefNumber(tx: Tx): Promise<string> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('approval_ref_number'))`)
   const rows = await tx.select({ n: sql<number>`count(*)::int` }).from(approvalRequest)
   const next = (rows[0]?.n ?? 0) + 1
   return `APR-${String(next).padStart(4, '0')}`
@@ -104,14 +120,60 @@ export async function createApprovalRequest(
     }
   }
 
-  // Approver snapshot: every non-banned admin except the submitter, frozen
-  // at submission time so a role change mid-flight can't alter how many
-  // approvals this request needs (SOX determinism). Queried OUTSIDE the
-  // transaction — it's a read.
-  const admins = await db
+  const currency = input.currency || 'USD'
+
+  // ── Approval matrix (Delegation of Authority) ──
+  // Read LIVE from access control at every submission so role changes are
+  // always reflected, then SNAPSHOT onto the request so an in-flight
+  // request's requirement never changes (SOX determinism).
+  // Finance pool = every non-banned admin. Department heads = non-banned
+  // budget_viewers with the request's department marked in user_department.
+  const financePool = await db
     .select({ id: user.id, email: user.email })
     .from(user)
-    .where(and(eq(user.role, 'admin'), eq(user.banned, false), ne(user.id, actor.id)))
+    .where(and(eq(user.role, 'admin'), eq(user.banned, false)))
+  const submitterIsFinance = financePool.some((u) => u.id === actor.id)
+  const financeAssignees = financePool.filter((u) => u.id !== actor.id)
+  if (financeAssignees.length === 0) {
+    throw Object.assign(
+      new Error('No eligible finance approvers exist — another admin is required in Access Control'),
+      { statusCode: 409 },
+    )
+  }
+
+  let headAssignees: { id: string; email: string }[] = []
+  if (requestType === 'payment' && input.department) {
+    const heads = await db
+      .select({ id: user.id, email: user.email })
+      .from(userDepartment)
+      .innerJoin(user, eq(userDepartment.userId, user.id))
+      .where(and(
+        // Case-insensitive on purpose — a casing variant must never skip
+        // the mandatory head sign-off (the API also normalizes upstream).
+        sql`lower(${userDepartment.department}) = lower(${input.department})`,
+        eq(user.role, 'budget_viewer'),
+        eq(user.banned, false),
+      ))
+    // A head submitting for their own department IS the head sign-off —
+    // the stage only exists when someone else must vouch for the spend.
+    const submitterIsHead = heads.some((h) => h.id === actor.id)
+    if (!submitterIsHead) headAssignees = heads
+  }
+  const requiredHeadApprovals = headAssignees.length > 0 ? 1 : 0
+
+  // Finance involvement by USD tier — ≤$10k → 2 finance people, ≤$25k → 3,
+  // >$25k → everyone. A finance submitter counts toward the involvement
+  // number, so the APPROVALS needed are involvement − 1 in that case.
+  const usdForTier = usdEquivalentForTier(input.amount, currency)
+  const involvement = usdForTier <= 10_000
+    ? Math.min(2, financePool.length)
+    : usdForTier <= 25_000
+      ? Math.min(3, financePool.length)
+      : financePool.length
+  const requiredFinanceApprovals = Math.max(
+    1,
+    Math.min(involvement - (submitterIsFinance ? 1 : 0), financeAssignees.length),
+  )
 
   return await db.transaction(async (tx) => {
     const refNumber = await nextRefNumber(tx)
@@ -125,7 +187,9 @@ export async function createApprovalRequest(
       vendorName: input.vendorName,
       description: input.description ?? null,
       amount: input.amount.toFixed(2),
-      currency: input.currency || 'USD',
+      currency,
+      requiredHeadApprovals,
+      requiredFinanceApprovals,
       invoiceNumber: input.invoiceNumber ?? null,
       invoiceDate: input.invoiceDate ?? null,
       dueDate: input.dueDate ?? null,
@@ -150,11 +214,10 @@ export async function createApprovalRequest(
       attachmentMeta.push({ filename: a.filename, sha256: digest, sizeBytes: a.bytes.length })
     }
 
-    if (admins.length > 0) {
-      await tx.insert(approvalAssignee).values(
-        admins.map((a) => ({ requestId: created.id, userId: a.id, email: a.email })),
-      )
-    }
+    await tx.insert(approvalAssignee).values([
+      ...headAssignees.map((a) => ({ requestId: created.id, userId: a.id, email: a.email, stage: 'head' as const })),
+      ...financeAssignees.map((a) => ({ requestId: created.id, userId: a.id, email: a.email, stage: 'finance' as const })),
+    ])
 
     // Transactional audit row — commits or rolls back with the request.
     await tx.insert(auditLog).values({
@@ -174,7 +237,14 @@ export async function createApprovalRequest(
           token: input.token,
           walletAddress: input.walletAddress?.trim(),
         } : {}),
-        assignedApprovers: admins.map((a) => a.email),
+        approvalMatrix: {
+          headApprovers: headAssignees.map((a) => a.email),
+          requiredHeadApprovals,
+          financeApprovers: financeAssignees.map((a) => a.email),
+          requiredFinanceApprovals,
+          submitterIsFinance,
+          usdTierValue: Number.isFinite(usdForTier) ? usdForTier : 'volatile-asset:max-tier',
+        },
         attachments: attachmentMeta,
         ip: ctx.ip,
         userAgent: ctx.userAgent,
@@ -222,14 +292,18 @@ export async function recordApprovalView(
  *    for this (user, request); client-reported ms stored as corroboration
  *  - audit row is transactional with the status flip
  *
- * Multi-approver: when the request has assignee rows (snapshotted at
- * submission), each assignee casts one vote in approval_decision (composite
- * PK blocks re-votes). The request flips to 'approved' only when EVERY
- * assignee approved; any single rejection (note mandatory) flips it to
- * 'rejected' immediately. decided_by/decided_at/decision_note stay the
- * FINAL word — the last approver or the rejector. Requests created before
- * the snapshot existed have no assignees and keep the V1 single-decision
- * behavior.
+ * Approval matrix: assignees are snapshotted at submission in two stages.
+ * The 'head' stage (department head, 1 approval suffices) must be satisfied
+ * before any 'finance' vote counts is accepted; the 'finance' stage needs
+ * `required_finance_approvals` votes (amount-tiered). Any rejection (note
+ * mandatory) at any stage rejects immediately. The composite PK on
+ * approval_decision blocks re-votes. decided_by/decided_at/decision_note
+ * stay the FINAL word — the closing approver or the rejector.
+ *
+ * Back-compat: requests with assignees but NULL required_finance_approvals
+ * (created before the matrix) need every assignee to approve; requests with
+ * no assignees at all (V1) accept a single decision from any admin
+ * (actorCanApproveAll).
  */
 export async function decideApprovalRequest(
   actor: Actor,
@@ -238,6 +312,7 @@ export async function decideApprovalRequest(
   note: string | null,
   clientReviewMs: number | null,
   ctx: SoxRequestContext,
+  actorCanApproveAll: boolean,
 ) {
   if (decision === 'rejected' && !note?.trim()) {
     throw Object.assign(new Error('A comment is required when rejecting a request'), { statusCode: 400 })
@@ -281,7 +356,7 @@ export async function decideApprovalRequest(
     // Assignee snapshot + votes so far (read under the FOR UPDATE lock, so
     // two concurrent last-votes can't both see "one missing").
     const assignees = await tx
-      .select({ userId: approvalAssignee.userId, email: approvalAssignee.email })
+      .select({ userId: approvalAssignee.userId, email: approvalAssignee.email, stage: approvalAssignee.stage })
       .from(approvalAssignee)
       .where(eq(approvalAssignee.requestId, requestId))
     const votes = await tx
@@ -293,11 +368,38 @@ export async function decideApprovalRequest(
     let pendingApprovers: string[] = []
 
     if (assignees.length > 0) {
-      if (!assignees.some((a) => a.userId === actor.id)) {
+      const me = assignees.find((a) => a.userId === actor.id)
+      if (!me) {
         throw Object.assign(new Error('You are not an assigned approver for this request'), { statusCode: 403 })
       }
       if (votes.some((v) => v.approverId === actor.id)) {
         throw Object.assign(new Error('You already decided on this request'), { statusCode: 409 })
+      }
+
+      const requiredFinance = existing.requiredFinanceApprovals
+      const requiredHead = existing.requiredHeadApprovals ?? 0
+      const headIds = new Set(assignees.filter((a) => a.stage === 'head').map((a) => a.userId))
+      const approvedIds = new Set(votes.filter((v) => v.decision === 'approved').map((v) => v.approverId))
+      const headApprovedSoFar = [...approvedIds].filter((id) => headIds.has(id)).length
+      const headSatisfiedBefore = requiredHead === 0 || headApprovedSoFar >= requiredHead
+
+      // Stage gating applies to APPROVALS only — heads sign off first,
+      // finance approves after. A REJECTION is never gated: any assignee
+      // can kill a bad request at any moment (SOX veto), which the
+      // decision === 'rejected' branch below honors immediately.
+      if (requiredFinance !== null && decision === 'approved') {
+        if (me.stage === 'finance' && !headSatisfiedBefore) {
+          throw Object.assign(
+            new Error('Waiting for the department head approval before finance can approve'),
+            { statusCode: 409 },
+          )
+        }
+        if (me.stage === 'head' && headSatisfiedBefore) {
+          throw Object.assign(
+            new Error('The department-head stage is already satisfied for this request'),
+            { statusCode: 409 },
+          )
+        }
       }
 
       await tx.insert(approvalDecision).values({
@@ -307,20 +409,35 @@ export async function decideApprovalRequest(
         note: note?.trim() || null,
         decidedAt: now,
       })
-
-      const approvedIds = new Set(
-        votes.filter((v) => v.decision === 'approved').map((v) => v.approverId),
-      )
       if (decision === 'approved') approvedIds.add(actor.id)
 
-      statusAfter = decision === 'rejected'
-        ? 'rejected'
-        : assignees.every((a) => approvedIds.has(a.userId)) ? 'approved' : 'pending'
-      pendingApprovers = assignees
-        .filter((a) => !approvedIds.has(a.userId))
-        .map((a) => a.email)
+      if (decision === 'rejected') {
+        statusAfter = 'rejected'
+      } else if (requiredFinance !== null) {
+        // Matrix semantics: 1 head (when required) + N finance approvals.
+        const headApproved = [...approvedIds].filter((id) => headIds.has(id)).length
+        const financeApproved = [...approvedIds].filter((id) => !headIds.has(id)).length
+        const headOk = requiredHead === 0 || headApproved >= requiredHead
+        statusAfter = headOk && financeApproved >= requiredFinance ? 'approved' : 'pending'
+        if (statusAfter === 'pending') {
+          pendingApprovers = assignees
+            .filter((a) => !approvedIds.has(a.userId))
+            .filter((a) => (a.stage === 'head' ? !headOk : true))
+            .map((a) => a.email)
+        }
+      } else {
+        // Pre-matrix multi-approver rows: every assignee must approve.
+        statusAfter = assignees.every((a) => approvedIds.has(a.userId)) ? 'approved' : 'pending'
+        pendingApprovers = assignees
+          .filter((a) => !approvedIds.has(a.userId))
+          .map((a) => a.email)
+      }
     } else {
-      // Legacy V1 request (no assignee snapshot): single decision closes it.
+      // Legacy V1 request (no assignee snapshot): a single decision from
+      // any full approver (admin) closes it.
+      if (!actorCanApproveAll) {
+        throw Object.assign(new Error('You are not an assigned approver for this request'), { statusCode: 403 })
+      }
       statusAfter = decision
     }
 
@@ -348,7 +465,12 @@ export async function decideApprovalRequest(
         byEmail: actor.email,
         note,
         requestStatusAfter: statusAfter,
-        ...(assignees.length > 0 ? { pendingApprovers, totalApprovers: assignees.length } : {}),
+        ...(assignees.length > 0 ? {
+          pendingApprovers,
+          totalApprovers: assignees.length,
+          requiredHeadApprovals: existing.requiredHeadApprovals,
+          requiredFinanceApprovals: existing.requiredFinanceApprovals,
+        } : {}),
         serverReviewMs,
         clientReviewMs,
         reviewMismatch: serverReviewMs !== null && clientReviewMs !== null
@@ -407,11 +529,15 @@ export async function markApprovalPaid(
   })
 }
 
-/** Submitter cancels their own still-pending request. */
+/** Cancel a still-pending request. The submitter withdraws their own; an
+ * approvals:admin may also cancel someone else's (the liveness escape when
+ * a snapshotted approver leaves the company and the request can otherwise
+ * never complete) — recorded under a distinct audit action. */
 export async function cancelApprovalRequest(
   actor: Actor,
   requestId: string,
   ctx: SoxRequestContext,
+  actorIsAdmin: boolean,
 ) {
   return await db.transaction(async (tx) => {
     const [existing] = await tx
@@ -420,8 +546,9 @@ export async function cancelApprovalRequest(
       .where(eq(approvalRequest.id, requestId))
       .for('update')
     if (!existing) throw Object.assign(new Error('Request not found'), { statusCode: 404 })
-    if (existing.submitterId !== actor.id) {
-      throw Object.assign(new Error('Only the submitter can cancel a request'), { statusCode: 403 })
+    const isSubmitter = existing.submitterId === actor.id
+    if (!isSubmitter && !actorIsAdmin) {
+      throw Object.assign(new Error('Only the submitter or an admin can cancel a request'), { statusCode: 403 })
     }
     if (existing.status !== 'pending') {
       throw Object.assign(new Error(`Request is ${existing.status}, not pending`), { statusCode: 409 })
@@ -436,7 +563,7 @@ export async function cancelApprovalRequest(
 
     await tx.insert(auditLog).values({
       userId: actor.id === 'dev-user' ? null : actor.id,
-      action: 'approval.cancelled',
+      action: isSubmitter ? 'approval.cancelled' : 'approval.cancelled_by_admin',
       resourceType: 'approval_request',
       resourceId: requestId,
       metadata: { refNumber: existing.refNumber, byEmail: actor.email, ip: ctx.ip, userAgent: ctx.userAgent },

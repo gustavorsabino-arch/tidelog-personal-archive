@@ -67,6 +67,15 @@ export const approvalRequest = app.table(
 
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
 
+    // Approval-matrix snapshot, frozen at submission (Delegation of
+    // Authority): how many 'head'-stage approvals are needed (0 or 1) and
+    // how many 'finance'-stage approvals (amount-tiered: ≤$10k → 2 finance
+    // people involved incl. a finance submitter, ≤$25k → 3, >$25k → all).
+    // NULL on requests created before the matrix existed — those keep the
+    // older all-assignees-must-approve behavior.
+    requiredHeadApprovals: integer('required_head_approvals'),
+    requiredFinanceApprovals: integer('required_finance_approvals'),
+
     // Decision (single approver in V1 — multi-approver goes in a separate
     // table when dual-approval ships; these columns stay as the FINAL word).
     decidedById: text('decided_by_id').references(() => user.id),
@@ -124,6 +133,10 @@ export const approvalAssignee = app.table(
     requestId: uuid('request_id').notNull().references(() => approvalRequest.id, { onDelete: 'cascade' }),
     userId: text('user_id').notNull().references(() => user.id),
     email: text('email').notNull(),
+    // 'head' = department head sign-off (goes first, 1 of them suffices);
+    // 'finance' = finance/admin approval (amount-tiered quorum, votes only
+    // after the head stage is satisfied).
+    stage: text('stage', { enum: ['head', 'finance'] }).notNull().default('finance'),
     assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

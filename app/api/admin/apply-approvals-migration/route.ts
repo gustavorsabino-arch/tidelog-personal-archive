@@ -111,6 +111,11 @@ const STATEMENTS: string[] = [
   `DO $$ BEGIN
     ALTER TABLE "app"."approval_decision" ADD CONSTRAINT "approval_decision_approver_id_user_id_fk" FOREIGN KEY ("approver_id") REFERENCES "app"."user"("id") ON DELETE no action ON UPDATE no action;
   EXCEPTION WHEN duplicate_object THEN null; END $$`,
+
+  // ── Migration 0025: approval matrix (head stage + tiered finance quorum) ──
+  `ALTER TABLE "app"."approval_assignee" ADD COLUMN IF NOT EXISTS "stage" text DEFAULT 'finance' NOT NULL`,
+  `ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "required_head_approvals" integer`,
+  `ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "required_finance_approvals" integer`,
 ]
 
 export async function GET(req: Request) {

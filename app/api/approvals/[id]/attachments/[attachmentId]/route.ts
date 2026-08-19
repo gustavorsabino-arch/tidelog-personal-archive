@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { approvalRequest, approvalAttachment } from '@/lib/db/schema'
+import { approvalRequest, approvalAttachment, approvalAssignee } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { hasPermission } from '@/lib/auth/permissions'
 import { logAudit } from '@/lib/audit'
@@ -32,7 +32,14 @@ export async function GET(
 
   const isAdmin = hasPermission(actor.role, 'approvals:admin')
   if (!isAdmin && request.submitterId !== actor.id) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    // Assigned approvers (incl. budget_viewer department heads) must be
+    // able to open the invoice they're reviewing.
+    const [assigned] = await db
+      .select({ userId: approvalAssignee.userId })
+      .from(approvalAssignee)
+      .where(and(eq(approvalAssignee.requestId, id), eq(approvalAssignee.userId, actor.id)))
+      .limit(1)
+    if (!assigned) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
   const [att] = await db

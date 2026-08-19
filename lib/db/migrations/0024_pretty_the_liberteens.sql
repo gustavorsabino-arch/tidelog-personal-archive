@@ -15,10 +15,10 @@ CREATE TABLE IF NOT EXISTS "app"."approval_decision" (
 	CONSTRAINT "approval_decision_request_id_approver_id_pk" PRIMARY KEY("request_id","approver_id")
 );
 --> statement-breakpoint
-ALTER TABLE "app"."approval_request" ADD COLUMN "request_type" text DEFAULT 'payment' NOT NULL;--> statement-breakpoint
-ALTER TABLE "app"."approval_request" ADD COLUMN "network" text;--> statement-breakpoint
-ALTER TABLE "app"."approval_request" ADD COLUMN "token" text;--> statement-breakpoint
-ALTER TABLE "app"."approval_request" ADD COLUMN "wallet_address" text;--> statement-breakpoint
+ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "request_type" text DEFAULT 'payment' NOT NULL;--> statement-breakpoint
+ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "network" text;--> statement-breakpoint
+ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "token" text;--> statement-breakpoint
+ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "wallet_address" text;--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "app"."approval_assignee" ADD CONSTRAINT "approval_assignee_request_id_approval_request_id_fk" FOREIGN KEY ("request_id") REFERENCES "app"."approval_request"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
