@@ -455,28 +455,47 @@ export function ApprovalsPageClient() {
     if (!file) { setFormError('Attach the invoice first, then prefill'); return }
     setPrefillBusy(true)
     setFormError(null)
+
+    type PrefillFields = {
+      vendorName: string | null; description: string | null; amount: number | null
+      currency: string | null; invoiceNumber: string | null
+      invoiceDate: string | null; dueDate: string | null
+    }
+    const apply = (f: PrefillFields) => setForm((p) => ({
+      ...p,
+      vendorName: f.vendorName ?? p.vendorName,
+      description: f.description ?? p.description,
+      amount: f.amount != null ? String(f.amount) : p.amount,
+      currency: f.currency && ['USD', 'USDC', 'EUR', 'GBP', 'MYR', 'AED'].includes(f.currency) ? f.currency : p.currency,
+      invoiceNumber: f.invoiceNumber ?? p.invoiceNumber,
+      invoiceDate: f.invoiceDate ?? p.invoiceDate,
+      dueDate: f.dueDate ?? p.dueDate,
+    }))
+
     try {
+      // AI path first (only configured when ANTHROPIC_API_KEY exists) —
+      // a 503 means "not configured", which falls back to the free local
+      // extractor below.
       const fd = new FormData()
       fd.append('file', file)
-      const res = await apiFormFetch<{ fields: {
-        vendorName: string | null; description: string | null; amount: number | null
-        currency: string | null; invoiceNumber: string | null
-        invoiceDate: string | null; dueDate: string | null
-      } }>('/api/approvals/extract-invoice', fd)
-      const f = res.fields
-      setForm((p) => ({
-        ...p,
-        vendorName: f.vendorName ?? p.vendorName,
-        description: f.description ?? p.description,
-        amount: f.amount != null ? String(f.amount) : p.amount,
-        currency: f.currency && ['USD', 'USDC', 'EUR', 'GBP', 'MYR', 'AED'].includes(f.currency) ? f.currency : p.currency,
-        invoiceNumber: f.invoiceNumber ?? p.invoiceNumber,
-        invoiceDate: f.invoiceDate ?? p.invoiceDate,
-        dueDate: f.dueDate ?? p.dueDate,
-      }))
-      flash('Form prefilled from the invoice — review every field before submitting')
+      const res = await apiFormFetch<{ fields: PrefillFields }>('/api/approvals/extract-invoice', fd)
+      apply(res.fields)
+      flash('Form prefilled from the invoice (AI) — review every field before submitting')
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : 'Could not read the invoice')
+      const status = (e as Error & { status?: number }).status
+      if (status === 503) {
+        try {
+          // Free path: pdf.js reads the PDF's text layer in the browser
+          // (the file never leaves this machine) + rule-based extraction.
+          const { extractInvoiceFieldsLocally } = await import('@/lib/approvals/invoice-local-extract')
+          apply(await extractInvoiceFieldsLocally(file))
+          flash('Prefilled with the free local extractor — review and complete the fields')
+        } catch (e2) {
+          setFormError(e2 instanceof Error ? e2.message : 'Could not read the invoice')
+        }
+      } else {
+        setFormError(e instanceof Error ? e.message : 'Could not read the invoice')
+      }
     } finally {
       setPrefillBusy(false)
     }
