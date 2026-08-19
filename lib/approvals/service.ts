@@ -9,6 +9,7 @@ import {
   slackUpdateApprovalCard,
   type SlackCardRequest,
 } from '@/lib/slack/approvals'
+import { gdriveEnabled, gdriveUpload } from '@/lib/gdrive/client'
 import type { SoxRequestContext } from './request-context'
 
 /**
@@ -113,6 +114,50 @@ function usdEquivalentForTier(amount: number, currency: string): number {
 
 function shortEmail(email: string): string {
   return email.split('@')[0]
+}
+
+/** Mirror freshly saved attachments into the company Google Drive folder
+ * and record each copy as an audited approval_link (visible in the UI's
+ * Documents list). Best-effort: Postgres stays the source of truth; a
+ * Drive outage or missing config silently skips the mirror. */
+async function mirrorAttachmentsToDrive(
+  requestId: string,
+  refNumber: string,
+  actor: Actor,
+  attachments: NewAttachmentInput[],
+): Promise<void> {
+  try {
+    if (!gdriveEnabled() || attachments.length === 0) return
+    const linkRows: { requestId: string; url: string; label: string; addedById: string }[] = []
+    for (const a of attachments) {
+      const uploaded = await gdriveUpload(`${refNumber} - ${a.filename}`, a.contentType, a.bytes)
+      if (uploaded?.webViewLink) {
+        linkRows.push({
+          requestId,
+          url: uploaded.webViewLink,
+          label: `Drive · ${a.filename}`,
+          addedById: actor.id,
+        })
+      }
+    }
+    if (linkRows.length > 0) {
+      await db.insert(approvalLink).values(linkRows)
+      await db.insert(auditLog).values({
+        userId: actor.id === 'dev-user' ? null : actor.id,
+        action: 'approval.drive_mirrored',
+        resourceType: 'approval_request',
+        resourceId: requestId,
+        metadata: {
+          refNumber,
+          byEmail: actor.email,
+          files: linkRows.map((l) => l.label),
+          links: linkRows.map((l) => l.url),
+        },
+      })
+    }
+  } catch (err) {
+    console.error('[gdrive] mirror failed:', (err as Error).message)
+  }
 }
 
 /** Mirror a status change to the request's Slack card (thread line +
@@ -387,6 +432,8 @@ export async function createApprovalRequest(
     console.error('[slack] create notify failed:', (err as Error).message)
   }
 
+  await mirrorAttachmentsToDrive(created.id, created.refNumber, actor, attachments)
+
   return created
 }
 
@@ -496,6 +543,8 @@ export async function addApprovalEvidence(
   if (links.length > 0) bits.push(`${links.length} link${links.length === 1 ? '' : 's'}`)
   await slackThreadEvent(updatedRow.slackMessageTs, `📎 ${shortEmail(actor.email)} added ${bits.join(' + ')}`)
     .catch(() => {})
+
+  await mirrorAttachmentsToDrive(requestId, updatedRow.refNumber, actor, attachments)
 
   return { attachmentsAdded: attachments.length, linksAdded: links.length }
 }

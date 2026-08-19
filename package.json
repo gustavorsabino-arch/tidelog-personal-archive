@@ -25,6 +25,7 @@
     "cron:refresh-qb-tokens": "bun run scripts/cron/run.ts refresh-qb-tokens"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.119.0",
     "@aws-sdk/credential-providers": "3.1034.0",
     "@aws-sdk/rds-signer": "3.1034.0",
     "@vercel/functions": "3.4.4",

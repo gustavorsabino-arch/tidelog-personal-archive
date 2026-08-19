@@ -264,6 +264,7 @@ export function ApprovalsPageClient() {
   const [files, setFiles] = useState<File[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [prefillBusy, setPrefillBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   // Detail/review modal
@@ -447,6 +448,38 @@ export function ApprovalsPageClient() {
     }
 
     XLSX.writeFile(wb, `${r.refNumber}-approval.xlsx`)
+  }
+
+  async function prefillFromInvoice() {
+    const file = files.find((f) => f.type === 'application/pdf' || f.type.startsWith('image/')) ?? files[0]
+    if (!file) { setFormError('Attach the invoice first, then prefill'); return }
+    setPrefillBusy(true)
+    setFormError(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await apiFormFetch<{ fields: {
+        vendorName: string | null; description: string | null; amount: number | null
+        currency: string | null; invoiceNumber: string | null
+        invoiceDate: string | null; dueDate: string | null
+      } }>('/api/approvals/extract-invoice', fd)
+      const f = res.fields
+      setForm((p) => ({
+        ...p,
+        vendorName: f.vendorName ?? p.vendorName,
+        description: f.description ?? p.description,
+        amount: f.amount != null ? String(f.amount) : p.amount,
+        currency: f.currency && ['USD', 'USDC', 'EUR', 'GBP', 'MYR', 'AED'].includes(f.currency) ? f.currency : p.currency,
+        invoiceNumber: f.invoiceNumber ?? p.invoiceNumber,
+        invoiceDate: f.invoiceDate ?? p.invoiceDate,
+        dueDate: f.dueDate ?? p.dueDate,
+      }))
+      flash('Form prefilled from the invoice — review every field before submitting')
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Could not read the invoice')
+    } finally {
+      setPrefillBusy(false)
+    }
   }
 
   async function submitNewRequest() {
@@ -870,6 +903,23 @@ export function ApprovalsPageClient() {
                       <li key={f.name}>{f.name} · {(f.size / 1024).toFixed(0)} KB</li>
                     ))}
                   </ul>
+                ) : null}
+                {requestType === 'payment' ? (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      className="fsel"
+                      onClick={() => void prefillFromInvoice()}
+                      disabled={prefillBusy || submitting || files.length === 0}
+                      title={files.length === 0
+                        ? 'Attach the invoice (PDF or photo) first'
+                        : 'Read the attached invoice and prefill the fields above'}
+                    >
+                      {prefillBusy ? 'Reading invoice…' : '✨ Prefill from invoice'}
+                    </button>
+                    <span style={{ marginLeft: 8, fontSize: '0.66rem', color: 'var(--muted)' }}>
+                      Fills vendor, amount, dates from the attached invoice — always review before submitting.
+                    </span>
+                  </div>
                 ) : null}
               </div>
 
