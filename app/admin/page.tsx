@@ -12,6 +12,7 @@ type AdminUser = {
   emails: string[]
   role: 'admin' | 'budget_viewer' | null
   departments: string[]
+  financeApprover: boolean
   banned: boolean
   createdAt: string
 }
@@ -19,6 +20,7 @@ type AdminUser = {
 type Draft = {
   role: 'admin' | 'budget_viewer' | '' | null
   departments: string[]
+  financeApprover: boolean
   linkEmail: string
 }
 
@@ -34,6 +36,7 @@ function emptyDraft(user: AdminUser): Draft {
   return {
     role: user.role ?? '',
     departments: [...user.departments],
+    financeApprover: user.financeApprover,
     linkEmail: '',
   }
 }
@@ -118,6 +121,7 @@ export default function AdminPage() {
     if (JSON.stringify([...d.departments].sort()) !== JSON.stringify([...user.departments].sort())) {
       patch.departments = d.departments
     }
+    if (d.financeApprover !== user.financeApprover) patch.financeApprover = d.financeApprover
     if (Object.keys(patch).length === 0) return
     applyPatch(user.id, patch)
   }
@@ -374,7 +378,8 @@ export default function AdminPage() {
             const isMe = myEmail !== null && u.emails.some((e) => e.toLowerCase() === myEmail.toLowerCase())
             const dirty =
               (d.role === '' ? null : d.role) !== u.role ||
-              JSON.stringify([...d.departments].sort()) !== JSON.stringify([...u.departments].sort())
+              JSON.stringify([...d.departments].sort()) !== JSON.stringify([...u.departments].sort()) ||
+              d.financeApprover !== u.financeApprover
 
             return (
               <article
@@ -433,6 +438,28 @@ export default function AdminPage() {
                         No departments selected — this viewer will see nothing.
                       </div>
                     )}
+
+                    <div style={{ marginTop: 12 }}>
+                      <div className="section-title">Approvals</div>
+                      <label
+                        className={`admin-access-department-pill${d.financeApprover ? ' selected' : ''}`}
+                        style={{ display: 'inline-flex' }}
+                        title="Puts this person in the FINANCE approval pool (same as admins) for payment/funding requests. They will never be treated as a department head."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={d.financeApprover}
+                          onChange={() => setDraft(u.id, { financeApprover: !d.financeApprover })}
+                          disabled={isSaving}
+                        />
+                        Finance approver
+                      </label>
+                      {d.financeApprover && (
+                        <div className="admin-access-list-meta" style={{ marginTop: 6 }}>
+                          Counts as finance in the approval matrix — approves requests and can mark them paid.
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 

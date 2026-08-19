@@ -183,6 +183,13 @@
       "when": 1787143391537,
       "tag": "0025_powerful_famine",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1787148072767,
+      "tag": "0026_futuristic_shiver_man",
+      "breakpoints": true
     }
   ]
 }

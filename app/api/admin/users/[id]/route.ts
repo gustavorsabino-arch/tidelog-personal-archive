@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { and, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { user, account } from '@/lib/db/schema/auth'
-import { userDepartment } from '@/lib/db/schema/authz'
+import { userDepartment, financeApprover } from '@/lib/db/schema/authz'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { isEmailDomainAllowed, parseAllowedDomains } from '@/lib/auth/email-domain'
 import { invalidateUserCacheByUserId } from '@/lib/auth/request-user'
@@ -12,6 +12,7 @@ import { logAudit } from '@/lib/audit'
 const UpdateUserSchema = z.object({
   role: z.enum(['admin', 'budget_viewer']).nullable().optional(),
   departments: z.array(z.string().min(1)).optional(),
+  financeApprover: z.boolean().optional(),
   banned: z.boolean().optional(),
   linkEmail: z.string().email().optional(),
   unlinkEmail: z.string().email().optional(),
@@ -80,6 +81,24 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       metadata: { departments: body.departments, byEmail: me.email },
     })
     changes.departments = body.departments
+  }
+
+  if ('financeApprover' in body && body.financeApprover !== undefined) {
+    if (body.financeApprover) {
+      await db.insert(financeApprover)
+        .values({ userId: id })
+        .onConflictDoNothing()
+    } else {
+      await db.delete(financeApprover).where(eq(financeApprover.userId, id))
+    }
+    await logAudit({
+      userId: me.id === 'dev-user' ? null : me.id,
+      action: body.financeApprover ? 'finance_approver.granted' : 'finance_approver.revoked',
+      resourceType: 'user',
+      resourceId: id,
+      metadata: { email: existing.email, byEmail: me.email },
+    })
+    changes.financeApprover = body.financeApprover
   }
 
   if ('banned' in body && body.banned !== undefined) {

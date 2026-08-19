@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { user, account } from '@/lib/db/schema/auth'
-import { userDepartment } from '@/lib/db/schema/authz'
+import { userDepartment, financeApprover } from '@/lib/db/schema/authz'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { isEmailDomainAllowed, parseAllowedDomains } from '@/lib/auth/email-domain'
 import { logAudit } from '@/lib/audit'
@@ -23,6 +23,8 @@ export async function GET(req: Request) {
 
   const accs = await db.select().from(account)
   const depts = await db.select().from(userDepartment)
+  const financeRows = await db.select().from(financeApprover).catch(() => [])
+  const financeIds = new Set(financeRows.map((f) => f.userId))
 
   const byUser = new Map<string, { linkedEmails: string[]; departments: string[] }>()
   for (const u of users) byUser.set(u.id, { linkedEmails: [], departments: [] })
@@ -51,6 +53,7 @@ export async function GET(req: Request) {
       emails,
       role: u.role,
       departments: bucket.departments,
+      financeApprover: financeIds.has(u.id),
       banned: u.banned,
       createdAt: u.createdAt,
     }

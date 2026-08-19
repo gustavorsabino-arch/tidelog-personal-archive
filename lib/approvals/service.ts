@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { and, desc, eq, gte, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, isNotNull, or, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, auditLog, user, userDepartment } from '@/lib/db/schema'
+import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, auditLog, user, userDepartment, financeApprover } from '@/lib/db/schema'
 import type { SoxRequestContext } from './request-context'
 
 /**
@@ -126,17 +126,26 @@ export async function createApprovalRequest(
   // Read LIVE from access control at every submission so role changes are
   // always reflected, then SNAPSHOT onto the request so an in-flight
   // request's requirement never changes (SOX determinism).
-  // Finance pool = every non-banned admin. Department heads = non-banned
-  // budget_viewers with the request's department marked in user_department.
+  // Finance pool = every non-banned admin PLUS anyone marked as a Finance
+  // approver in Access Control (finance_approver table — e.g. HR with
+  // company-wide cost visibility, who isn't an admin). Department heads =
+  // non-banned budget_viewers with the request's department marked in
+  // user_department, EXCLUDING finance-pool members — being finance always
+  // wins over being a head.
   const financePool = await db
-    .select({ id: user.id, email: user.email })
+    .selectDistinct({ id: user.id, email: user.email })
     .from(user)
-    .where(and(eq(user.role, 'admin'), eq(user.banned, false)))
-  const submitterIsFinance = financePool.some((u) => u.id === actor.id)
+    .leftJoin(financeApprover, eq(financeApprover.userId, user.id))
+    .where(and(
+      eq(user.banned, false),
+      or(eq(user.role, 'admin'), isNotNull(financeApprover.userId)),
+    ))
+  const financeIds = new Set(financePool.map((u) => u.id))
+  const submitterIsFinance = financeIds.has(actor.id)
   const financeAssignees = financePool.filter((u) => u.id !== actor.id)
   if (financeAssignees.length === 0) {
     throw Object.assign(
-      new Error('No eligible finance approvers exist — another admin is required in Access Control'),
+      new Error('No eligible finance approvers exist — another admin or finance approver is required in Access Control'),
       { statusCode: 409 },
     )
   }
@@ -154,10 +163,11 @@ export async function createApprovalRequest(
         eq(user.role, 'budget_viewer'),
         eq(user.banned, false),
       ))
+    const eligibleHeads = heads.filter((h) => !financeIds.has(h.id))
     // A head submitting for their own department IS the head sign-off —
     // the stage only exists when someone else must vouch for the spend.
-    const submitterIsHead = heads.some((h) => h.id === actor.id)
-    if (!submitterIsHead) headAssignees = heads
+    const submitterIsHead = eligibleHeads.some((h) => h.id === actor.id)
+    if (!submitterIsHead) headAssignees = eligibleHeads
   }
   const requiredHeadApprovals = headAssignees.length > 0 ? 1 : 0
 
@@ -483,6 +493,23 @@ export async function decideApprovalRequest(
 
     return updated
   })
+}
+
+/** True when the user sits in the finance approval pool RIGHT NOW (admin
+ * role, or marked as Finance approver in Access Control). Used for
+ * eligibility outside the per-request snapshot, e.g. Mark as Paid. */
+export async function isFinancePoolMember(userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: user.id })
+    .from(user)
+    .leftJoin(financeApprover, eq(financeApprover.userId, user.id))
+    .where(and(
+      eq(user.id, userId),
+      eq(user.banned, false),
+      or(eq(user.role, 'admin'), isNotNull(financeApprover.userId)),
+    ))
+    .limit(1)
+  return !!row
 }
 
 /** Mark an approved request as paid, with an external payment reference

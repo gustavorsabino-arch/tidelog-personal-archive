@@ -1,19 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requirePermission } from '@/lib/auth/require-permission'
+import { hasPermission } from '@/lib/auth/permissions'
 import { getSoxRequestContext } from '@/lib/approvals/request-context'
-import { markApprovalPaid } from '@/lib/approvals/service'
+import { markApprovalPaid, isFinancePoolMember } from '@/lib/approvals/service'
 
 export const runtime = 'nodejs'
 
 /**
  * POST /api/approvals/[id]/pay
  * Body: { paymentReference: string }  — tx hash, wire confirmation, Mercury ref…
- * Only approved requests can be marked paid. Requires approvals:approve.
+ * Only approved requests can be marked paid. Payments are executed by the
+ * finance pool: admins, plus non-admin users marked as Finance approver in
+ * Access Control.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { user: actor, deny } = await requirePermission('approvals:approve', req)
+  const { user: actor, deny } = await requirePermission('approvals:submit', req)
   if (deny) return deny
   const { id } = await params
+
+  if (!hasPermission(actor.role, 'approvals:approve') && !(await isFinancePoolMember(actor.id))) {
+    return NextResponse.json({ error: 'Only the finance team can mark requests as paid' }, { status: 403 })
+  }
 
   let body: { paymentReference?: string }
   try {

@@ -6,7 +6,7 @@ import { requirePermission } from '@/lib/auth/require-permission'
 import { hasPermission } from '@/lib/auth/permissions'
 import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import { getSoxRequestContext } from '@/lib/approvals/request-context'
-import { recordApprovalView } from '@/lib/approvals/service'
+import { recordApprovalView, isFinancePoolMember } from '@/lib/approvals/service'
 
 export const runtime = 'nodejs'
 
@@ -137,7 +137,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       isSubmitter,
       canDecide,
       canApproveNow,
-      canPay: canApprove && row.request.status === 'approved',
+      // Payments are executed by the finance pool: admins plus non-admin
+      // Finance approvers from Access Control.
+      canPay: row.request.status === 'approved'
+        && (canApprove || await isFinancePoolMember(actor.id)),
       // Admins may cancel anyone's pending request — the liveness escape
       // when a snapshotted approver has left the company.
       canCancel: (isSubmitter || isAdmin) && row.request.status === 'pending',
