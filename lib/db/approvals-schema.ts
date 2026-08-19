@@ -8,10 +8,15 @@ import { db } from '@/lib/db'
  * migrations are applied against prod by the app itself instead of
  * `bun run db:migrate`. Previously that meant manually opening
  * /api/admin/apply-approvals-migration after every deploy — forget it and
- * every approvals endpoint 500s until someone remembers. Now
- * instrumentation.ts calls ensureApprovalsSchema() when a fresh server
- * instance boots: it probes for the newest expected column and, only when
+ * every approvals endpoint 500s until someone remembers. Now the approvals
+ * API routes call ensureApprovalsSchema() before touching the tables: a
+ * single memoized probe checks the newest expected column and, only when
  * something is missing, runs the full (idempotent) statement list.
+ *
+ * IMPORTANT: this must run inside a REQUEST, never at server boot — on
+ * Vercel the DB credential is an OIDC token injected per-request
+ * (x-vercel-oidc-token), so a boot-time hook (instrumentation.ts) has no
+ * way to connect. That approach was tried and reverted.
  *
  * Maintenance contract: when a new approvals migration is generated,
  * append its statements here (IF NOT EXISTS / duplicate_object-tolerant

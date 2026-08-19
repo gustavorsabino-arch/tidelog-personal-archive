@@ -4,6 +4,7 @@ import { db } from '@/lib/db'
 import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, user } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { hasPermission } from '@/lib/auth/permissions'
+import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import { getSoxRequestContext } from '@/lib/approvals/request-context'
 import { recordApprovalView } from '@/lib/approvals/service'
 
@@ -22,6 +23,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { user: actor, deny } = await requirePermission('approvals:submit', req)
   if (deny) return deny
   const { id } = await params
+
+  // Self-heal pending schema before touching the new columns.
+  await ensureApprovalsSchema().catch(() => {})
 
   const [row] = await db
     .select({

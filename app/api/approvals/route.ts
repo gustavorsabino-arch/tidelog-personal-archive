@@ -5,6 +5,7 @@ import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision
 import { requirePermission } from '@/lib/auth/require-permission'
 import { hasPermission } from '@/lib/auth/permissions'
 import { BUDGET_DEPTS } from '@/lib/constants'
+import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import { getSoxRequestContext } from '@/lib/approvals/request-context'
 import {
   createApprovalRequest,
@@ -34,6 +35,13 @@ export async function GET(req: NextRequest) {
   if (deny) return deny
 
   const isAdmin = hasPermission(actor.role, 'approvals:admin')
+
+  try {
+  // Self-heal BEFORE querying: after a deploy that added columns, the
+  // first request applies the pending schema statements itself instead of
+  // 500ing until someone runs a manual migration. Memoized per instance —
+  // a single cheap probe once the DB is current.
+  await ensureApprovalsSchema()
 
   const rows = await db
     .select({
@@ -108,6 +116,12 @@ export async function GET(req: NextRequest) {
     })),
     isAdmin,
   })
+  } catch (err) {
+    // Surface the real cause to the client (the UI shows error.error) —
+    // a bare 500 with no body made schema drift invisible to diagnose.
+    console.error('[approvals] list failed:', err)
+    return NextResponse.json({ error: `Approvals list failed: ${(err as Error).message}` }, { status: 500 })
+  }
 }
 
 /**
@@ -119,6 +133,10 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const { user: actor, deny } = await requirePermission('approvals:submit', req)
   if (deny) return deny
+
+  // Same self-heal as GET — a create right after a deploy must not race
+  // the schema. Errors fall through to the insert's own error handling.
+  await ensureApprovalsSchema().catch(() => {})
 
   let form: FormData
   try {
