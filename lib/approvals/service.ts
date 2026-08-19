@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto'
 import { and, desc, eq, gte, isNotNull, or, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, auditLog, user, userDepartment, financeApprover } from '@/lib/db/schema'
+import {
+  slackEnabled,
+  slackPostApprovalCard,
+  slackThreadEvent,
+  slackUpdateApprovalCard,
+  type SlackCardRequest,
+} from '@/lib/slack/approvals'
 import type { SoxRequestContext } from './request-context'
 
 /**
@@ -77,6 +84,46 @@ function usdEquivalentForTier(amount: number, currency: string): number {
   if (c === 'EUR' || c === 'GBP') return amount * 1.5
   if (c === 'MYR' || c === 'AED') return amount
   return Number.POSITIVE_INFINITY
+}
+
+function shortEmail(email: string): string {
+  return email.split('@')[0]
+}
+
+/** Mirror a status change to the request's Slack card (thread line +
+ * in-place card update). Best-effort by design: Slack must never fail or
+ * slow a SOX action, so every error is swallowed after logging. */
+async function notifySlackStatus(
+  row: typeof approvalRequest.$inferSelect,
+  opts: { thread?: string; approversLine?: string | null },
+): Promise<void> {
+  try {
+    if (!slackEnabled() || !row.slackMessageTs) return
+    const [sub] = await db
+      .select({ email: user.email })
+      .from(user)
+      .where(eq(user.id, row.submitterId))
+      .limit(1)
+    const card: SlackCardRequest = {
+      refNumber: row.refNumber,
+      status: row.status,
+      requestType: row.requestType,
+      vendorName: row.vendorName,
+      description: row.description,
+      amount: row.amount,
+      currency: row.currency,
+      department: row.department,
+      entity: row.entity,
+      network: row.network,
+      token: row.token,
+      walletAddress: row.walletAddress,
+      submitterEmail: sub?.email ?? 'unknown',
+    }
+    if (opts.thread) await slackThreadEvent(row.slackMessageTs, opts.thread)
+    await slackUpdateApprovalCard(row.slackMessageTs, card, opts.approversLine ?? null)
+  } catch (err) {
+    console.error('[slack] notify failed:', (err as Error).message)
+  }
 }
 
 // APR-<zero-padded sequence>. The advisory xact-lock serializes concurrent
@@ -185,7 +232,7 @@ export async function createApprovalRequest(
     Math.min(involvement - (submitterIsFinance ? 1 : 0), financeAssignees.length),
   )
 
-  return await db.transaction(async (tx) => {
+  const created = await db.transaction(async (tx) => {
     const refNumber = await nextRefNumber(tx)
     const [created] = await tx.insert(approvalRequest).values({
       refNumber,
@@ -263,6 +310,45 @@ export async function createApprovalRequest(
 
     return created
   })
+
+  // ── Slack mirror (after commit — never blocks or fails the submission) ──
+  try {
+    if (slackEnabled()) {
+      const parts: string[] = []
+      if (headAssignees.length > 0) {
+        parts.push(`Head: ${headAssignees.map((a) => shortEmail(a.email)).join(' or ')} (1 needed)`)
+      }
+      parts.push(`Finance: ${financeAssignees.map((a) => shortEmail(a.email)).join(', ')} (${requiredFinanceApprovals} needed)`)
+      const ts = await slackPostApprovalCard(
+        {
+          refNumber: created.refNumber,
+          status: created.status,
+          requestType: created.requestType,
+          vendorName: created.vendorName,
+          description: created.description,
+          amount: created.amount,
+          currency: created.currency,
+          department: created.department,
+          entity: created.entity,
+          network: created.network,
+          token: created.token,
+          walletAddress: created.walletAddress,
+          submitterEmail: actor.email,
+        },
+        parts.join(' → '),
+      )
+      if (ts) {
+        await db.update(approvalRequest)
+          .set({ slackMessageTs: ts })
+          .where(eq(approvalRequest.id, created.id))
+        created.slackMessageTs = ts
+      }
+    }
+  } catch (err) {
+    console.error('[slack] create notify failed:', (err as Error).message)
+  }
+
+  return created
 }
 
 /** Record that an eligible approver opened the request detail. Debounced to
@@ -343,7 +429,7 @@ export async function decideApprovalRequest(
     .limit(1)
   const lastViewedAt = viewedRows[0]?.createdAt ?? null
 
-  return await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select()
       .from(approvalRequest)
@@ -491,8 +577,24 @@ export async function decideApprovalRequest(
       },
     })
 
-    return updated
+    return { updated, statusAfter, pendingApprovers }
   })
+
+  // ── Slack mirror ──
+  const verb = decision === 'approved' ? '✅ approved' : '❌ rejected'
+  let line = `${shortEmail(actor.email)} ${verb}`
+  if (note?.trim()) line += ` — “${note.trim()}”`
+  if (outcome.statusAfter === 'pending' && outcome.pendingApprovers.length > 0) {
+    line += ` · still waiting on: ${outcome.pendingApprovers.map(shortEmail).join(', ')}`
+  }
+  await notifySlackStatus(outcome.updated, {
+    thread: line,
+    approversLine: outcome.statusAfter === 'pending' && outcome.pendingApprovers.length > 0
+      ? `Waiting on: ${outcome.pendingApprovers.map(shortEmail).join(', ')}`
+      : null,
+  })
+
+  return outcome.updated
 }
 
 /** True when the user sits in the finance approval pool RIGHT NOW (admin
@@ -520,7 +622,7 @@ export async function markApprovalPaid(
   paymentReference: string,
   ctx: SoxRequestContext,
 ) {
-  return await db.transaction(async (tx) => {
+  const updatedRow = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select()
       .from(approvalRequest)
@@ -554,6 +656,12 @@ export async function markApprovalPaid(
 
     return updated
   })
+
+  await notifySlackStatus(updatedRow, {
+    thread: `💸 Marked paid by ${shortEmail(actor.email)} — ref: ${paymentReference}`,
+  })
+
+  return updatedRow
 }
 
 /** Cancel a still-pending request. The submitter withdraws their own; an
@@ -566,7 +674,7 @@ export async function cancelApprovalRequest(
   ctx: SoxRequestContext,
   actorIsAdmin: boolean,
 ) {
-  return await db.transaction(async (tx) => {
+  const updatedRow = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select()
       .from(approvalRequest)
@@ -598,4 +706,10 @@ export async function cancelApprovalRequest(
 
     return updated
   })
+
+  await notifySlackStatus(updatedRow, {
+    thread: `⚪ Cancelled by ${shortEmail(actor.email)}`,
+  })
+
+  return updatedRow
 }

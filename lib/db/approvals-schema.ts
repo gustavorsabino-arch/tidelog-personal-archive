@@ -31,7 +31,7 @@ import { db } from '@/lib/db'
 
 // Newest column the statement list creates — the cheap "is the DB current?"
 // probe. UPDATE THIS whenever statements are appended.
-const SENTINEL = { table: 'finance_approver', column: 'user_id' }
+const SENTINEL = { table: 'approval_request', column: 'slack_message_ts' }
 
 export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS "app"."approval_request" (
@@ -137,6 +137,9 @@ export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
   `DO $$ BEGIN
     ALTER TABLE "app"."finance_approver" ADD CONSTRAINT "finance_approver_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "app"."user"("id") ON DELETE cascade ON UPDATE no action;
   EXCEPTION WHEN duplicate_object THEN null; END $$`,
+
+  // ── Migration 0027: Slack status-card message ts ──
+  `ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "slack_message_ts" text`,
 ]
 
 export type SchemaApplyResult = {

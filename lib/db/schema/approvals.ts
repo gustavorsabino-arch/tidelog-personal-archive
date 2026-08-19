@@ -87,6 +87,10 @@ export const approvalRequest = app.table(
     paidAt: timestamp('paid_at', { withTimezone: true }),
     paymentReference: text('payment_reference'),
 
+    // Slack status card: ts of the message posted to the approvals channel
+    // at submission — later status changes chat.update this same message.
+    slackMessageTs: text('slack_message_ts'),
+
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
