@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, user } from '@/lib/db/schema'
+import { approvalRequest, approvalAttachment, approvalLink, approvalAssignee, approvalDecision, user } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { hasPermission } from '@/lib/auth/permissions'
 import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
@@ -74,6 +74,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     .from(approvalAttachment)
     .where(eq(approvalAttachment.requestId, id))
 
+  const links = await db
+    .select({
+      id: approvalLink.id,
+      url: approvalLink.url,
+      label: approvalLink.label,
+      addedAt: approvalLink.addedAt,
+    })
+    .from(approvalLink)
+    .where(eq(approvalLink.requestId, id))
+
   // Approver panel: each assignee with their stage + vote (if cast).
   const voteById = new Map(votes.map((v) => [v.approverId, v]))
   const approvers = assignees.map((a) => {
@@ -130,9 +140,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   return NextResponse.json({
     request: { ...row.request, submitterEmail: row.submitterEmail },
     attachments,
+    links,
     approvers,
     stageState: { headSatisfied, headApproved, requiredHead, requiredFinance },
     viewer: {
+      canAddEvidence: (isSubmitter || isAdmin)
+        && row.request.status !== 'rejected' && row.request.status !== 'cancelled',
       isAdmin,
       isSubmitter,
       canDecide,

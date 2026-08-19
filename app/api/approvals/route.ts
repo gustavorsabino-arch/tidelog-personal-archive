@@ -16,6 +16,7 @@ import {
   PAYMENT_TYPES,
   type FundingNetwork,
   type FundingToken,
+  type NewLinkInput,
   type PaymentType,
 } from '@/lib/approvals/service'
 
@@ -50,6 +51,10 @@ export async function GET(req: NextRequest) {
       attachmentCount: sql<number>`(
         SELECT count(*)::int FROM "app"."approval_attachment" a
         WHERE a."request_id" = ${approvalRequest.id}
+      )`,
+      linkCount: sql<number>`(
+        SELECT count(*)::int FROM "app"."approval_link" l
+        WHERE l."request_id" = ${approvalRequest.id}
       )`,
     })
     .from(approvalRequest)
@@ -112,6 +117,7 @@ export async function GET(req: NextRequest) {
       ...r.request,
       submitterEmail: r.submitterEmail,
       attachmentCount: r.attachmentCount,
+      linkCount: r.linkCount,
       approvers: approversByRequest.get(r.request.id) ?? [],
     })),
     isAdmin,
@@ -205,6 +211,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Dates must be YYYY-MM-DD' }, { status: 400 })
   }
 
+  // Optional document links (Google Drive etc.) — JSON array of {url,label?}.
+  let links: NewLinkInput[] = []
+  const linksRaw = form.get('links')
+  if (typeof linksRaw === 'string' && linksRaw.trim()) {
+    try {
+      const parsed = JSON.parse(linksRaw)
+      if (Array.isArray(parsed)) {
+        links = parsed
+          .filter((l): l is { url: string; label?: string } => !!l && typeof l.url === 'string')
+          .map((l) => ({ url: l.url, label: typeof l.label === 'string' ? l.label : null }))
+      }
+    } catch {
+      return NextResponse.json({ error: 'links must be a JSON array of { url, label? }' }, { status: 400 })
+    }
+  }
+
   const files = form.getAll('attachments').filter((v): v is File => v instanceof File)
   if (files.length > MAX_ATTACHMENTS_PER_REQUEST) {
     return NextResponse.json({ error: `Max ${MAX_ATTACHMENTS_PER_REQUEST} attachments` }, { status: 400 })
@@ -240,6 +262,7 @@ export async function POST(req: NextRequest) {
         network,
         token,
         walletAddress,
+        links,
       },
       attachments,
       getSoxRequestContext(req),

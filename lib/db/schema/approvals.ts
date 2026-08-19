@@ -125,6 +125,25 @@ export const approvalAttachment = app.table(
 )
 
 /**
+ * External document links attached to a request (Google Drive contracts,
+ * invoices already stored elsewhere). The file stays where it lives with
+ * its own access control; tidelog stores the audited pointer. Addable at
+ * submission and afterwards (audit-logged either way).
+ */
+export const approvalLink = app.table(
+  'approval_link',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: uuid('request_id').notNull().references(() => approvalRequest.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(),
+    label: text('label'),
+    addedById: text('added_by_id').notNull().references(() => user.id),
+    addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('approval_link_request_idx').on(t.requestId)],
+)
+
+/**
  * Who must approve a request — snapshotted at submission time (every admin
  * except the submitter). Snapshotting keeps the requirement deterministic
  * for SOX: hiring a new admin mid-flight doesn't retroactively change how

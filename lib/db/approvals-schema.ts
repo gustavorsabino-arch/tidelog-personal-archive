@@ -31,7 +31,7 @@ import { db } from '@/lib/db'
 
 // Newest column the statement list creates — the cheap "is the DB current?"
 // probe. UPDATE THIS whenever statements are appended.
-const SENTINEL = { table: 'approval_request', column: 'slack_message_ts' }
+const SENTINEL = { table: 'approval_link', column: 'url' }
 
 export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS "app"."approval_request" (
@@ -140,6 +140,23 @@ export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
 
   // ── Migration 0027: Slack status-card message ts ──
   `ALTER TABLE "app"."approval_request" ADD COLUMN IF NOT EXISTS "slack_message_ts" text`,
+
+  // ── Migration 0028: external document links (Google Drive etc.) ──
+  `CREATE TABLE IF NOT EXISTS "app"."approval_link" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    "request_id" uuid NOT NULL,
+    "url" text NOT NULL,
+    "label" text,
+    "added_by_id" text NOT NULL,
+    "added_at" timestamp with time zone DEFAULT now() NOT NULL
+  )`,
+  `DO $$ BEGIN
+    ALTER TABLE "app"."approval_link" ADD CONSTRAINT "approval_link_request_id_approval_request_id_fk" FOREIGN KEY ("request_id") REFERENCES "app"."approval_request"("id") ON DELETE cascade ON UPDATE no action;
+  EXCEPTION WHEN duplicate_object THEN null; END $$`,
+  `DO $$ BEGIN
+    ALTER TABLE "app"."approval_link" ADD CONSTRAINT "approval_link_added_by_id_user_id_fk" FOREIGN KEY ("added_by_id") REFERENCES "app"."user"("id") ON DELETE no action ON UPDATE no action;
+  EXCEPTION WHEN duplicate_object THEN null; END $$`,
+  `CREATE INDEX IF NOT EXISTS "approval_link_request_idx" ON "app"."approval_link" USING btree ("request_id")`,
 ]
 
 export type SchemaApplyResult = {

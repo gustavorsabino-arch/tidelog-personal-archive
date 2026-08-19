@@ -62,7 +62,15 @@ type ApprovalRow = {
   requiredHeadApprovals: number | null
   requiredFinanceApprovals: number | null
   attachmentCount: number
+  linkCount: number
   approvers?: ApproverState[]
+}
+
+type LinkMeta = {
+  id: string
+  url: string
+  label: string | null
+  addedAt: string
 }
 
 type AttachmentMeta = {
@@ -77,6 +85,7 @@ type AttachmentMeta = {
 type DetailResponse = {
   request: ApprovalRow
   attachments: AttachmentMeta[]
+  links: LinkMeta[]
   approvers: ApproverState[]
   stageState: {
     headSatisfied: boolean
@@ -91,8 +100,14 @@ type DetailResponse = {
     canApproveNow: boolean
     canPay: boolean
     canCancel: boolean
+    canAddEvidence: boolean
   }
 }
+
+// Keep in sync with APPROVAL_ATTESTATION_TEXT in lib/approvals/service.ts —
+// approving records the attestation version in the SOX audit trail.
+const ATTESTATION_TEXT =
+  'The goods or services were authorized and received, the vendor and amount are reasonable and consistent with the agreement/PO, the expense has a legitimate business purpose, and the approver has authority under the Delegation of Authority policy.'
 
 type AuditEvent = {
   id: string
@@ -111,6 +126,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'approval.cancelled': 'Cancelled',
   'approval.cancelled_by_admin': 'Cancelled by admin',
   'approval.attachment_downloaded': 'Attachment downloaded',
+  'approval.evidence_added': 'Documents added',
 }
 
 function fmtReviewMs(ms: unknown): string | null {
@@ -154,13 +170,23 @@ type NewRequestForm = {
   network: string
   token: string
   walletAddress: string
+  links: string
 }
 
 const EMPTY_FORM: NewRequestForm = {
   vendorName: '', description: '', amount: '', currency: 'USD',
   invoiceNumber: '', invoiceDate: '', dueDate: '',
   glAccount: '', department: '', entity: '', paymentType: '',
-  network: '', token: '', walletAddress: '',
+  network: '', token: '', walletAddress: '', links: '',
+}
+
+/** Parse a textarea of one-URL-per-line into the API's links payload. */
+function parseLinkLines(text: string): { url: string }[] {
+  return text
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => /^https?:\/\//i.test(s))
+    .map((url) => ({ url }))
 }
 
 const FUNDING_NETWORK_OPTIONS = ['ethereum', 'solana', 'tron'] as const
@@ -250,6 +276,11 @@ export function ApprovalsPageClient() {
   const [detailError, setDetailError] = useState<string | null>(null)
   // Audit-trail rows whose full user-agent is expanded (default: truncated).
   const [expandedUa, setExpandedUa] = useState<Set<string>>(new Set())
+  // Post-submission evidence (extra files / Drive links)
+  const [evidenceFiles, setEvidenceFiles] = useState<File[]>([])
+  const [evidenceLinks, setEvidenceLinks] = useState('')
+  const [evidenceBusy, setEvidenceBusy] = useState(false)
+  const [evidenceInputKey, setEvidenceInputKey] = useState(0)
   // SOX client-side review timer — started when the detail modal opens.
   const reviewStartRef = useRef<number | null>(null)
 
@@ -300,6 +331,36 @@ export function ApprovalsPageClient() {
     setDetailError(null)
     setAuditEvents(null)
     setExpandedUa(new Set())
+    setEvidenceFiles([])
+    setEvidenceLinks('')
+    setEvidenceInputKey((k) => k + 1)
+  }
+
+  async function addEvidence() {
+    if (!detail) return
+    const linkPayload = parseLinkLines(evidenceLinks)
+    if (evidenceFiles.length === 0 && linkPayload.length === 0) {
+      setDetailError('Choose files or paste at least one https link')
+      return
+    }
+    setEvidenceBusy(true)
+    setDetailError(null)
+    try {
+      const fd = new FormData()
+      for (const f of evidenceFiles) fd.append('attachments', f)
+      if (linkPayload.length > 0) fd.append('links', JSON.stringify(linkPayload))
+      await apiFormFetch(`/api/approvals/${detail.request.id}/evidence`, fd)
+      setEvidenceFiles([])
+      setEvidenceLinks('')
+      setEvidenceInputKey((k) => k + 1)
+      flash('Documents added')
+      await openDetail(detail.request.id)
+      void loadList()
+    } catch (e) {
+      setDetailError(e instanceof Error ? e.message : 'Failed to add documents')
+    } finally {
+      setEvidenceBusy(false)
+    }
   }
 
   // Export the whole detail screen — request fields, approvers, attachments,
@@ -350,12 +411,15 @@ export function ApprovalsPageClient() {
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(fields), 'Request')
 
-    if (detail.attachments.length > 0) {
-      const att: (string | number)[][] = [['Filename', 'Size (KB)', 'SHA-256', 'Uploaded at']]
+    if (detail.attachments.length > 0 || detail.links.length > 0) {
+      const att: (string | number)[][] = [['Filename / Link', 'Size (KB)', 'SHA-256', 'Added at']]
       for (const a of detail.attachments) {
         att.push([a.filename, Math.round(a.sizeBytes / 1024), a.sha256, a.uploadedAt])
       }
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(att), 'Attachments')
+      for (const l of detail.links) {
+        att.push([l.url, '', '', l.addedAt])
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(att), 'Documents')
     }
 
     if (auditEvents && auditEvents.length > 0) {
@@ -403,8 +467,11 @@ export function ApprovalsPageClient() {
       const fd = new FormData()
       fd.append('requestType', requestType)
       for (const [k, v] of Object.entries(form)) {
+        if (k === 'links') continue // sent as JSON below
         if (v) fd.append(k, v)
       }
+      const linkPayload = parseLinkLines(form.links)
+      if (linkPayload.length > 0) fd.append('links', JSON.stringify(linkPayload))
       for (const f of files) fd.append('attachments', f)
       await apiFormFetch('/api/approvals', fd)
       setFormOpen(false)
@@ -572,12 +639,17 @@ export function ApprovalsPageClient() {
       ),
     },
     {
-      key: 'attachmentCount', label: 'Files', width: '60px',
-      render: (r: ApprovalRow) => (
-        <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>
-          {r.attachmentCount > 0 ? `📎 ${r.attachmentCount}` : '—'}
-        </span>
-      ),
+      key: 'attachmentCount', label: 'Docs', width: '80px',
+      render: (r: ApprovalRow) => {
+        const parts: string[] = []
+        if (r.attachmentCount > 0) parts.push(`📎 ${r.attachmentCount}`)
+        if (r.linkCount > 0) parts.push(`🔗 ${r.linkCount}`)
+        return (
+          <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>
+            {parts.length > 0 ? parts.join(' ') : '—'}
+          </span>
+        )
+      },
     },
     {
       key: 'id', label: '', width: '90px',
@@ -801,6 +873,19 @@ export function ApprovalsPageClient() {
                 ) : null}
               </div>
 
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6 }}>
+                  Document links (Google Drive contract/invoice etc — one per line, optional)
+                </div>
+                <textarea
+                  className="fsearch"
+                  style={{ width: '100%', minHeight: 48, resize: 'vertical', fontFamily: 'var(--mono)', fontSize: '0.74rem' }}
+                  placeholder={'https://drive.google.com/...'}
+                  value={form.links}
+                  onChange={(e) => setForm((p) => ({ ...p, links: e.target.value }))}
+                />
+              </div>
+
               {formError ? (
                 <div style={{ marginTop: 14, padding: '8px 12px', background: 'rgba(217,48,37,0.1)', color: '#d93025', fontSize: '0.78rem', borderRadius: 4 }}>
                   {formError}
@@ -963,10 +1048,10 @@ export function ApprovalsPageClient() {
 
                   <div style={{ marginTop: 18 }}>
                     <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                      Attachments
+                      Documents
                     </div>
-                    {detail.attachments.length === 0 ? (
-                      <div style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>No attachments.</div>
+                    {detail.attachments.length === 0 && detail.links.length === 0 ? (
+                      <div style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>No documents.</div>
                     ) : (
                       <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
                         {detail.attachments.map((a) => (
@@ -985,8 +1070,57 @@ export function ApprovalsPageClient() {
                             </span>
                           </li>
                         ))}
+                        {detail.links.map((l) => (
+                          <li key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.78rem', minWidth: 0 }}>
+                            <span>🔗</span>
+                            <a
+                              href={l.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={l.url}
+                              style={{
+                                color: 'var(--accent)', textDecoration: 'none',
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 420,
+                              }}
+                            >
+                              {l.label || l.url.replace(/^https?:\/\//, '')}
+                            </a>
+                          </li>
+                        ))}
                       </ul>
                     )}
+
+                    {detail.viewer.canAddEvidence ? (
+                      <div style={{ marginTop: 10, padding: '10px 12px', border: '1px dashed var(--border)', borderRadius: 6 }}>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginBottom: 6 }}>
+                          Add documents — extra files or Google Drive links (audit-logged)
+                        </div>
+                        <input
+                          key={evidenceInputKey}
+                          type="file"
+                          multiple
+                          accept=".pdf,.png,.jpg,.jpeg,.xlsx,.csv,.eml,.msg"
+                          onChange={(e) => setEvidenceFiles(Array.from(e.target.files ?? []).slice(0, 5))}
+                          disabled={evidenceBusy}
+                        />
+                        <textarea
+                          className="fsearch"
+                          style={{ width: '100%', minHeight: 40, resize: 'vertical', marginTop: 8, fontFamily: 'var(--mono)', fontSize: '0.72rem' }}
+                          placeholder="https://drive.google.com/... (one per line)"
+                          value={evidenceLinks}
+                          onChange={(e) => setEvidenceLinks(e.target.value)}
+                          disabled={evidenceBusy}
+                        />
+                        <button
+                          className="fsel"
+                          style={{ marginTop: 8 }}
+                          onClick={() => void addEvidence()}
+                          disabled={evidenceBusy || (evidenceFiles.length === 0 && parseLinkLines(evidenceLinks).length === 0)}
+                        >
+                          {evidenceBusy ? 'Adding…' : '+ Add documents'}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
 
                   {detail.viewer.isAdmin ? (
@@ -1074,6 +1208,18 @@ export function ApprovalsPageClient() {
                         {!detail.viewer.canApproveNow
                           ? ' Approval unlocks after the department head signs off — you can still reject now.'
                           : ''}
+                      </div>
+                      {/* DoA attestation — must sit right above the Approve button.
+                          Approving records its version in the audit trail. */}
+                      <div style={{
+                        marginTop: 12, padding: '10px 12px', borderRadius: 6,
+                        background: 'rgba(212,160,23,0.08)', border: '1px solid rgba(212,160,23,0.35)',
+                        fontSize: '0.74rem', lineHeight: 1.5,
+                      }}>
+                        <strong style={{ display: 'block', marginBottom: 4, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          By approving, you attest that:
+                        </strong>
+                        {ATTESTATION_TEXT}
                       </div>
                     </div>
                   ) : null}

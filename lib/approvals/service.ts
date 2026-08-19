@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { and, desc, eq, gte, isNotNull, or, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { approvalRequest, approvalAttachment, approvalAssignee, approvalDecision, auditLog, user, userDepartment, financeApprover } from '@/lib/db/schema'
+import { approvalRequest, approvalAttachment, approvalLink, approvalAssignee, approvalDecision, auditLog, user, userDepartment, financeApprover } from '@/lib/db/schema'
 import {
   slackEnabled,
   slackPostApprovalCard,
@@ -36,7 +36,30 @@ export const FUNDING_TOKENS = ['USDC', 'USDT', 'ORCA', 'SOL', 'ETH'] as const
 export type FundingToken = (typeof FUNDING_TOKENS)[number]
 
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024   // 4 MB per file (Vercel body budget)
-export const MAX_ATTACHMENTS_PER_REQUEST = 5
+export const MAX_ATTACHMENTS_PER_REQUEST = 5           // per upload batch
+export const MAX_TOTAL_ATTACHMENTS = 10                // lifetime cap per request
+export const MAX_LINKS_PER_REQUEST = 20
+
+/** SOX attestation shown right above the Approve button; approving records
+ * this version in the audit trail as evidence the approver saw it. */
+export const APPROVAL_ATTESTATION_VERSION = 'doa-2026-08'
+export const APPROVAL_ATTESTATION_TEXT =
+  'The goods or services were authorized and received, the vendor and amount are reasonable and consistent with the agreement/PO, the expense has a legitimate business purpose, and the approver has authority under the Delegation of Authority policy.'
+
+export type NewLinkInput = { url: string; label?: string | null }
+
+/** Validates and normalizes an evidence link. Returns null when invalid. */
+export function normalizeLink(raw: NewLinkInput): { url: string; label: string | null } | null {
+  const trimmed = raw.url?.trim()
+  if (!trimmed) return null
+  try {
+    const u = new URL(trimmed)
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+    return { url: trimmed, label: raw.label?.trim() || null }
+  } catch {
+    return null
+  }
+}
 
 export type NewApprovalRequestInput = {
   requestType?: RequestType    // defaults to 'payment'
@@ -55,6 +78,8 @@ export type NewApprovalRequestInput = {
   network?: FundingNetwork | null
   token?: FundingToken | null
   walletAddress?: string | null
+  // External document links (Google Drive contracts/invoices etc.)
+  links?: NewLinkInput[]
 }
 
 export type NewAttachmentInput = {
@@ -149,6 +174,13 @@ export async function createApprovalRequest(
     if (a.bytes.length > MAX_ATTACHMENT_BYTES) {
       throw Object.assign(new Error(`Attachment ${a.filename} exceeds 4 MB`), { statusCode: 400 })
     }
+  }
+
+  const links = (input.links ?? [])
+    .map(normalizeLink)
+    .filter((l): l is { url: string; label: string | null } => l !== null)
+  if (links.length > MAX_LINKS_PER_REQUEST) {
+    throw Object.assign(new Error(`Max ${MAX_LINKS_PER_REQUEST} links`), { statusCode: 400 })
   }
 
   const requestType: RequestType = input.requestType ?? 'payment'
@@ -276,6 +308,12 @@ export async function createApprovalRequest(
       ...financeAssignees.map((a) => ({ requestId: created.id, userId: a.id, email: a.email, stage: 'finance' as const })),
     ])
 
+    if (links.length > 0) {
+      await tx.insert(approvalLink).values(
+        links.map((l) => ({ requestId: created.id, url: l.url, label: l.label, addedById: actor.id })),
+      )
+    }
+
     // Transactional audit row — commits or rolls back with the request.
     await tx.insert(auditLog).values({
       userId: actor.id === 'dev-user' ? null : actor.id,
@@ -303,6 +341,7 @@ export async function createApprovalRequest(
           usdTierValue: Number.isFinite(usdForTier) ? usdForTier : 'volatile-asset:max-tier',
         },
         attachments: attachmentMeta,
+        links: links.map((l) => l.url),
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       },
@@ -349,6 +388,116 @@ export async function createApprovalRequest(
   }
 
   return created
+}
+
+/** Add attachments and/or links to an EXISTING request — files can be
+ * forgotten at submission or arrive later (receipts after payment).
+ * Allowed for the submitter and admins while the request is pending,
+ * approved, or paid (never on rejected/cancelled — those are closed).
+ * Everything is audit-logged; nothing is ever removed or replaced. */
+export async function addApprovalEvidence(
+  actor: Actor,
+  requestId: string,
+  attachments: NewAttachmentInput[],
+  linksInput: NewLinkInput[],
+  ctx: SoxRequestContext,
+  actorIsAdmin: boolean,
+) {
+  if (attachments.length > MAX_ATTACHMENTS_PER_REQUEST) {
+    throw Object.assign(new Error(`Max ${MAX_ATTACHMENTS_PER_REQUEST} attachments per upload`), { statusCode: 400 })
+  }
+  for (const a of attachments) {
+    if (a.bytes.length > MAX_ATTACHMENT_BYTES) {
+      throw Object.assign(new Error(`Attachment ${a.filename} exceeds 4 MB`), { statusCode: 400 })
+    }
+  }
+  const links = linksInput
+    .map(normalizeLink)
+    .filter((l): l is { url: string; label: string | null } => l !== null)
+  if (attachments.length === 0 && links.length === 0) {
+    throw Object.assign(new Error('Nothing to add — provide files or a valid https link'), { statusCode: 400 })
+  }
+
+  const updatedRow = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(approvalRequest)
+      .where(eq(approvalRequest.id, requestId))
+      .for('update')
+    if (!existing) throw Object.assign(new Error('Request not found'), { statusCode: 404 })
+    if (existing.submitterId !== actor.id && !actorIsAdmin) {
+      throw Object.assign(new Error('Only the submitter or an admin can add documents'), { statusCode: 403 })
+    }
+    if (existing.status === 'rejected' || existing.status === 'cancelled') {
+      throw Object.assign(new Error(`Request is ${existing.status} — documents can no longer be added`), { statusCode: 409 })
+    }
+
+    if (attachments.length > 0) {
+      const [{ n: existingCount }] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(approvalAttachment)
+        .where(eq(approvalAttachment.requestId, requestId))
+      if (existingCount + attachments.length > MAX_TOTAL_ATTACHMENTS) {
+        throw Object.assign(new Error(`Max ${MAX_TOTAL_ATTACHMENTS} attachments per request (has ${existingCount})`), { statusCode: 400 })
+      }
+    }
+    if (links.length > 0) {
+      const [{ n: existingLinks }] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(approvalLink)
+        .where(eq(approvalLink.requestId, requestId))
+      if (existingLinks + links.length > MAX_LINKS_PER_REQUEST) {
+        throw Object.assign(new Error(`Max ${MAX_LINKS_PER_REQUEST} links per request`), { statusCode: 400 })
+      }
+    }
+
+    const attachmentMeta: { filename: string; sha256: string; sizeBytes: number }[] = []
+    for (const a of attachments) {
+      const digest = sha256Hex(a.bytes)
+      await tx.insert(approvalAttachment).values({
+        requestId,
+        filename: a.filename,
+        contentType: a.contentType,
+        sizeBytes: a.bytes.length,
+        sha256: digest,
+        data: a.bytes,
+        uploadedById: actor.id,
+      })
+      attachmentMeta.push({ filename: a.filename, sha256: digest, sizeBytes: a.bytes.length })
+    }
+    if (links.length > 0) {
+      await tx.insert(approvalLink).values(
+        links.map((l) => ({ requestId, url: l.url, label: l.label, addedById: actor.id })),
+      )
+    }
+
+    await tx.insert(auditLog).values({
+      userId: actor.id === 'dev-user' ? null : actor.id,
+      action: 'approval.evidence_added',
+      resourceType: 'approval_request',
+      resourceId: requestId,
+      metadata: {
+        refNumber: existing.refNumber,
+        byEmail: actor.email,
+        attachments: attachmentMeta,
+        links: links.map((l) => l.url),
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      },
+    })
+
+    return existing
+  })
+
+  // Thread-only Slack note (no card re-render — status didn't change and a
+  // re-render would drop the "Waiting on" line on pending requests).
+  const bits: string[] = []
+  if (attachments.length > 0) bits.push(`${attachments.length} file${attachments.length === 1 ? '' : 's'}`)
+  if (links.length > 0) bits.push(`${links.length} link${links.length === 1 ? '' : 's'}`)
+  await slackThreadEvent(updatedRow.slackMessageTs, `📎 ${shortEmail(actor.email)} added ${bits.join(' + ')}`)
+    .catch(() => {})
+
+  return { attachmentsAdded: attachments.length, linksAdded: links.length }
 }
 
 /** Record that an eligible approver opened the request detail. Debounced to
@@ -560,6 +709,9 @@ export async function decideApprovalRequest(
         refNumber: existing.refNumber,
         byEmail: actor.email,
         note,
+        // The DoA attestation shown above the Approve button — recording
+        // its version is the SOX evidence the approver saw it.
+        ...(decision === 'approved' ? { attestationVersion: APPROVAL_ATTESTATION_VERSION } : {}),
         requestStatusAfter: statusAfter,
         ...(assignees.length > 0 ? {
           pendingApprovers,
