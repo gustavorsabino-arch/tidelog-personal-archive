@@ -77,6 +77,7 @@ export function TransactionsExportModal({
 
       const entitiesToFetch = entity === 'all' ? [...ENTITIES] : [entity]
       const txnsByEntity: Record<string, Transaction[]> = {}
+      const accountNamesByEntity: Record<string, Record<string, string>> = {}
 
       for (let i = 0; i < entitiesToFetch.length; i++) {
         const e = entitiesToFetch[i]
@@ -92,6 +93,20 @@ export function TransactionsExportModal({
           `/api/treasury/transactions?${params.toString()}`,
         )
         txnsByEntity[e] = res.transactions ?? []
+
+        // Account catalog for full DR/CR account names ("62010 · Professional
+        // Services"). Best-effort — a catalog failure degrades the export to
+        // bare account numbers rather than blocking it.
+        try {
+          const acc = await apiFetch<{ accounts: { qbAccountNumber: string; qbAccountName: string }[] }>(
+            `/api/qb/accounts?entity=${encodeURIComponent(e)}`,
+          )
+          accountNamesByEntity[e] = Object.fromEntries(
+            (acc.accounts ?? []).map((a) => [a.qbAccountNumber, a.qbAccountName]),
+          )
+        } catch {
+          accountNamesByEntity[e] = {}
+        }
       }
 
       const totalTxns = Object.values(txnsByEntity).reduce((s, arr) => s + arr.length, 0)
@@ -107,6 +122,7 @@ export function TransactionsExportModal({
       setProgress('Building spreadsheet…')
       const wb = buildPostedTransactionsWorkbook({
         txnsByEntity,
+        accountNamesByEntity,
         periodLabel: `${MONTHS[month - 1].label} ${year}`,
       })
       const filename = buildPostedTxExportFilename({
