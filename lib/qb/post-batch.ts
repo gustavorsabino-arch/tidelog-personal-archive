@@ -218,7 +218,7 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
       // No per-tx override → the per-WALLET history outranks the map.
       || !r.qbState?.counterpartyGlOverride
     ))
-    .map((r) => ({ walletAddress: r.txn.walletAddress, counterparty: r.txn.counterparty! }))
+    .map((r) => ({ walletAddress: r.txn.walletAddress, counterparty: r.txn.counterparty!, direction: r.txn.direction }))
   const history = historyPairs.length > 0
     ? await loadPostingHistory(historyPairs).catch((err) => {
         console.error('[posting-history] lookup failed:', (err as Error).message)
@@ -228,7 +228,7 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
 
   return rows.map((r): LoadedTx => {
     const hist = r.txn.counterparty
-      ? history.get(historyKey(r.txn.walletAddress, r.txn.counterparty))
+      ? history.get(historyKey(r.txn.walletAddress, r.txn.counterparty, r.txn.direction))
       : undefined
     return {
     id: r.txn.id,

@@ -416,7 +416,7 @@ export async function getTreasuryTransactions({
           // per-WALLET history outranks the per-counterparty map below.
           || !r.qbState?.counterpartyGlOverride
         ))
-      .map((r) => ({ walletAddress: r.txn.walletAddress, counterparty: r.txn.counterparty! }))
+      .map((r) => ({ walletAddress: r.txn.walletAddress, counterparty: r.txn.counterparty!, direction: r.txn.direction }))
     if (pairs.length > 0) {
       history = await loadPostingHistory(pairs).catch((err) => {
         console.error('[posting-history] lookup failed:', (err as Error).message)
@@ -427,7 +427,7 @@ export async function getTreasuryTransactions({
 
   const transactions = pageRows.map((row) => {
     const hist = row.txn.counterparty && row.qbState?.postedGlAccount == null
-      ? history.get(historyKey(row.txn.walletAddress, row.txn.counterparty))
+      ? history.get(historyKey(row.txn.walletAddress, row.txn.counterparty, row.txn.direction))
       : undefined
     // Counterparty GL default precedence: per-WALLET posting history first,
     // then the per-counterparty memorized map. The map is cross-wallet (one

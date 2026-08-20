@@ -19,25 +19,29 @@ export type PostingHistoryEntry = {
   className: string | null
 }
 
-export function historyKey(walletAddress: string, counterparty: string): string {
-  return `${walletAddress}::${counterparty}`
+export function historyKey(walletAddress: string, counterparty: string, direction: 'in' | 'out'): string {
+  return `${walletAddress}::${counterparty}::${direction}`
 }
 
 export async function loadPostingHistory(
-  pairs: { walletAddress: string; counterparty: string }[],
+  pairs: { walletAddress: string; counterparty: string; direction: 'in' | 'out' }[],
 ): Promise<Map<string, PostingHistoryEntry>> {
   const map = new Map<string, PostingHistoryEntry>()
-  const unique = [...new Map(pairs.map((p) => [historyKey(p.walletAddress, p.counterparty), p])).values()]
+  const unique = [...new Map(pairs.map((p) => [historyKey(p.walletAddress, p.counterparty, p.direction), p])).values()]
   if (unique.length === 0) return map
 
-  const tuples = sql.join(unique.map((p) => sql`(${p.walletAddress}, ${p.counterparty})`), sql`, `)
+  const tuples = sql.join(unique.map((p) => sql`(${p.walletAddress}, ${p.counterparty}, ${p.direction})`), sql`, `)
   // posted_gl_account IS NOT NULL = the row was faithfully posted; its
   // vendor/class snapshots and per-tx counterparty-GL override are the
-  // values finance actually approved last time.
+  // values finance actually approved last time. Direction is part of the
+  // key: intercompany transfers post to mirrored accounts depending on
+  // in/out (Due From vs Due To), so an OUT precedent must never prefill
+  // an IN transaction.
   const rows = await db.execute(sql`
-    SELECT DISTINCT ON (t.wallet_address, t.counterparty)
+    SELECT DISTINCT ON (t.wallet_address, t.counterparty, t.direction)
       t.wallet_address AS wallet_address,
       t.counterparty   AS counterparty,
+      t.direction      AS direction,
       s.counterparty_gl_override AS cp_gl,
       s.posted_vendor  AS vendor,
       s.posted_class   AS class_name
@@ -48,18 +52,19 @@ export async function loadPostingHistory(
      AND t.direction = s.direction
      AND t.asset = s.asset
     WHERE s.posted_gl_account IS NOT NULL
-      AND (t.wallet_address, t.counterparty) IN (${tuples})
-    ORDER BY t.wallet_address, t.counterparty, t.block_time DESC
+      AND (t.wallet_address, t.counterparty, t.direction) IN (${tuples})
+    ORDER BY t.wallet_address, t.counterparty, t.direction, t.block_time DESC
   `) as unknown as {
     wallet_address: string
     counterparty: string
+    direction: 'in' | 'out'
     cp_gl: string | null
     vendor: string | null
     class_name: string | null
   }[]
 
   for (const r of rows) {
-    map.set(historyKey(r.wallet_address, r.counterparty), {
+    map.set(historyKey(r.wallet_address, r.counterparty, r.direction), {
       counterpartyGl: r.cp_gl,
       vendor: r.vendor,
       className: r.class_name,
