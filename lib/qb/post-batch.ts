@@ -215,7 +215,8 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
     .filter((r) => r.txn.counterparty && (
       !r.counterpartyVendorName
       || !r.counterpartyClassName
-      || (!r.qbState?.counterpartyGlOverride && !r.counterpartyGl?.glAccountNumber)
+      // No per-tx override → the per-WALLET history outranks the map.
+      || !r.qbState?.counterpartyGlOverride
     ))
     .map((r) => ({ walletAddress: r.txn.walletAddress, counterparty: r.txn.counterparty! }))
   const history = historyPairs.length > 0
@@ -247,9 +248,10 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
     walletIsBulkTreasury: r.walletIsBulkTreasury ?? false,
     glAccountOverride: r.qbState?.glAccountOverride ?? null,
     counterpartyGlOverride: r.qbState?.counterpartyGlOverride ?? null,
-    // Current map first, then the history fallback (last posted tx of the
-    // same wallet+counterparty) — mirrors the list view exactly.
-    counterpartyGlMapValue: r.counterpartyGl?.glAccountNumber ?? hist?.counterpartyGl ?? null,
+    // Per-WALLET posting history first, then the per-counterparty map (the
+    // map is cross-wallet; finance's rule is per wallet). Mirrors the list
+    // view exactly. A per-tx override still beats both downstream.
+    counterpartyGlMapValue: hist?.counterpartyGl ?? r.counterpartyGl?.glAccountNumber ?? null,
     postId: r.qbState?.postId ?? null,
     existingPostStatus: r.existingPostStatus ?? null,
     gainStGain: r.gain?.stGain ?? null,

@@ -412,7 +412,9 @@ export async function getTreasuryTransactions({
         && (
           !r.counterpartyVendorName
           || !r.counterpartyClassName
-          || (!r.qbState?.counterpartyGlOverride && !r.counterpartyGl?.glAccountNumber)
+          // History is looked up whenever there is no per-tx override — the
+          // per-WALLET history outranks the per-counterparty map below.
+          || !r.qbState?.counterpartyGlOverride
         ))
       .map((r) => ({ walletAddress: r.txn.walletAddress, counterparty: r.txn.counterparty! }))
     if (pairs.length > 0) {
@@ -427,11 +429,14 @@ export async function getTreasuryTransactions({
     const hist = row.txn.counterparty && row.qbState?.postedGlAccount == null
       ? history.get(historyKey(row.txn.walletAddress, row.txn.counterparty))
       : undefined
-    const counterpartyGl = row.counterpartyGl?.glAccountNumber
-      ? row.counterpartyGl
-      : hist?.counterpartyGl
-        ? { glAccountNumber: hist.counterpartyGl }
-        : row.counterpartyGl
+    // Counterparty GL default precedence: per-WALLET posting history first,
+    // then the per-counterparty memorized map. The map is cross-wallet (one
+    // value per counterparty for the whole entity), while finance's rule is
+    // per wallet — what THIS wallet actually posted last wins. A per-tx
+    // override still beats both (it's the `value`, these are the default).
+    const counterpartyGl = hist?.counterpartyGl
+      ? { glAccountNumber: hist.counterpartyGl }
+      : row.counterpartyGl
     return rowToTransaction(
       row.txn,
       row.walletLabel ?? '',
