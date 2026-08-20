@@ -27,6 +27,7 @@ import type {
   QbQueryResponse,
 } from './types.ts'
 import { resolveWalletGl, type GlSource } from './resolve-wallet-gl'
+import { loadPostingHistory, historyKey, type PostingHistoryEntry } from './posting-history'
 import { defaultDescription } from '@/lib/qb-state'
 import { fmtNum } from '@/lib/format'
 import { STABLE_TOKENS } from '../constants.ts'
@@ -34,7 +35,12 @@ import { STABLE_TOKENS } from '../constants.ts'
 // D13 — server-enforced hard cap. Mirror of the UI cap in
 // components/transactions-page-client.tsx; rejecting a >50 request here is
 // defense against client tampering / direct API calls.
-const MAX_BATCH_SIZE = 50
+// The real cost driver is QB API calls = JOURNAL ENTRIES created, not
+// selected transactions: a bulk-treasury wallet groups a whole month of
+// txs into ONE JE, so hundreds of bulk txs are cheap while 60 individual
+// txs are 60 QB calls. Cap both dimensions accordingly (D13 evolved).
+const MAX_BATCH_SIZE = 1000      // selected transactions per call
+const MAX_JE_GROUPS = 50         // journal entries (QB calls) per call
 
 export type PostBatchResult = {
   successes: Array<{
@@ -200,7 +206,30 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
     perTokenMap.set(`${row.walletAddress}::${row.tokenSymbol}`, row.accountCode)
   }
 
-  return rows.map((r): LoadedTx => ({
+  // Smart prefill from posting history — the SAME lowest-priority fallback
+  // the transactions list applies (lib/treasury-transactions.ts), so what
+  // the operator saw prefilled is exactly what gets posted: counterparty
+  // GL / vendor / class inherited from the most recent posted tx of the
+  // same (wallet, counterparty) pair.
+  const historyPairs = rows
+    .filter((r) => r.txn.counterparty && (
+      !r.counterpartyVendorName
+      || !r.counterpartyClassName
+      || (!r.qbState?.counterpartyGlOverride && !r.counterpartyGl?.glAccountNumber)
+    ))
+    .map((r) => ({ walletAddress: r.txn.walletAddress, counterparty: r.txn.counterparty! }))
+  const history = historyPairs.length > 0
+    ? await loadPostingHistory(historyPairs).catch((err) => {
+        console.error('[posting-history] lookup failed:', (err as Error).message)
+        return new Map<string, PostingHistoryEntry>()
+      })
+    : new Map<string, PostingHistoryEntry>()
+
+  return rows.map((r): LoadedTx => {
+    const hist = r.txn.counterparty
+      ? history.get(historyKey(r.txn.walletAddress, r.txn.counterparty))
+      : undefined
+    return {
     id: r.txn.id,
     txHash: r.txn.txHash,
     walletAddress: r.txn.walletAddress,
@@ -218,7 +247,9 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
     walletIsBulkTreasury: r.walletIsBulkTreasury ?? false,
     glAccountOverride: r.qbState?.glAccountOverride ?? null,
     counterpartyGlOverride: r.qbState?.counterpartyGlOverride ?? null,
-    counterpartyGlMapValue: r.counterpartyGl?.glAccountNumber ?? null,
+    // Current map first, then the history fallback (last posted tx of the
+    // same wallet+counterparty) — mirrors the list view exactly.
+    counterpartyGlMapValue: r.counterpartyGl?.glAccountNumber ?? hist?.counterpartyGl ?? null,
     postId: r.qbState?.postId ?? null,
     existingPostStatus: r.existingPostStatus ?? null,
     gainStGain: r.gain?.stGain ?? null,
@@ -227,14 +258,15 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
       perTokenMap.get(`${r.txn.walletAddress}::${r.txn.asset}`) ?? null,
     walletGlSource: null, // populated by buildPostPlan eligibility loop
     walletGl: null, // populated by buildPostPlan eligibility loop
-    counterpartyVendorName: r.counterpartyVendorName ?? null,
-    counterpartyClassName: r.counterpartyClassName ?? null,
+    counterpartyVendorName: r.counterpartyVendorName ?? hist?.vendor ?? null,
+    counterpartyClassName: r.counterpartyClassName ?? hist?.className ?? null,
     vendorOverride: r.qbState?.vendorOverride ?? null,
     classOverride: r.qbState?.classOverride ?? null,
-    // Effective vendor/class: tx override → counterparty wallet → null.
-    // Resolved to QB Ids at post time via catalog maps in postBatch.
-    effectiveVendor: r.qbState?.vendorOverride ?? r.counterpartyVendorName ?? null,
-    effectiveClass: r.qbState?.classOverride ?? r.counterpartyClassName ?? null,
+    // Effective vendor/class: tx override → counterparty wallet → posting
+    // history (same wallet+counterparty) → null. Resolved to QB Ids at post
+    // time via catalog maps in postBatch.
+    effectiveVendor: r.qbState?.vendorOverride ?? r.counterpartyVendorName ?? hist?.vendor ?? null,
+    effectiveClass: r.qbState?.classOverride ?? r.counterpartyClassName ?? hist?.className ?? null,
     // Override → computed default. Default mirrors lib/treasury-transactions
     // exactly (dir capitalized, qty abs, stable-token usd falls back to |qty|)
     // so the posted description equals the list's descriptionDefault.
@@ -250,7 +282,8 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
             : null,
       txHash: r.txn.txHash,
     }),
-  }))
+    }
+  })
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -446,6 +479,17 @@ export async function buildPostPlan(args: {
     ...groupBulkTxs(bulkEligible),
     ...individualEligible.map((tx): IndividualGroup => ({ kind: 'individual', tx })),
   ]
+
+  // Cap on the REAL cost: each group = one journal entry = one QB API call.
+  // Bulk-wallet selections of hundreds of txs collapse into a few groups and
+  // pass; hundreds of individual txs (hundreds of QB calls) are rejected
+  // with guidance, same protection the old flat 50-tx cap provided.
+  if (groups.length > MAX_JE_GROUPS) {
+    throw new Error(
+      `Selection would create ${groups.length} journal entries — max ${MAX_JE_GROUPS} per post. `
+      + 'Narrow the selection (each individual-wallet transaction creates its own JE).',
+    )
+  }
 
   return { groups, skipped }
 }

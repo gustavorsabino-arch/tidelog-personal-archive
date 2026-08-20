@@ -33,7 +33,11 @@ type QbStatusFilter = '' | 'unposted' | 'posted' | 'posted_modified' | 'posted_m
 // Client-side mirror of the server-enforced cap (D13). Disables the post
 // button with a helper note when the user has selected more than this many
 // rows — server-side check at /api/qb/post-batch is the source of truth.
-const MAX_POST_BATCH = 50
+// Mirrors the server cap (app/api/qb/post-batch): up to 1000 selected txs
+// per post. The real limit is 50 JOURNAL ENTRIES per post (each individual-
+// wallet tx = 1 JE; a bulk wallet's whole month = 1 JE) — enforced
+// server-side with a clear error when exceeded.
+const MAX_POST_BATCH = 1000
 
 type TransactionsPageClientProps = {
   initialEntity: string
@@ -114,6 +118,9 @@ export function TransactionsPageClient({
   const [rowBusy, setRowBusy] = useState<Record<string, 'repost' | 'void' | undefined>>({})
   const [rowError, setRowError] = useState<string | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
+  // "Select all pages" (Gmail pattern) — fetches every matching tx id for
+  // the current filters and selects them all.
+  const [selectAllBusy, setSelectAllBusy] = useState(false)
 
   // Drill-down panel for bulk JEs. Holds the post we want to inspect; null = closed.
   type DrilldownTarget = {
@@ -262,6 +269,36 @@ export function TransactionsPageClient({
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set())
   }, [])
+
+  // Select every transaction matching the CURRENT server-side filters,
+  // across all pages. Uses the same params as fetchTransactions with
+  // limit=all; rows without an id (cron-only) are skipped, same as the
+  // per-page checkbox.
+  const selectAllMatching = useCallback(async () => {
+    if (!entity) return
+    setSelectAllBusy(true)
+    try {
+      const params = new URLSearchParams({ entity, limit: 'all' })
+      if (tokenFilter) params.set('asset', tokenFilter)
+      if (dirFilter) params.set('direction', dirFilter)
+      if (walletFilter) params.set('wallet', walletFilter)
+      if (qbStatusFilter) params.set('qbStatus', qbStatusFilter)
+      const range = monthFilter ? monthToRange(monthFilter) : yearToRange(yearFilter)
+      if (range) {
+        params.set('from', range.from)
+        params.set('to', range.to)
+      }
+      const res = await apiFetch<TransactionsResponse>(`/api/treasury/transactions?${params}`)
+      setSelectedIds(new Set(
+        res.transactions.map((t) => t.id).filter((id): id is string => !!id),
+      ))
+      setRowError(null)
+    } catch (err) {
+      setRowError(`Select all failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSelectAllBusy(false)
+    }
+  }, [entity, tokenFilter, dirFilter, walletFilter, qbStatusFilter, monthFilter, yearFilter])
 
   // Drop the selected wallet/year/month if they fall out of the available
   // options (entity switch, wallet deletion, etc.). Avoids a stuck filter that
@@ -1318,6 +1355,44 @@ export function TransactionsPageClient({
                 </button>
               </div>
             </div>
+
+            {/* Gmail-pattern cross-page selection. Offered once the visible
+                page is fully selected and more matching rows exist beyond it
+                (suppressed while the page-local search box narrows the view —
+                search doesn't apply server-side). */}
+            {allVisibleSelected && !search && total > visibleSelectableIds.length && selectedIds.size <= visibleSelectableIds.length ? (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                padding: '8px 12px', margin: '10px 0',
+                background: 'rgba(39,117,202,0.08)', border: '1px solid rgba(39,117,202,0.3)',
+                borderRadius: 6, fontSize: '0.75rem',
+              }}>
+                <span>All {visibleSelectableIds.length} transactions on this page are selected.</span>
+                <button
+                  className="fsel"
+                  style={{ fontSize: '0.72rem', fontWeight: 600 }}
+                  disabled={selectAllBusy}
+                  onClick={() => void selectAllMatching()}
+                >
+                  {selectAllBusy ? 'Selecting…' : `Select all ${total.toLocaleString()} matching transactions`}
+                </button>
+              </div>
+            ) : null}
+            {selectedIds.size > visibleSelectableIds.length ? (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                padding: '8px 12px', margin: '10px 0',
+                background: 'rgba(6,214,160,0.08)', border: '1px solid rgba(6,214,160,0.3)',
+                borderRadius: 6, fontSize: '0.75rem',
+              }}>
+                <span style={{ fontWeight: 600 }}>
+                  {selectedIds.size.toLocaleString()} transactions selected across all pages.
+                </span>
+                <button className="fsel" style={{ fontSize: '0.72rem' }} onClick={clearSelection}>
+                  Clear selection
+                </button>
+              </div>
+            ) : null}
 
             <DataTable
               data={filtered as unknown as Record<string, unknown>[]}

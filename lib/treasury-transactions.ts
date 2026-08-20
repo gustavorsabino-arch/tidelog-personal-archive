@@ -6,6 +6,7 @@ import { STABLE_TOKENS } from '@/lib/constants'
 import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import { defaultDescription } from '@/lib/qb-state'
 import { resolveWalletGl } from '@/lib/qb/resolve-wallet-gl'
+import { loadPostingHistory, historyKey, type PostingHistoryEntry } from '@/lib/qb/posting-history'
 import type { Transaction, TransactionsResponse } from '@/lib/types'
 
 export type QbStatusFilter =
@@ -395,21 +396,56 @@ export async function getTreasuryTransactions({
       .where(where),
   ])
 
-  const transactions = pageRows.map((row) =>
-    rowToTransaction(
+  // Smart prefill from posting history: unposted rows missing a counterparty
+  // GL / vendor / class inherit the values from the most recent POSTED tx of
+  // the SAME (wallet, counterparty) pair. They surface through the same
+  // "default" slots the counterparty-wallet config uses, so the UI shows
+  // them in italics and post-batch resolves identically
+  // (lib/qb/post-batch.ts applies the same fallback). Skipped for unbounded
+  // internal reads (FIFO etc.) — those callers don't render GL columns.
+  let history = new Map<string, PostingHistoryEntry>()
+  if (!unbounded) {
+    const pairs = pageRows
+      .filter((r) =>
+        r.txn.counterparty
+        && r.qbState?.postedGlAccount == null // posted rows keep their immutable snapshot
+        && (
+          !r.counterpartyVendorName
+          || !r.counterpartyClassName
+          || (!r.qbState?.counterpartyGlOverride && !r.counterpartyGl?.glAccountNumber)
+        ))
+      .map((r) => ({ walletAddress: r.txn.walletAddress, counterparty: r.txn.counterparty! }))
+    if (pairs.length > 0) {
+      history = await loadPostingHistory(pairs).catch((err) => {
+        console.error('[posting-history] lookup failed:', (err as Error).message)
+        return new Map<string, PostingHistoryEntry>()
+      })
+    }
+  }
+
+  const transactions = pageRows.map((row) => {
+    const hist = row.txn.counterparty && row.qbState?.postedGlAccount == null
+      ? history.get(historyKey(row.txn.walletAddress, row.txn.counterparty))
+      : undefined
+    const counterpartyGl = row.counterpartyGl?.glAccountNumber
+      ? row.counterpartyGl
+      : hist?.counterpartyGl
+        ? { glAccountNumber: hist.counterpartyGl }
+        : row.counterpartyGl
+    return rowToTransaction(
       row.txn,
       row.walletLabel ?? '',
       row.counterpartyLabel ?? null,
       row.gain ?? null,
       row.qbState ?? null,
       row.walletAccountCode ?? null,
-      row.counterpartyGl ?? null,
+      counterpartyGl ?? null,
       row.qbPost ?? null,
       row.perTokenGl ?? null,
-      row.counterpartyVendorName ?? null,
-      row.counterpartyClassName ?? null,
-    ),
-  )
+      row.counterpartyVendorName ?? hist?.vendor ?? null,
+      row.counterpartyClassName ?? hist?.className ?? null,
+    )
+  })
 
   const inflowsUSD = Number(summaryRows[0]?.inflows ?? 0)
   const outflowsUSD = Number(summaryRows[0]?.outflows ?? 0)

@@ -27,7 +27,9 @@ import { isQboEntity } from '@/lib/qb/config'
 import type { QbJournalEntry } from '@/lib/qb/types'
 import type { GlSource } from '@/lib/qb/resolve-wallet-gl'
 
-const MAX_BATCH_SIZE = 50
+// Mirrors post-batch: 1000 txs max per call; the JE-group cap (50 journal
+// entries) is enforced inside buildPostPlan and surfaces here as an error.
+const MAX_BATCH_SIZE = 1000
 
 export type PostPreviewResult = {
   groups: Array<{

@@ -13,7 +13,11 @@ import { postBatch } from '@/lib/qb/post-batch'
 import { isQboEntity } from '@/lib/qb/config'
 import { logAudit } from '@/lib/audit'
 
-const MAX_BATCH_SIZE = 50
+// Caps mirror lib/qb/post-batch.ts: up to 1000 selected txs per call, but
+// never more than 50 JOURNAL ENTRIES (QB API calls) — bulk-treasury wallets
+// group a month of txs into one JE, which is what makes big selections safe.
+const MAX_BATCH_SIZE = 1000
+export const maxDuration = 300
 
 export async function POST(req: NextRequest) {
   const { user, deny } = await requirePermission('qb:post', req)
@@ -80,10 +84,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result)
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Post failed'
-    // Distinguish 403 (entity ownership violation, thrown by buildPostPlan)
-    // from 500 (everything else). 400-style validation errors are caught
-    // before this try/catch above.
-    const status = msg.startsWith('Forbidden') ? 403 : 500
+    // Distinguish 403 (entity ownership violation), 400 (JE-group cap and
+    // batch-size validation thrown by buildPostPlan) and 500 (everything
+    // else).
+    const status = msg.startsWith('Forbidden')
+      ? 403
+      : msg.startsWith('Selection would create') || msg.startsWith('Batch size exceeds')
+        ? 400
+        : 500
     return NextResponse.json({ error: msg }, { status })
   }
 }
