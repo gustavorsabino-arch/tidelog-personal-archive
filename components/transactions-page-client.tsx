@@ -166,6 +166,21 @@ export function TransactionsPageClient({
     [allClasses],
   )
 
+  // Vendor master (Book12): vendor → GL account + class defaults. Picking a
+  // vendor auto-fills class + counterparty GL from here (into EMPTY slots
+  // only — an explicit override on the row is never clobbered).
+  const { data: vendorMasterData } = useSWR<{ vendors: { vendorName: string; glAccount: string; className: string | null }[] }>(
+    '/api/vendors',
+    apiFetch,
+  )
+  const vendorMaster = useMemo(() => {
+    const m = new Map<string, { glAccount: string; className: string | null }>()
+    for (const v of vendorMasterData?.vendors ?? []) {
+      m.set(v.vendorName.toLowerCase(), { glAccount: v.glAccount, className: v.className })
+    }
+    return m
+  }, [vendorMasterData])
+
   // Tracks the in-flight request so a newer fetch can cancel an older one.
   // Without this, responses can arrive out of order: e.g. selecting a year
   // fires a heavy "whole year" request, then selecting a month fires a light
@@ -824,10 +839,21 @@ export function TransactionsPageClient({
               )
               if (!ok) throw new Error('Save cancelled')
             }
+            // Vendor master auto-fill: the Book12 mapping supplies the class
+            // and counterparty GL for this vendor. Fill EMPTY slots only —
+            // an explicit override already on the row always wins.
+            const patchBody: Record<string, unknown> = { vendorOverride: next }
+            const master = next ? vendorMaster.get(next.toLowerCase()) : undefined
+            if (master) {
+              if (master.className && t.classOverride == null) patchBody.classOverride = master.className
+              if (master.glAccount && t.counterpartyGlOverride == null && t.counterparty) {
+                patchBody.counterpartyGlOverride = master.glAccount
+              }
+            }
             await apiFetch(`/api/treasury/transactions/${t.id}/qb-state`, {
               method: 'PATCH',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ vendorOverride: next }),
+              body: JSON.stringify(patchBody),
             })
             fetchTransactions(offset)
           }}
@@ -1226,10 +1252,15 @@ export function TransactionsPageClient({
                         }
                         setBulkBusy(true)
                         try {
+                          // Vendor master auto-fill also applies on bulk: the
+                          // Book12 class for this vendor rides along.
+                          const master = next ? vendorMaster.get(next.toLowerCase()) : undefined
+                          const bulkBody: Record<string, unknown> = { txIds, vendorOverride: next }
+                          if (master?.className) bulkBody.classOverride = master.className
                           await apiFetch('/api/treasury/transactions/bulk-qb-state', {
                             method: 'PATCH',
                             headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({ txIds, vendorOverride: next }),
+                            body: JSON.stringify(bulkBody),
                           })
                           setRowError(null)
                           fetchTransactions(offset)

@@ -31,7 +31,7 @@ import { db } from '@/lib/db'
 
 // Newest column the statement list creates — the cheap "is the DB current?"
 // probe. UPDATE THIS whenever statements are appended.
-const SENTINEL = { table: 'approval_link', column: 'url' }
+const SENTINEL = { table: 'vendor_default', column: 'vendor_name' }
 
 export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS "app"."approval_request" (
@@ -157,6 +157,16 @@ export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
     ALTER TABLE "app"."approval_link" ADD CONSTRAINT "approval_link_added_by_id_user_id_fk" FOREIGN KEY ("added_by_id") REFERENCES "app"."user"("id") ON DELETE no action ON UPDATE no action;
   EXCEPTION WHEN duplicate_object THEN null; END $$`,
   `CREATE INDEX IF NOT EXISTS "approval_link_request_idx" ON "app"."approval_link" USING btree ("request_id")`,
+
+  // ── Migration 0029: vendor master defaults (Book12) ──
+  `CREATE TABLE IF NOT EXISTS "app"."vendor_default" (
+    "vendor_name" text PRIMARY KEY NOT NULL,
+    "gl_account" text NOT NULL,
+    "gl_account_name" text,
+    "class_name" text,
+    "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+    "updated_by" text
+  )`,
 ]
 
 export type SchemaApplyResult = {
