@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { requirePermission } from '@/lib/auth/require-permission'
+import { hasPostedCounterpartyGlColumn } from '@/lib/db/approvals-schema'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -25,6 +26,11 @@ export async function GET(req: Request) {
   // Keyed per (wallet, counterparty, DIRECTION) and restricted to LIVE
   // posts — exactly mirroring lib/qb/posting-history.ts, so each audit row
   // shows precisely what the smart prefill will show for that direction.
+  // posted_counterparty_gl is OPTIONAL (legacy-table ownership).
+  const hasSnapshot = await hasPostedCounterpartyGlColumn().catch(() => false)
+  const historyGlExpr = hasSnapshot
+    ? sql`COALESCE(s.posted_counterparty_gl, s.counterparty_gl_override)`
+    : sql`s.counterparty_gl_override`
   const rows = await db.execute(sql`
     WITH last_posted AS (
       SELECT DISTINCT ON (t.wallet_address, t.counterparty, t.direction)
@@ -32,7 +38,7 @@ export async function GET(req: Request) {
         t.wallet_address,
         t.counterparty,
         t.direction,
-        COALESCE(s.posted_counterparty_gl, s.counterparty_gl_override) AS history_gl,
+        ${historyGlExpr} AS history_gl,
         t.block_time AS last_posted_at
       FROM "app"."tx_qb_state" s
       JOIN "app"."transaction" t

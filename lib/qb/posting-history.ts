@@ -1,6 +1,7 @@
 import 'server-only'
 import { sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
+import { hasPostedCounterpartyGlColumn } from '@/lib/db/approvals-schema'
 
 /**
  * Smart prefill from posting history: for a given (wallet, counterparty)
@@ -31,6 +32,12 @@ export async function loadPostingHistory(
   if (unique.length === 0) return map
 
   const tuples = sql.join(unique.map((p) => sql`(${p.walletAddress}, ${p.counterparty}, ${p.direction})`), sql`, `)
+  // posted_counterparty_gl is OPTIONAL (legacy-table ownership) — fall back
+  // to the per-tx override alone until a credentialed migration adds it.
+  const hasSnapshot = await hasPostedCounterpartyGlColumn().catch(() => false)
+  const cpGlExpr = hasSnapshot
+    ? sql`COALESCE(s.posted_counterparty_gl, s.counterparty_gl_override)`
+    : sql`s.counterparty_gl_override`
   // Precedent = the most recent tx whose linked JE is STILL LIVE in QB
   // (posted / posted_modified / posted_manually — a voided JE was retracted,
   // often precisely because its coding was wrong, so it must not seed new
@@ -45,7 +52,7 @@ export async function loadPostingHistory(
       t.wallet_address AS wallet_address,
       t.counterparty   AS counterparty,
       t.direction      AS direction,
-      COALESCE(s.posted_counterparty_gl, s.counterparty_gl_override) AS cp_gl,
+      ${cpGlExpr} AS cp_gl,
       s.posted_vendor  AS vendor,
       s.posted_class   AS class_name
     FROM "app"."tx_qb_state" s

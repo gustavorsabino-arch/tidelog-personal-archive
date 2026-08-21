@@ -7,7 +7,7 @@ import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import { defaultDescription } from '@/lib/qb-state'
 import { resolveWalletGl } from '@/lib/qb/resolve-wallet-gl'
 import { loadPostingHistory, historyKey, type PostingHistoryEntry } from '@/lib/qb/posting-history'
-import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
+import { ensureApprovalsSchema, hasPostedCounterpartyGlColumn } from '@/lib/db/approvals-schema'
 import type { Transaction, TransactionsResponse } from '@/lib/types'
 
 export type QbStatusFilter =
@@ -201,10 +201,11 @@ export async function getTreasuryTransactions({
   limit = 50,
   offset = 0,
 }: GetTreasuryTransactionsParams): Promise<TransactionsResponse> {
-  // The page projection enumerates tx_qb_state columns that may not exist
-  // yet right after a deploy (e.g. posted_counterparty_gl) — heal first.
-  // Memoized: a no-op probe once the instance has verified the schema.
+  // Heal what the runtime role CAN create (memoized). posted_counterparty_gl
+  // lives on a legacy table the runtime role can't ALTER, so it's probed
+  // separately and the projection degrades to NULL when it's absent.
   await ensureApprovalsSchema().catch(() => {})
+  const hasCpGlSnapshot = await hasPostedCounterpartyGlColumn().catch(() => false)
 
   const conditions = [eq(transaction.entityId, toDbEntity(entity))]
 
@@ -319,7 +320,12 @@ export async function getTreasuryTransactions({
         classOverride: txQbState.classOverride,
         postedVendor: txQbState.postedVendor,
         postedClass: txQbState.postedClass,
-        postedCounterpartyGl: txQbState.postedCounterpartyGl,
+        // OPTIONAL column (legacy-table ownership): select NULL until a
+        // credentialed migration adds it — the display then falls back to
+        // the live map exactly as before the snapshot existed.
+        postedCounterpartyGl: hasCpGlSnapshot
+          ? txQbState.postedCounterpartyGl
+          : sql<string | null>`NULL`,
       },
       counterpartyGl: {
         // D10 marker — counterpartyGlMap.entityId is notNull on the table.

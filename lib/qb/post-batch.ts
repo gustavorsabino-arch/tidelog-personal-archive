@@ -27,7 +27,7 @@ import type {
   QbQueryResponse,
 } from './types.ts'
 import { resolveWalletGl, type GlSource } from './resolve-wallet-gl'
-import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
+import { ensureApprovalsSchema, hasPostedCounterpartyGlColumn } from '@/lib/db/approvals-schema'
 import { loadPostingHistory, historyKey, type PostingHistoryEntry } from './posting-history'
 import { defaultDescription } from '@/lib/qb-state'
 import { fmtNum } from '@/lib/format'
@@ -762,6 +762,9 @@ async function postOneGroupLocked(
     // Link members. A tx_qb_state row may already exist (created by a prior
     // description/GL edit) OR it may not (untouched tx being posted directly).
     // Upsert handles both: insert if missing, otherwise just set post_id.
+    // posted_counterparty_gl is OPTIONAL (legacy-table ownership) — only
+    // written when the column exists.
+    const writeCpGlSnapshot = await hasPostedCounterpartyGlColumn().catch(() => false)
     const members =
       group.kind === 'individual' ? [group.tx] : group.members
     for (const m of members) {
@@ -782,7 +785,9 @@ async function postOneGroupLocked(
           // buildPostPlan used (override ?? history/map). Snapshotting it
           // keeps the export/list faithful and lets history-inherited posts
           // become precedents themselves.
-          postedCounterpartyGl: m.counterpartyGlOverride ?? m.counterpartyGlMapValue,
+          ...(writeCpGlSnapshot
+            ? { postedCounterpartyGl: m.counterpartyGlOverride ?? m.counterpartyGlMapValue }
+            : {}),
           updatedAt: new Date(),
           updatedBy: userId,
         })
@@ -805,7 +810,9 @@ async function postOneGroupLocked(
             postedGlSource: m.walletGlSource,
             postedVendor: m.effectiveVendor,
             postedClass: m.effectiveClass,
-            postedCounterpartyGl: m.counterpartyGlOverride ?? m.counterpartyGlMapValue,
+            ...(writeCpGlSnapshot
+              ? { postedCounterpartyGl: m.counterpartyGlOverride ?? m.counterpartyGlMapValue }
+              : {}),
             updatedAt: new Date(),
             updatedBy: userId,
           },

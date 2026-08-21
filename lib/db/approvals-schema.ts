@@ -45,13 +45,17 @@ const EXPECTED_OBJECTS: { table: string; column: string }[] = [
   { table: 'prepayment', column: 'vendor_name' },
   { table: 'approval_request', column: 'slack_message_ts' },
   { table: 'approval_request', column: 'required_finance_approvals' },
-  { table: 'tx_qb_state', column: 'posted_counterparty_gl' },   // 0031 (newest)
+  // NOTE: tx_qb_state.posted_counterparty_gl is deliberately NOT listed.
+  // tx_qb_state is a legacy table owned by the migrations role — the
+  // runtime role cannot ALTER it, so the self-heal can never create that
+  // column. It is treated as OPTIONAL (see hasPostedCounterpartyGlColumn)
+  // until a credentialed `bun run db:migrate` applies migration 0031.
 ]
 
 // Errors we intentionally tolerate forever: the FK-to-app.user statements
 // fail under the runtime role (no REFERENCES privilege) and idempotency
 // no-ops. Anything else is a HARD failure that must trigger a retry.
-const TOLERATED_ERROR = /permission denied for table user|already exists|duplicate/i
+const TOLERATED_ERROR = /permission denied for table user|must be owner of table|already exists|duplicate/i
 
 export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS "app"."approval_request" (
@@ -251,6 +255,29 @@ async function isSchemaCurrent(): Promise<boolean> {
   `) as unknown as { n: number }[]
   const found = Array.isArray(probe) ? Number(probe[0]?.n ?? 0) : 0
   return found >= EXPECTED_OBJECTS.length
+}
+
+// tx_qb_state.posted_counterparty_gl is OPTIONAL: the runtime role can't
+// ALTER that legacy table, so until a credentialed db:migrate runs, every
+// reader/writer must degrade gracefully. Probed once per instance.
+let postedCpGlProbe: Promise<boolean> | null = null
+export function hasPostedCounterpartyGlColumn(): Promise<boolean> {
+  if (!postedCpGlProbe) {
+    postedCpGlProbe = (async () => {
+      const rows = await db.execute(sql`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'app'
+          AND table_name = 'tx_qb_state'
+          AND column_name = 'posted_counterparty_gl'
+        LIMIT 1
+      `) as unknown as unknown[]
+      return Array.isArray(rows) && rows.length > 0
+    })().catch(() => {
+      postedCpGlProbe = null
+      return false
+    })
+  }
+  return postedCpGlProbe
 }
 
 // Memoized per server instance: the probe runs once per cold start; the
