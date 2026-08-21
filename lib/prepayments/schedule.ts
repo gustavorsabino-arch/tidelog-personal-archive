@@ -113,6 +113,100 @@ function additionIsLinked(row: GlRow, items: PrepaymentItem[]): boolean {
   })
 }
 
+/** Loose money parser for QB memo text — formats seen in real data:
+ * "$15,500.00", "$ 43.347,48", "$5.350.00" (dots only, 2-digit tail),
+ * "$ 23.040.00". */
+export function parseMemoMoney(raw: string): number | null {
+  const s = raw.replace(/[$\s]/g, '')
+  if (!/\d/.test(s)) return null
+  const lastComma = s.lastIndexOf(',')
+  const lastDot = s.lastIndexOf('.')
+  let normalized: string
+  if (lastComma >= 0 && lastDot >= 0) {
+    normalized = lastDot > lastComma
+      ? s.replace(/,/g, '')
+      : s.replace(/\./g, '').replace(',', '.')
+  } else if (lastComma >= 0) {
+    const tail = s.length - lastComma - 1
+    normalized = tail === 2 && (s.match(/,/g) ?? []).length === 1 ? s.replace(',', '.') : s.replace(/,/g, '')
+  } else if (lastDot >= 0) {
+    const dots = (s.match(/\./g) ?? []).length
+    const tail = s.length - lastDot - 1
+    if (dots > 1) {
+      // "5.350.00" → last dot is the decimal when the tail has 2 digits;
+      // "12.345.678" → all thousands.
+      normalized = tail === 2
+        ? s.slice(0, lastDot).replace(/\./g, '') + '.' + s.slice(lastDot + 1)
+        : s.replace(/\./g, '')
+    } else {
+      normalized = tail === 3 && s.length > 4 ? s.replace(/\./g, '') : s
+    }
+  } else {
+    normalized = s
+  }
+  const n = parseFloat(normalized)
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null
+}
+
+export type AdditionSuggestion = {
+  vendorGuess: string | null
+  contractTotal: number | null   // from "Total $X" in the memo, when present
+  months: number                 // remaining months to amortize the prepaid
+  monthlyAmount: number
+  startMonth: string             // month after the addition
+}
+
+/**
+ * Derive registration terms from a prepaid ADDITION row, per finance's
+ * booking convention: the original JE expenses the first month directly
+ * and parks the remainder in 14000, so:
+ *   contract total (memo "Total $X") − prepaid = one month
+ *   → term n = total / (total − prepaid); prepaid amortizes over n−1 months.
+ * Without a usable memo total, assume a 12-month contract (prepaid = 11
+ * months). Always a DRAFT for the human to confirm.
+ */
+export function suggestFromAddition(row: GlRow): AdditionSuggestion {
+  const memo = row.memo ?? ''
+  const prepaid = Math.abs(row.amountUsd ?? 0)
+
+  // Vendor guess: explicit name field, else memo patterns.
+  let vendorGuess: string | null = row.name?.trim() || null
+  if (!vendorGuess) {
+    const mercury = memo.match(/Mercury CC Transfer to Opco\s*-\s*([^-\n]+?)\s*(?:-|$)/i)
+    if (mercury) vendorGuess = mercury[1].trim()
+  }
+  if (!vendorGuess && !/^out\b/i.test(memo)) {
+    // "May-2026 - CoinGecko - Total ..." → the segment before " - Total".
+    const beforeTotal = memo.match(/(?:^|-\s*)([A-Za-z][^-\n]{2,40}?)\s*-\s*Total/i)
+    if (beforeTotal) vendorGuess = beforeTotal[1].trim()
+  }
+  if (vendorGuess && /^\d{4}-\d{2}/.test(vendorGuess)) vendorGuess = null
+
+  const totalMatch = memo.match(/total\s*[-–—]?\s*\$?\s*([\d.,][\d.,\s]*)/i)
+  const contractTotal = totalMatch ? parseMemoMoney(totalMatch[1]) : null
+
+  let months = 11
+  let monthlyAmount = Math.round((prepaid / 11) * 100) / 100
+  if (contractTotal && contractTotal > prepaid + 0.01) {
+    const firstMonth = contractTotal - prepaid
+    const n = Math.round(contractTotal / firstMonth)
+    if (n >= 2 && n <= 36) {
+      const monthly = Math.round((contractTotal / n) * 100) / 100
+      const remaining = Math.max(1, Math.round(prepaid / monthly))
+      months = remaining
+      monthlyAmount = monthly
+    }
+  }
+
+  return {
+    vendorGuess,
+    contractTotal,
+    months,
+    monthlyAmount,
+    startMonth: addMonths(row.date.slice(0, 7), 1),
+  }
+}
+
 export function reconcile(
   items: PrepaymentItem[],
   glRows: GlRow[],

@@ -8,6 +8,7 @@ import { fmtUSD } from '@/lib/format'
 import {
   reconcile,
   addMonths,
+  suggestFromAddition,
   type GlRow,
   type PrepaymentItem,
   type MonthCell,
@@ -98,6 +99,20 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
   const { classes: allClasses } = useAllQbClasses()
   const classOptions = useMemo(() => [...new Set(allClasses.map((c) => c.qbClassName))].sort(), [allClasses])
 
+  // Vendor master (Book12): prefills the expense GL + class when a
+  // candidate's vendor guess matches a known vendor. Best-effort.
+  const [vendorMaster, setVendorMaster] = useState<Map<string, { glAccount: string; className: string | null }>>(new Map())
+  useEffect(() => {
+    let cancelled = false
+    apiFetch<{ vendors: { vendorName: string; glAccount: string; className: string | null }[] }>('/api/vendors')
+      .then((res) => {
+        if (cancelled) return
+        setVendorMaster(new Map(res.vendors.map((v) => [v.vendorName.toLowerCase(), { glAccount: v.glAccount, className: v.className }])))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
   function flash(text: string) {
     setNotice(text)
     setTimeout(() => setNotice(null), 3500)
@@ -137,10 +152,13 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
     }
 
     try {
-      // GL window: a month before the earliest item (so additions show as
-      // linked) through the end of the current month.
+      // GL window: from the account's practical beginning (2025 — verified
+      // against finance's full 14000 export) or a month before the earliest
+      // registered item, whichever is older, through the current month end.
+      const FLOOR = '2025-02'
       const starts = loadedItems.map((i) => i.sourceDate?.slice(0, 7) ?? i.startMonth)
-      const earliest = starts.length > 0 ? [...starts].sort()[0] : addMonths(currentYm(), -12)
+      const earliestItem = starts.length > 0 ? [...starts].sort()[0] : FLOOR
+      const earliest = earliestItem < FLOOR ? earliestItem : FLOOR
       const from = `${addMonths(earliest, -1)}-01`
       const to = lastDayOfMonth(currentYm())
       const gl = await withRetry(() =>
@@ -457,55 +475,144 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
         )}
       </div>
 
-      {/* Import candidates */}
+      {/* Import candidates — additions in QB not registered yet. Terms are
+          DERIVED from finance's booking convention: the original JE expenses
+          the first month and parks the rest in the prepaid account, so
+          contract total ("Total $X" in the memo) − prepaid = 1 month. */}
       {recon.candidates.length > 0 ? (
         <div className="card" style={{ padding: 16, marginBottom: 18 }}>
-          <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            New prepayments detected in QB (account {account}) — not registered yet
+          <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            New prepayments detected in QB (account {account}) — {recon.candidates.length} to register
           </div>
-          <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
-            {recon.candidates.map((c, i) => (
-              <li key={`${c.txnId ?? i}-${c.date}`} style={{ fontSize: '0.78rem', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted)' }}>{c.date}</span>
-                <strong>{c.name ?? '—'}</strong>
-                <span style={{ color: 'var(--muted)' }}>{c.memo ?? ''}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{fmtUSD(c.amountUsd ?? 0)}</span>
-                <button
-                  className="fsel"
-                  style={{ fontSize: '0.68rem' }}
-                  onClick={() => openAdd({
-                    vendorName: c.name ?? '',
-                    description: c.memo ?? '',
-                    totalAmount: String(Math.abs(c.amountUsd ?? 0)),
-                    startMonth: c.date.slice(0, 7),
-                    sourceTxnId: c.txnId,
-                    sourceDate: c.date,
-                  })}
+          <div style={{ display: 'grid', gap: 10 }}>
+            {recon.candidates.map((c, i) => {
+              const s = suggestFromAddition(c)
+              const master = s.vendorGuess ? vendorMaster.get(s.vendorGuess.toLowerCase()) : undefined
+              return (
+                <div
+                  key={`${c.txnId ?? i}-${c.date}-${c.amountUsd}`}
+                  style={{
+                    display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+                    padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8,
+                  }}
                 >
-                  + Register
-                </button>
-              </li>
-            ))}
-          </ul>
+                  <div style={{ minWidth: 240, flex: 1 }}>
+                    <div style={{ fontWeight: 700 }}>
+                      {s.vendorGuess ?? 'Unknown vendor'}
+                      <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, marginLeft: 10 }}>
+                        {fmtUSD(c.amountUsd ?? 0)} prepaid
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--muted)', marginTop: 2, maxWidth: 640, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.memo ?? ''}>
+                      {c.date} · {c.memo ?? '—'}
+                    </div>
+                    <div style={{ fontSize: '0.72rem', marginTop: 4 }}>
+                      <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                        Suggested: {s.months} × {fmtUSD(s.monthlyAmount)}/mo from {s.startMonth}
+                      </span>
+                      {s.contractTotal ? (
+                        <span style={{ color: 'var(--muted)' }}> · contract {fmtUSD(s.contractTotal)}</span>
+                      ) : (
+                        <span style={{ color: 'var(--muted)' }}> · assumed 12-month contract</span>
+                      )}
+                      {master ? (
+                        <span style={{ color: 'var(--muted)' }}> · DR {master.glAccount}{master.className ? ` (${master.className})` : ''} from vendor master</span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <button
+                    className="fsel"
+                    style={{ fontWeight: 600 }}
+                    onClick={() => openAdd({
+                      vendorName: s.vendorGuess ?? '',
+                      description: c.memo ?? '',
+                      totalAmount: String(Math.abs(c.amountUsd ?? 0)),
+                      startMonth: s.startMonth,
+                      months: String(s.months),
+                      expenseGlAccount: master?.glAccount ?? '',
+                      className: master?.className ?? '',
+                      sourceTxnId: c.txnId,
+                      sourceDate: c.date,
+                    })}
+                  >
+                    + Register
+                  </button>
+                </div>
+              )
+            })}
+          </div>
         </div>
       ) : null}
 
-      {/* Orphan amortizations */}
+      {/* Orphan amortizations — grouped per contract (same memo), with
+          one-click registration: the memo's "Total $X" + the observed
+          monthly amount derive the full term, and the first observed month
+          anchors the schedule so past ✓s line up. */}
       {recon.orphanNegatives.length > 0 ? (
         <div className="card" style={{ padding: 16, marginBottom: 18 }}>
-          <div style={{ fontSize: '0.72rem', color: '#d93025', marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Amortizations in QB that match no registered prepayment
+          <div style={{ fontSize: '0.72rem', color: '#d93025', marginBottom: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            Amortizations in QB with no registered prepayment — register the contract to start tracking it
           </div>
-          <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
-            {recon.orphanNegatives.map((o, i) => (
-              <li key={`${o.txnId ?? i}-${o.date}`} style={{ fontSize: '0.78rem', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted)' }}>{o.date}</span>
-                <strong>{o.name ?? '—'}</strong>
-                <span style={{ color: 'var(--muted)' }}>{o.memo ?? ''}</span>
-                <span style={{ fontFamily: 'var(--mono)' }}>{fmtUSD(o.amountUsd ?? 0)}</span>
-              </li>
-            ))}
-          </ul>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {(() => {
+              const groups = new Map<string, GlRow[]>()
+              for (const o of recon.orphanNegatives) {
+                const key = (o.memo ?? o.name ?? '—').toLowerCase().replace(/\s+/g, ' ').trim()
+                groups.set(key, [...(groups.get(key) ?? []), o])
+              }
+              return [...groups.values()].map((rows, gi) => {
+                const first = [...rows].sort((a, b) => a.date.localeCompare(b.date))[0]
+                const monthly = Math.abs(first.amountUsd ?? 0)
+                const s = suggestFromAddition({ ...first, amountUsd: monthly })
+                const total = s.contractTotal ?? Math.round(monthly * 12 * 100) / 100
+                const months = monthly > 0 ? Math.max(1, Math.round(total / monthly)) : 12
+                const master = s.vendorGuess ? vendorMaster.get(s.vendorGuess.toLowerCase()) : undefined
+                return (
+                  <div
+                    key={gi}
+                    style={{
+                      display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+                      padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8,
+                    }}
+                  >
+                    <div style={{ minWidth: 240, flex: 1 }}>
+                      <div style={{ fontWeight: 700 }}>
+                        {s.vendorGuess ?? first.name ?? 'Unknown contract'}
+                        <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, marginLeft: 10 }}>
+                          {fmtUSD(monthly)}/mo · {rows.length} posting{rows.length === 1 ? '' : 's'} since {first.date.slice(0, 7)}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--muted)', marginTop: 2, maxWidth: 640, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={first.memo ?? ''}>
+                        {first.memo ?? '—'}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', marginTop: 4, color: 'var(--accent)', fontWeight: 600 }}>
+                        Suggested: {months} × {fmtUSD(monthly)}/mo from {first.date.slice(0, 7)}
+                        {s.contractTotal ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}> · contract {fmtUSD(s.contractTotal)}</span> : null}
+                        {master ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}> · DR {master.glAccount}{master.className ? ` (${master.className})` : ''}</span> : null}
+                      </div>
+                    </div>
+                    <button
+                      className="fsel"
+                      style={{ fontWeight: 600 }}
+                      onClick={() => openAdd({
+                        vendorName: s.vendorGuess ?? first.name ?? '',
+                        description: first.memo ?? '',
+                        totalAmount: String(total),
+                        startMonth: first.date.slice(0, 7),
+                        months: String(months),
+                        expenseGlAccount: master?.glAccount ?? '',
+                        className: master?.className ?? '',
+                        sourceTxnId: null,
+                        sourceDate: null,
+                      })}
+                    >
+                      + Register
+                    </button>
+                  </div>
+                )
+              })
+            })()}
+          </div>
         </div>
       ) : null}
 
