@@ -5,14 +5,20 @@ import { db } from '@/lib/db'
 import { transaction, txQbState, qbPost } from '@/lib/db/schema'
 import { logAudit } from '@/lib/audit'
 
-const MAX_BULK = 50
+const MAX_BULK = 1000
+export const maxDuration = 300
 
 // PATCH /api/treasury/transactions/bulk-qb-state
-//   Body: { txIds: string[], vendorOverride?: string|null, classOverride?: string|null }
-//   - txIds: non-empty array of transaction.id UUIDs, max 50
-//   - At least one of vendorOverride / classOverride must be present
+//   Body: { txIds: string[], glAccountOverride?: string|null,
+//           counterpartyGlOverride?: string|null,
+//           vendorOverride?: string|null, classOverride?: string|null }
+//   - txIds: non-empty array of transaction.id UUIDs, max 1000
+//   - At least one override field must be present
 //   - Fields NOT present in body are left untouched (only-update-provided)
 //   - Fields present and set to null clear that field on the row
+//   - Per-tx overrides ONLY: no counterparty-map upsert, no wallet
+//     memorization — this is the "surgical exception for this month" path
+//     (the single-cell editors are the ones that memorize defaults)
 //
 // For each txId: upserts tx_qb_state with the provided overrides and flips
 // any linked posted qb_post to 'posted_modified' (same material-edit semantics
@@ -46,8 +52,10 @@ export async function PATCH(req: NextRequest) {
   const txIdList = txIds as string[]
 
   // Validate override fields — same rules as the single route
-  type OverrideKey = 'vendorOverride' | 'classOverride'
+  type OverrideKey = 'glAccountOverride' | 'counterpartyGlOverride' | 'vendorOverride' | 'classOverride'
   const OVERRIDE_FIELDS: { key: OverrideKey; max: number }[] = [
+    { key: 'glAccountOverride', max: 64 },
+    { key: 'counterpartyGlOverride', max: 64 },
     { key: 'vendorOverride', max: 256 },
     { key: 'classOverride', max: 256 },
   ]
@@ -74,7 +82,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (!parsed.some(p => p.provided)) {
-    return NextResponse.json({ error: 'at least one of vendorOverride or classOverride must be provided' }, { status: 400 })
+    return NextResponse.json({ error: 'at least one override field must be provided' }, { status: 400 })
   }
 
   const providedFields = parsed.filter(p => p.provided)

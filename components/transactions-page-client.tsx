@@ -122,6 +122,20 @@ export function TransactionsPageClient({
   // the current filters and selects them all.
   const [selectAllBusy, setSelectAllBusy] = useState(false)
 
+  // Bulk Edit modal — month-specific per-tx overrides for the selected
+  // rows: wallet GL / counterparty GL / vendor / class. Deliberately does
+  // NOT memorize anything (no counterparty-map upsert, no wallet default) —
+  // it's the surgical exception; next month needs the same edit again.
+  const EDIT_UNCHANGED = '__unchanged__'
+  const [editModalOpen, setEditModalOpen] = useState(false)
+  const [editBusy, setEditBusy] = useState(false)
+  const [editDraft, setEditDraft] = useState<Record<'glAccountOverride' | 'counterpartyGlOverride' | 'vendorOverride' | 'classOverride', string>>({
+    glAccountOverride: EDIT_UNCHANGED,
+    counterpartyGlOverride: EDIT_UNCHANGED,
+    vendorOverride: EDIT_UNCHANGED,
+    classOverride: EDIT_UNCHANGED,
+  })
+
   // Drill-down panel for bulk JEs. Holds the post we want to inspect; null = closed.
   type DrilldownTarget = {
     postId: string
@@ -289,6 +303,48 @@ export function TransactionsPageClient({
   // across all pages. Uses the same params as fetchTransactions with
   // limit=all; rows without an id (cron-only) are skipped, same as the
   // per-page checkbox.
+  async function applyBulkEdit() {
+    const provided = (Object.entries(editDraft) as [string, string][])
+      .filter(([, v]) => v !== EDIT_UNCHANGED)
+    if (provided.length === 0) { setEditModalOpen(false); return }
+
+    const txIds = Array.from(selectedIds)
+    const hasPosted = transactions.some(
+      t => t.id && selectedIds.has(t.id) && t.qbPostingStatus === 'posted',
+    )
+    if (hasPosted) {
+      const ok = window.confirm(
+        'One or more selected rows are posted to QuickBooks. This edit will '
+        + 'mark those journal entries stale and require re-posting. Continue?',
+      )
+      if (!ok) return
+    }
+
+    setEditBusy(true)
+    try {
+      const body: Record<string, unknown> = { txIds }
+      for (const [k, v] of provided) body[k] = v === '' ? null : v
+      await apiFetch('/api/treasury/transactions/bulk-qb-state', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      setRowError(null)
+      setEditModalOpen(false)
+      setEditDraft({
+        glAccountOverride: EDIT_UNCHANGED,
+        counterpartyGlOverride: EDIT_UNCHANGED,
+        vendorOverride: EDIT_UNCHANGED,
+        classOverride: EDIT_UNCHANGED,
+      })
+      fetchTransactions(offset)
+    } catch (err) {
+      setRowError(`Bulk edit failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setEditBusy(false)
+    }
+  }
+
   const selectAllMatching = useCallback(async () => {
     if (!entity) return
     setSelectAllBusy(true)
@@ -1337,6 +1393,15 @@ export function TransactionsPageClient({
                     </select>
                     <button
                       className="fsel"
+                      onClick={() => setEditModalOpen(true)}
+                      disabled={bulkBusy}
+                      style={{ fontWeight: 600 }}
+                      title="Edit wallet GL / counterparty GL / vendor / class on the selected rows only (no defaults are memorized)"
+                    >
+                      Edit {selectedIds.size} selected…
+                    </button>
+                    <button
+                      className="fsel"
                       onClick={clearSelection}
                       style={{ fontSize: '0.7rem' }}
                       title="Clear selection"
@@ -1580,6 +1645,61 @@ export function TransactionsPageClient({
           }}
         />
       )}
+
+      {/* Bulk Edit modal — per-tx overrides on the selected rows only. */}
+      {editModalOpen ? (
+        <div className="modal-overlay open" onClick={() => { if (!editBusy) setEditModalOpen(false) }}>
+          <div className="modal" style={{ width: 520, maxWidth: '95vw' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <span className="modal-title">Edit {selectedIds.size} selected transaction{selectedIds.size === 1 ? '' : 's'}</span>
+                <div className="modal-sub" style={{ marginTop: 4 }}>
+                  Applies ONLY to the selected rows — nothing is memorized as a default,
+                  so other months are untouched.
+                </div>
+              </div>
+              <button className="modal-close" onClick={() => { if (!editBusy) setEditModalOpen(false) }} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body" style={{ padding: 20, display: 'grid', gap: 12 }}>
+              {([
+                { key: 'glAccountOverride' as const, label: 'Wallet GL', options: glOptions },
+                { key: 'counterpartyGlOverride' as const, label: 'Counterparty GL', options: glOptions },
+                { key: 'vendorOverride' as const, label: 'Vendor', options: vendorOptions },
+                { key: 'classOverride' as const, label: 'Class', options: classOptions },
+              ]).map((f) => (
+                <label key={f.key} style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>{f.label}</span>
+                  <select
+                    className="fsel"
+                    value={editDraft[f.key]}
+                    disabled={editBusy}
+                    onChange={(e) => setEditDraft((p) => ({ ...p, [f.key]: e.target.value }))}
+                  >
+                    <option value={EDIT_UNCHANGED}>— leave unchanged —</option>
+                    <option value="">∅ Clear override (back to default)</option>
+                    {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </label>
+              ))}
+              <div style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>
+                Fields left as “unchanged” are not touched. Posted rows in the selection
+                will be marked stale and need re-posting.
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="fsel" onClick={() => setEditModalOpen(false)} disabled={editBusy}>Cancel</button>
+              <button
+                className="fsel"
+                onClick={() => void applyBulkEdit()}
+                disabled={editBusy || (Object.values(editDraft) as string[]).every((v) => v === EDIT_UNCHANGED)}
+                style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)', fontWeight: 600 }}
+              >
+                {editBusy ? 'Applying…' : 'OK — apply to selected'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <TransactionsExportModal
         open={exportModalOpen}
