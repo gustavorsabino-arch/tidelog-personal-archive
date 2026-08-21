@@ -855,6 +855,17 @@ export function TransactionsPageClient({
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(patchBody),
             })
+            // Memorize on the counterparty wallet (same auto-memorize
+            // pattern as the GL cell) so SIBLING rows of this counterparty
+            // inherit the vendor immediately — not only after posting.
+            // Registered counterparties only (label present = wallet row).
+            if (t.counterparty && t.counterpartyLabel) {
+              await apiFetch(`/api/wallets/${t.counterparty}`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ qbVendorName: next }),
+              }).catch(() => {}) // memorization is best-effort
+            }
             fetchTransactions(offset)
           }}
         />
@@ -885,6 +896,15 @@ export function TransactionsPageClient({
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ classOverride: next }),
             })
+            // Same sibling-propagation as the Vendor cell: memorize the
+            // class on the registered counterparty wallet.
+            if (t.counterparty && t.counterpartyLabel) {
+              await apiFetch(`/api/wallets/${t.counterparty}`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ qbClassName: next }),
+              }).catch(() => {}) // memorization is best-effort
+            }
             fetchTransactions(offset)
           }}
         />
