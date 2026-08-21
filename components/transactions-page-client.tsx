@@ -17,6 +17,7 @@ import { EditableCell } from '@/components/editable-cell'
 import { EditableSelectCell, type SelectOption } from '@/components/editable-select-cell'
 import { PostToQbModal } from '@/components/post-to-qb-modal'
 import { TransactionsExportModal } from '@/components/transactions-export-modal'
+import { PrepaymentsPanel } from '@/components/prepayments-panel'
 import { QbBulkDrilldownPanel } from '@/components/qb-bulk-drilldown-panel'
 import { useSharedAccess } from '@/lib/access-context'
 import { hasPermission } from '@/lib/auth/permissions'
@@ -81,6 +82,8 @@ export function TransactionsPageClient({
   pageSize,
 }: TransactionsPageClientProps) {
   const [entity, setEntity] = useState<string>(initialEntity)
+  // Sub-view: the regular transactions list, or the Prepayments map.
+  const [view, setView] = useState<'transactions' | 'prepayments'>('transactions')
   const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions)
   const [total, setTotal] = useState(initialTotal)
   const [summary, setSummary] = useState<TransactionSummary>(initialSummary)
@@ -1216,9 +1219,26 @@ export function TransactionsPageClient({
             </button>
           ))}
         </div>
+        <div className="entity-tabs" style={{ marginLeft: 'auto' }}>
+          <button
+            className={`entity-tab${view === 'transactions' ? ' active' : ''}`}
+            onClick={() => setView('transactions')}
+          >
+            Transactions
+          </button>
+          <button
+            className={`entity-tab${view === 'prepayments' ? ' active' : ''}`}
+            onClick={() => setView('prepayments')}
+            title="Prepaid-expense amortization map (register + schedule reconciled against QB)"
+          >
+            Prepayments
+          </button>
+        </div>
       </div>
 
-      {error ? (
+      {view === 'prepayments' ? (
+        <PrepaymentsPanel entity={entity} />
+      ) : error ? (
         <div className="error-msg">{error}</div>
       ) : (
         <>
