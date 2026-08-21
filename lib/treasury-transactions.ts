@@ -7,6 +7,7 @@ import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import { defaultDescription } from '@/lib/qb-state'
 import { resolveWalletGl } from '@/lib/qb/resolve-wallet-gl'
 import { loadPostingHistory, historyKey, type PostingHistoryEntry } from '@/lib/qb/posting-history'
+import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import type { Transaction, TransactionsResponse } from '@/lib/types'
 
 export type QbStatusFilter =
@@ -200,6 +201,11 @@ export async function getTreasuryTransactions({
   limit = 50,
   offset = 0,
 }: GetTreasuryTransactionsParams): Promise<TransactionsResponse> {
+  // The page projection enumerates tx_qb_state columns that may not exist
+  // yet right after a deploy (e.g. posted_counterparty_gl) — heal first.
+  // Memoized: a no-op probe once the instance has verified the schema.
+  await ensureApprovalsSchema().catch(() => {})
+
   const conditions = [eq(transaction.entityId, toDbEntity(entity))]
 
   const fromTs = from ? Number.parseInt(from, 10) : 0

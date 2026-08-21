@@ -27,6 +27,7 @@ import type {
   QbQueryResponse,
 } from './types.ts'
 import { resolveWalletGl, type GlSource } from './resolve-wallet-gl'
+import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import { loadPostingHistory, historyKey, type PostingHistoryEntry } from './posting-history'
 import { defaultDescription } from '@/lib/qb-state'
 import { fmtNum } from '@/lib/format'
@@ -122,6 +123,11 @@ type LoadedTx = {
 }
 
 async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
+  // Post-time writes touch tx_qb_state columns that may not exist right
+  // after a deploy (posted_counterparty_gl) — heal before loading. Covers
+  // both postBatch and post-preview via buildPostPlan. Memoized.
+  await ensureApprovalsSchema().catch(() => {})
+
   // Counterparty wallet alias — counterparty is just an address; if a known
   // wallet matches we surface its label for vendor matching.
   const cpWallet = alias(wallet, 'cp_wallet')
