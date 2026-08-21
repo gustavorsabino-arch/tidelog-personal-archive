@@ -180,12 +180,14 @@ const EMPTY_FORM: NewRequestForm = {
   network: '', token: '', walletAddress: '', links: '',
 }
 
-/** Parse a textarea of one-URL-per-line into the API's links payload. */
+/** Parse a textarea of one-URL-per-line into the API's links payload.
+ * https only — SOX evidence must not be reachable over cleartext (the
+ * server enforces the same rule). */
 function parseLinkLines(text: string): { url: string }[] {
   return text
     .split('\n')
     .map((s) => s.trim())
-    .filter((s) => /^https?:\/\//i.test(s))
+    .filter((s) => /^https:\/\//i.test(s))
     .map((url) => ({ url }))
 }
 

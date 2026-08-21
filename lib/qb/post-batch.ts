@@ -772,6 +772,11 @@ async function postOneGroupLocked(
           postedGlSource: m.walletGlSource,
           postedVendor: m.effectiveVendor,
           postedClass: m.effectiveClass,
+          // The counterparty-side GL actually sent to QB — same resolution
+          // buildPostPlan used (override ?? history/map). Snapshotting it
+          // keeps the export/list faithful and lets history-inherited posts
+          // become precedents themselves.
+          postedCounterpartyGl: m.counterpartyGlOverride ?? m.counterpartyGlMapValue,
           updatedAt: new Date(),
           updatedBy: userId,
         })
@@ -794,6 +799,7 @@ async function postOneGroupLocked(
             postedGlSource: m.walletGlSource,
             postedVendor: m.effectiveVendor,
             postedClass: m.effectiveClass,
+            postedCounterpartyGl: m.counterpartyGlOverride ?? m.counterpartyGlMapValue,
             updatedAt: new Date(),
             updatedBy: userId,
           },

@@ -106,27 +106,56 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
-    try {
-      const res = await apiFetch<{ items: PrepaymentApiRow[] }>(`/api/prepayments?entity=${encodeURIComponent(entity)}`)
-      setItems(res.items)
 
+    // One automatic retry — serverless cold starts occasionally time out on
+    // the first DB connection (write CONNECT_TIMEOUT) and succeed right after.
+    async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+      try {
+        return await fn()
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : ''
+        if (/CONNECT_TIMEOUT|ECONNRESET|fetch failed|network/i.test(msg)) {
+          await new Promise((r) => setTimeout(r, 1500))
+          return await fn()
+        }
+        throw e
+      }
+    }
+
+    // Register and GL load independently: a register failure must not hide
+    // the QB ledger (candidates/orphans still render), and vice-versa.
+    let loadedItems: PrepaymentApiRow[] = []
+    const problems: string[] = []
+    try {
+      const res = await withRetry(() =>
+        apiFetch<{ items: PrepaymentApiRow[] }>(`/api/prepayments?entity=${encodeURIComponent(entity)}`))
+      loadedItems = res.items
+      setItems(res.items)
+    } catch (e) {
+      setItems([])
+      problems.push(`register: ${e instanceof Error ? e.message : 'failed'}`)
+    }
+
+    try {
       // GL window: a month before the earliest item (so additions show as
       // linked) through the end of the current month.
-      const starts = res.items.map((i) => i.sourceDate?.slice(0, 7) ?? i.startMonth)
-      const earliest = starts.length > 0 ? [...starts].sort()[0] : addMonths(currentYm(), -6)
+      const starts = loadedItems.map((i) => i.sourceDate?.slice(0, 7) ?? i.startMonth)
+      const earliest = starts.length > 0 ? [...starts].sort()[0] : addMonths(currentYm(), -12)
       const from = `${addMonths(earliest, -1)}-01`
       const to = lastDayOfMonth(currentYm())
-      const gl = await apiFetch<{ rows: GlRow[]; fetchedAt: string }>(
-        `/api/prepayments/gl?entity=${encodeURIComponent(entity)}&account=${encodeURIComponent(account)}&from=${from}&to=${to}`,
-      )
+      const gl = await withRetry(() =>
+        apiFetch<{ rows: GlRow[]; fetchedAt: string }>(
+          `/api/prepayments/gl?entity=${encodeURIComponent(entity)}&account=${encodeURIComponent(account)}&from=${from}&to=${to}`,
+        ))
       setGlRows(gl.rows)
       setGlFetchedAt(gl.fetchedAt)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load prepayments')
       setGlRows(null)
-    } finally {
-      setLoading(false)
+      problems.push(`QB ledger: ${e instanceof Error ? e.message : 'failed'}`)
     }
+
+    setError(problems.length > 0 ? `${problems.join(' · ')} — click "Refresh from QB" to retry` : null)
+    setLoading(false)
   }, [entity, account])
 
   useEffect(() => { void load() }, [load])
@@ -399,7 +428,11 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           </span>
           <input className="fsearch" style={{ width: 110, fontFamily: 'var(--mono)' }} type="month" value={bookMonth} onChange={(e) => setBookMonth(e.target.value)} />
         </div>
-        {toBook.length === 0 ? (
+        {activeItems.length === 0 ? (
+          <div style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>
+            No prepayments registered yet — nothing to compute for {bookMonth}.
+          </div>
+        ) : toBook.length === 0 ? (
           <div style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>
             Nothing pending for {bookMonth} — every scheduled amortization is posted. ✓
           </div>

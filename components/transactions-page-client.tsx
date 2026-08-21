@@ -124,6 +124,15 @@ export function TransactionsPageClient({
   // "Select all pages" (Gmail pattern) — fetches every matching tx id for
   // the current filters and selects them all.
   const [selectAllBusy, setSelectAllBusy] = useState(false)
+  // Posted ids within a cross-page selection: the visible page can't tell
+  // us about off-page rows, so the select-all fetch records them. Drives
+  // the "will mark JEs stale" confirms even when the posted rows aren't
+  // on screen. Cleared together with the selection.
+  const [selectedPostedIds, setSelectedPostedIds] = useState<Set<string>>(new Set())
+  // Staleness guard: a slow limit=all response must never reinstate a
+  // selection after the user changed filters/pages (they'd act on rows
+  // from the OLD filter without seeing them).
+  const selectionEpoch = useRef(0)
 
   // Bulk Edit modal — month-specific per-tx overrides for the selected
   // rows: wallet GL / counterparty GL / vendor / class. Deliberately does
@@ -273,7 +282,9 @@ export function TransactionsPageClient({
     // Selection is tied to the *currently visible* dataset; once filters or
     // entity change, the selected ids may not even be on the page anymore and
     // they're certainly not what the user meant to post. Always clear.
+    selectionEpoch.current++
     setSelectedIds(new Set())
+    setSelectedPostedIds(new Set())
     if (entity) fetchTransactions(0)
   }, [entity, initialEntity, tokenFilter, dirFilter, yearFilter, monthFilter, walletFilter, qbStatusFilter, fetchTransactions])
 
@@ -281,9 +292,17 @@ export function TransactionsPageClient({
   // directly avoids the effect-driven double-fetch race entirely.
   const goToOffset = (off: number) => {
     setOffset(off)
-    // Same reasoning as the filter-change effect: leaving stale selections
-    // across page transitions invites posting txs the user can't see.
-    setSelectedIds(new Set())
+    // Page-local selections are cleared on navigation (stale rows the user
+    // can't see). A CROSS-PAGE select-all is different: its whole point is
+    // rows beyond the page, the filters haven't changed, and clearing it
+    // would destroy the selection exactly when the user pages through to
+    // verify it before posting — so it survives navigation.
+    const isCrossPage = selectedIds.size > visibleSelectableIds.length
+    if (!isCrossPage) {
+      selectionEpoch.current++
+      setSelectedIds(new Set())
+      setSelectedPostedIds(new Set())
+    }
     fetchTransactions(off)
   }
 
@@ -299,7 +318,9 @@ export function TransactionsPageClient({
   }, [])
 
   const clearSelection = useCallback(() => {
+    selectionEpoch.current++
     setSelectedIds(new Set())
+    setSelectedPostedIds(new Set())
   }, [])
 
   // Select every transaction matching the CURRENT server-side filters,
@@ -312,7 +333,13 @@ export function TransactionsPageClient({
     if (provided.length === 0) { setEditModalOpen(false); return }
 
     const txIds = Array.from(selectedIds)
-    const hasPosted = transactions.some(
+    if (txIds.length > MAX_POST_BATCH) {
+      setRowError(`Selection exceeds ${MAX_POST_BATCH} transactions — narrow the filter before bulk editing.`)
+      return
+    }
+    // Posted-row detection covers the FULL selection: the visible page scan
+    // plus the posted ids recorded by select-all-across-pages.
+    const hasPosted = selectedPostedIds.size > 0 || transactions.some(
       t => t.id && selectedIds.has(t.id) && t.qbPostingStatus === 'posted',
     )
     if (hasPosted) {
@@ -351,6 +378,7 @@ export function TransactionsPageClient({
   const selectAllMatching = useCallback(async () => {
     if (!entity) return
     setSelectAllBusy(true)
+    const epoch = selectionEpoch.current
     try {
       const params = new URLSearchParams({ entity, limit: 'all' })
       if (tokenFilter) params.set('asset', tokenFilter)
@@ -363,8 +391,20 @@ export function TransactionsPageClient({
         params.set('to', range.to)
       }
       const res = await apiFetch<TransactionsResponse>(`/api/treasury/transactions?${params}`)
+      // Stale response? The user changed filters/pages while this was in
+      // flight — installing the old-filter selection would let them act on
+      // rows they can no longer see. Drop it.
+      if (selectionEpoch.current !== epoch) return
       setSelectedIds(new Set(
         res.transactions.map((t) => t.id).filter((id): id is string => !!id),
+      ))
+      // Remember which selected rows are POSTED — the visible page can't
+      // answer that for off-page rows, and the material-edit confirms need it.
+      setSelectedPostedIds(new Set(
+        res.transactions
+          .filter((t) => t.qbPostingStatus === 'posted')
+          .map((t) => t.id)
+          .filter((id): id is string => !!id),
       ))
       setRowError(null)
     } catch (err) {
@@ -899,13 +939,17 @@ export function TransactionsPageClient({
               if (!ok) throw new Error('Save cancelled')
             }
             // Vendor master auto-fill: the Book12 mapping supplies the class
-            // and counterparty GL for this vendor. Fill EMPTY slots only —
-            // an explicit override already on the row always wins.
+            // and counterparty GL for this vendor. Fill VISIBLY-EMPTY slots
+            // only — not just "no per-tx override": an inherited default the
+            // user can see in the cell (memorized map / wallet config /
+            // posting history) counts as filled and is never displaced.
             const patchBody: Record<string, unknown> = { vendorOverride: next }
             const master = next ? vendorMaster.get(next.toLowerCase()) : undefined
             if (master) {
-              if (master.className && t.classOverride == null) patchBody.classOverride = master.className
-              if (master.glAccount && t.counterpartyGlOverride == null && t.counterparty) {
+              if (master.className && t.classOverride == null && t.counterpartyClassName == null) {
+                patchBody.classOverride = master.className
+              }
+              if (master.glAccount && t.counterpartyGlOverride == null && t.counterpartyGlAccount == null && t.counterparty) {
                 patchBody.counterpartyGlOverride = master.glAccount
               }
             }
@@ -918,7 +962,9 @@ export function TransactionsPageClient({
             // pattern as the GL cell) so SIBLING rows of this counterparty
             // inherit the vendor immediately — not only after posting.
             // Registered counterparties only (label present = wallet row).
-            if (t.counterparty && t.counterpartyLabel) {
+            // PICKS only: clearing a per-tx override (next === null) means
+            // "fall back to the default" — it must never DELETE the default.
+            if (next != null && t.counterparty && t.counterpartyLabel) {
               await apiFetch(`/api/wallets/${t.counterparty}`, {
                 method: 'PATCH',
                 headers: { 'content-type': 'application/json' },
@@ -956,8 +1002,9 @@ export function TransactionsPageClient({
               body: JSON.stringify({ classOverride: next }),
             })
             // Same sibling-propagation as the Vendor cell: memorize the
-            // class on the registered counterparty wallet.
-            if (t.counterparty && t.counterpartyLabel) {
+            // class on the registered counterparty wallet — on affirmative
+            // PICKS only, never when clearing back to the default.
+            if (next != null && t.counterparty && t.counterpartyLabel) {
               await apiFetch(`/api/wallets/${t.counterparty}`, {
                 method: 'PATCH',
                 headers: { 'content-type': 'application/json' },
@@ -1196,6 +1243,10 @@ export function TransactionsPageClient({
     ]
   }, [
     yearFilter, monthStartMs, fetchTransactions, offset, glOptions, vendorOptions, classOptions,
+    // Vendor cell's onSave reads the Book12 master for auto-fill — without
+    // this dep the closure keeps the pre-load EMPTY map and the first pick
+    // after page load silently skips the auto-fill.
+    vendorMaster,
     // Selection column re-renders when selection or visible-row state changes.
     selectedIds, allVisibleSelected, someVisibleSelected, visibleSelectableIds,
     toggleSelect, toggleSelectAllVisible,
@@ -1331,12 +1382,12 @@ export function TransactionsPageClient({
                     <select
                       className="fsel"
                       value=""
-                      title="Set vendor on selected rows"
-                      disabled={bulkBusy}
+                      title={selectedIds.size > MAX_POST_BATCH ? `Selection exceeds ${MAX_POST_BATCH}` : 'Set vendor on selected rows'}
+                      disabled={bulkBusy || selectedIds.size > MAX_POST_BATCH}
                       onChange={async (e) => {
                         const next = e.target.value || null
                         const txIds = Array.from(selectedIds)
-                        const hasPosted = transactions.some(
+                        const hasPosted = selectedPostedIds.size > 0 || transactions.some(
                           t => t.id && selectedIds.has(t.id) && t.qbPostingStatus === 'posted',
                         )
                         if (hasPosted) {
@@ -1348,15 +1399,15 @@ export function TransactionsPageClient({
                         }
                         setBulkBusy(true)
                         try {
-                          // Vendor master auto-fill also applies on bulk: the
-                          // Book12 class for this vendor rides along.
-                          const master = next ? vendorMaster.get(next.toLowerCase()) : undefined
-                          const bulkBody: Record<string, unknown> = { txIds, vendorOverride: next }
-                          if (master?.className) bulkBody.classOverride = master.className
+                          // NO vendor-master class rider here: bulk applies
+                          // fields unconditionally to every row, so a class
+                          // ride-along would clobber hand-set per-row class
+                          // overrides (the single-cell path fills empty slots
+                          // only). Use the explicit "Set class…" control.
                           await apiFetch('/api/treasury/transactions/bulk-qb-state', {
                             method: 'PATCH',
                             headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify(bulkBody),
+                            body: JSON.stringify({ txIds, vendorOverride: next }),
                           })
                           setRowError(null)
                           fetchTransactions(offset)
@@ -1375,12 +1426,12 @@ export function TransactionsPageClient({
                     <select
                       className="fsel"
                       value=""
-                      title="Set class on selected rows"
-                      disabled={bulkBusy}
+                      title={selectedIds.size > MAX_POST_BATCH ? `Selection exceeds ${MAX_POST_BATCH}` : 'Set class on selected rows'}
+                      disabled={bulkBusy || selectedIds.size > MAX_POST_BATCH}
                       onChange={async (e) => {
                         const next = e.target.value || null
                         const txIds = Array.from(selectedIds)
-                        const hasPosted = transactions.some(
+                        const hasPosted = selectedPostedIds.size > 0 || transactions.some(
                           t => t.id && selectedIds.has(t.id) && t.qbPostingStatus === 'posted',
                         )
                         if (hasPosted) {
@@ -1414,9 +1465,11 @@ export function TransactionsPageClient({
                     <button
                       className="fsel"
                       onClick={() => setEditModalOpen(true)}
-                      disabled={bulkBusy}
-                      style={{ fontWeight: 600 }}
-                      title="Edit wallet GL / counterparty GL / vendor / class on the selected rows only (no defaults are memorized)"
+                      disabled={bulkBusy || selectedIds.size > MAX_POST_BATCH}
+                      style={{ fontWeight: 600, opacity: selectedIds.size > MAX_POST_BATCH ? 0.5 : 1 }}
+                      title={selectedIds.size > MAX_POST_BATCH
+                        ? `Selection exceeds ${MAX_POST_BATCH} — narrow the filter to bulk edit`
+                        : 'Edit wallet GL / counterparty GL / vendor / class on the selected rows only (no defaults are memorized)'}
                     >
                       Edit {selectedIds.size} selected…
                     </button>

@@ -29,9 +29,29 @@ import { db } from '@/lib/db'
  * They are integrity hardening only — skipped and reported, never fatal.
  */
 
-// Newest column the statement list creates — the cheap "is the DB current?"
-// probe. UPDATE THIS whenever statements are appended.
-const SENTINEL = { table: 'prepayment', column: 'vendor_name' }
+// Completeness probe: EVERY table the statement list creates, plus the
+// newest column (bump the column entry whenever statements are appended).
+// Checking the full set — not just the newest object — means a partial
+// heal (mid-run transient failure) is still detected as "behind" on the
+// next probe instead of being masked by the newest object existing.
+const EXPECTED_OBJECTS: { table: string; column: string }[] = [
+  { table: 'approval_request', column: 'id' },
+  { table: 'approval_attachment', column: 'id' },
+  { table: 'approval_assignee', column: 'stage' },
+  { table: 'approval_decision', column: 'decision' },
+  { table: 'finance_approver', column: 'user_id' },
+  { table: 'approval_link', column: 'source' },        // 0028 + 0031
+  { table: 'vendor_default', column: 'vendor_name' },
+  { table: 'prepayment', column: 'vendor_name' },
+  { table: 'approval_request', column: 'slack_message_ts' },
+  { table: 'approval_request', column: 'required_finance_approvals' },
+  { table: 'tx_qb_state', column: 'posted_counterparty_gl' },   // 0031 (newest)
+]
+
+// Errors we intentionally tolerate forever: the FK-to-app.user statements
+// fail under the runtime role (no REFERENCES privilege) and idempotency
+// no-ops. Anything else is a HARD failure that must trigger a retry.
+const TOLERATED_ERROR = /permission denied for table user|already exists|duplicate/i
 
 export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS "app"."approval_request" (
@@ -189,6 +209,10 @@ export const APPROVALS_SCHEMA_STATEMENTS: string[] = [
     "updated_by" text
   )`,
   `CREATE INDEX IF NOT EXISTS "prepayment_entity_idx" ON "app"."prepayment" USING btree ("entity_id","status")`,
+
+  // ── Migration 0031: posted counterparty-GL snapshot + link source ──
+  `ALTER TABLE "app"."tx_qb_state" ADD COLUMN IF NOT EXISTS "posted_counterparty_gl" text`,
+  `ALTER TABLE "app"."approval_link" ADD COLUMN IF NOT EXISTS "source" text DEFAULT 'user' NOT NULL`,
 ]
 
 export type SchemaApplyResult = {
@@ -216,16 +240,17 @@ export async function applyApprovalsSchemaStatements(): Promise<SchemaApplyResul
 }
 
 async function isSchemaCurrent(): Promise<boolean> {
+  const pairs = sql.join(
+    EXPECTED_OBJECTS.map((o) => sql`(${o.table}, ${o.column})`),
+    sql`, `,
+  )
   const probe = await db.execute(sql`
-    SELECT 1 FROM information_schema.columns
+    SELECT count(*)::int AS n FROM information_schema.columns
     WHERE table_schema = 'app'
-      AND table_name = ${SENTINEL.table}
-      AND column_name = ${SENTINEL.column}
-    LIMIT 1
-  `)
-  const rows = probe as unknown as { length?: number; rows?: unknown[] }
-  const count = Array.isArray(probe) ? probe.length : (rows.rows?.length ?? rows.length ?? 0)
-  return count > 0
+      AND (table_name, column_name) IN (${pairs})
+  `) as unknown as { n: number }[]
+  const found = Array.isArray(probe) ? Number(probe[0]?.n ?? 0) : 0
+  return found >= EXPECTED_OBJECTS.length
 }
 
 // Memoized per server instance: the probe runs once per cold start; the
@@ -244,9 +269,18 @@ export function ensureApprovalsSchema(): Promise<SchemaApplyResult> {
         `[approvals-schema] done: ${result.applied.length} applied, ${result.skipped.length} skipped`,
         result.skipped.length > 0 ? result.skipped : '',
       )
+      // Memoize only CLEAN runs. A transient mid-run failure (connection
+      // blip, statement timeout — anything beyond the tolerated FK
+      // permission denials) must not be cached as "done" for the instance
+      // lifetime, or the schema stays behind with no retry until recycle.
+      const hardFailures = result.skipped.filter((s) => !TOLERATED_ERROR.test(s.error))
+      if (hardFailures.length > 0 || !(await isSchemaCurrent().catch(() => false))) {
+        console.error('[approvals-schema] partial heal — will retry on the next request', hardFailures)
+        ensurePromise = null
+      }
       return result
     })().catch((err) => {
-      // Never crash the server over this; the next cold start retries.
+      // Never crash the server over this; the next request retries.
       ensurePromise = null
       console.error('[approvals-schema] self-heal failed:', err)
       return { upToDate: false, applied: [], skipped: [{ stmt: 'ensure', error: (err as Error).message }] }

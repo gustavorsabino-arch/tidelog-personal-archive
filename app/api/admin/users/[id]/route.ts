@@ -84,6 +84,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   if ('financeApprover' in body && body.financeApprover !== undefined) {
+    // finance_approver may not exist yet right after a deploy — self-heal.
+    const { ensureApprovalsSchema } = await import('@/lib/db/approvals-schema')
+    await ensureApprovalsSchema().catch(() => {})
     if (body.financeApprover) {
       await db.insert(financeApprover)
         .values({ userId: id })

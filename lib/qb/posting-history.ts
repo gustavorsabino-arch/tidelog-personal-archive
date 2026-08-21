@@ -31,18 +31,21 @@ export async function loadPostingHistory(
   if (unique.length === 0) return map
 
   const tuples = sql.join(unique.map((p) => sql`(${p.walletAddress}, ${p.counterparty}, ${p.direction})`), sql`, `)
-  // posted_gl_account IS NOT NULL = the row was faithfully posted; its
-  // vendor/class snapshots and per-tx counterparty-GL override are the
-  // values finance actually approved last time. Direction is part of the
-  // key: intercompany transfers post to mirrored accounts depending on
-  // in/out (Due From vs Due To), so an OUT precedent must never prefill
-  // an IN transaction.
+  // Precedent = the most recent tx whose linked JE is STILL LIVE in QB
+  // (posted / posted_modified / posted_manually — a voided JE was retracted,
+  // often precisely because its coding was wrong, so it must not seed new
+  // posts). The counterparty GL comes from the posted_counterparty_gl
+  // snapshot written at post time (COALESCE to the per-tx override for rows
+  // posted before the snapshot column existed) so that a tx which INHERITED
+  // its GL via history still becomes a valid precedent itself. Direction is
+  // part of the key: intercompany transfers post to mirrored accounts
+  // depending on in/out (Due From vs Due To).
   const rows = await db.execute(sql`
     SELECT DISTINCT ON (t.wallet_address, t.counterparty, t.direction)
       t.wallet_address AS wallet_address,
       t.counterparty   AS counterparty,
       t.direction      AS direction,
-      s.counterparty_gl_override AS cp_gl,
+      COALESCE(s.posted_counterparty_gl, s.counterparty_gl_override) AS cp_gl,
       s.posted_vendor  AS vendor,
       s.posted_class   AS class_name
     FROM "app"."tx_qb_state" s
@@ -51,6 +54,9 @@ export async function loadPostingHistory(
      AND t.wallet_address = s.wallet_address
      AND t.direction = s.direction
      AND t.asset = s.asset
+    JOIN "app"."qb_post" p
+      ON p.id = s.post_id
+     AND p.posting_status IN ('posted', 'posted_modified', 'posted_manually')
     WHERE s.posted_gl_account IS NOT NULL
       AND (t.wallet_address, t.counterparty, t.direction) IN (${tuples})
     ORDER BY t.wallet_address, t.counterparty, t.direction, t.block_time DESC

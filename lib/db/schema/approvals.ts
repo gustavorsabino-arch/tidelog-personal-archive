@@ -137,6 +137,9 @@ export const approvalLink = app.table(
     requestId: uuid('request_id').notNull().references(() => approvalRequest.id, { onDelete: 'cascade' }),
     url: text('url').notNull(),
     label: text('label'),
+    // 'user' = added by a person (counts toward the 20-link cap);
+    // 'drive_mirror' = automatic Google Drive copy (cap-exempt).
+    source: text('source', { enum: ['user', 'drive_mirror'] }).notNull().default('user'),
     addedById: text('added_by_id').notNull().references(() => user.id),
     addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
   },

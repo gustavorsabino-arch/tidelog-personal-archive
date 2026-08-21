@@ -50,6 +50,11 @@ export const txQbState = app.table(
     // Faithful display: the vendor/class actually sent to QB at post time (Phase 5 writes these)
     postedVendor: text('posted_vendor'),
     postedClass: text('posted_class'),
+    // Faithful display: the counterparty-side GL actually sent to QB at post
+    // time (override ?? history ?? map, resolved in buildPostPlan). Without
+    // this snapshot the export/list re-derive the CR/DR leg from CURRENT
+    // state, and history-inherited posts can't become precedent themselves.
+    postedCounterpartyGl: text('posted_counterparty_gl'),
     // Audit
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     updatedBy: text('updated_by').references(() => user.id),

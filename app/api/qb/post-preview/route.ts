@@ -141,8 +141,14 @@ export async function POST(req: NextRequest) {
     } satisfies PostPreviewResult)
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Preview failed'
-    // 403 if entity ownership check failed in buildPostPlan; 500 otherwise.
-    const status = msg.startsWith('Forbidden') ? 403 : 500
+    // Same tiering as post-batch: 403 for entity-ownership violations,
+    // 400 for buildPostPlan validation (JE-group cap / batch size), 500
+    // for genuine server errors.
+    const status = msg.startsWith('Forbidden')
+      ? 403
+      : msg.startsWith('Selection would create') || msg.startsWith('Batch size exceeds')
+        ? 400
+        : 500
     return NextResponse.json({ error: msg }, { status })
   }
 }

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { after } from 'next/server'
 import { and, desc, eq, gte, isNotNull, or, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { approvalRequest, approvalAttachment, approvalLink, approvalAssignee, approvalDecision, auditLog, user, userDepartment, financeApprover } from '@/lib/db/schema'
@@ -10,6 +11,7 @@ import {
   type SlackCardRequest,
 } from '@/lib/slack/approvals'
 import { gdriveEnabled, gdriveUpload } from '@/lib/gdrive/client'
+import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import type { SoxRequestContext } from './request-context'
 
 /**
@@ -55,7 +57,8 @@ export function normalizeLink(raw: NewLinkInput): { url: string; label: string |
   if (!trimmed) return null
   try {
     const u = new URL(trimmed)
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+    // https ONLY — SOX evidence must not be reachable over cleartext.
+    if (u.protocol !== 'https:') return null
     return { url: trimmed, label: raw.label?.trim() || null }
   } catch {
     return null
@@ -141,7 +144,9 @@ async function mirrorAttachmentsToDrive(
       }
     }
     if (linkRows.length > 0) {
-      await db.insert(approvalLink).values(linkRows)
+      await db.insert(approvalLink).values(
+        linkRows.map((l) => ({ ...l, source: 'drive_mirror' as const })),
+      )
       await db.insert(auditLog).values({
         userId: actor.id === 'dev-user' ? null : actor.id,
         action: 'approval.drive_mirrored',
@@ -432,7 +437,11 @@ export async function createApprovalRequest(
     console.error('[slack] create notify failed:', (err as Error).message)
   }
 
-  await mirrorAttachmentsToDrive(created.id, created.refNumber, actor, attachments)
+  // Off the response path: 5 stalled uploads could exceed the route's
+  // maxDuration and turn a COMMITTED submission into a client timeout
+  // (inviting duplicate resubmits). after() runs it once the response is
+  // sent, inside the same invocation's background window.
+  after(() => mirrorAttachmentsToDrive(created.id, created.refNumber, actor, attachments))
 
   return created
 }
@@ -489,10 +498,12 @@ export async function addApprovalEvidence(
       }
     }
     if (links.length > 0) {
+      // Cap counts USER links only — automatic Drive-mirror rows must not
+      // eat the submitter's budget (nor let a request exceed it invisibly).
       const [{ n: existingLinks }] = await tx
         .select({ n: sql<number>`count(*)::int` })
         .from(approvalLink)
-        .where(eq(approvalLink.requestId, requestId))
+        .where(and(eq(approvalLink.requestId, requestId), eq(approvalLink.source, 'user')))
       if (existingLinks + links.length > MAX_LINKS_PER_REQUEST) {
         throw Object.assign(new Error(`Max ${MAX_LINKS_PER_REQUEST} links per request`), { statusCode: 400 })
       }
@@ -544,7 +555,8 @@ export async function addApprovalEvidence(
   await slackThreadEvent(updatedRow.slackMessageTs, `📎 ${shortEmail(actor.email)} added ${bits.join(' + ')}`)
     .catch(() => {})
 
-  await mirrorAttachmentsToDrive(requestId, updatedRow.refNumber, actor, attachments)
+  // Off the response path — same reasoning as createApprovalRequest.
+  after(() => mirrorAttachmentsToDrive(requestId, updatedRow.refNumber, actor, attachments))
 
   return { attachmentsAdded: attachments.length, linksAdded: links.length }
 }
@@ -611,6 +623,10 @@ export async function decideApprovalRequest(
   if (decision === 'rejected' && !note?.trim()) {
     throw Object.assign(new Error('A comment is required when rejecting a request'), { statusCode: 400 })
   }
+
+  // Right after a deploy the DB may be behind — heal before the SELECTs
+  // below enumerate columns that don't exist yet (memoized, ~free later).
+  await ensureApprovalsSchema().catch(() => {})
   // Latest viewed event BEFORE the transaction so the delta excludes our
   // own writes. Absence is recorded honestly as serverReviewMs=null (the
   // approver decided without opening the detail — an auditor red flag the
@@ -802,6 +818,7 @@ export async function decideApprovalRequest(
  * role, or marked as Finance approver in Access Control). Used for
  * eligibility outside the per-request snapshot, e.g. Mark as Paid. */
 export async function isFinancePoolMember(userId: string): Promise<boolean> {
+  await ensureApprovalsSchema().catch(() => {}) // finance_approver may be pending post-deploy
   const [row] = await db
     .select({ id: user.id })
     .from(user)
@@ -823,6 +840,7 @@ export async function markApprovalPaid(
   paymentReference: string,
   ctx: SoxRequestContext,
 ) {
+  await ensureApprovalsSchema().catch(() => {})
   const updatedRow = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select()
@@ -875,6 +893,7 @@ export async function cancelApprovalRequest(
   ctx: SoxRequestContext,
   actorIsAdmin: boolean,
 ) {
+  await ensureApprovalsSchema().catch(() => {})
   const updatedRow = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select()

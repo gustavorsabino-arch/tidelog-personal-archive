@@ -54,6 +54,7 @@ type QbStateJoinRow = {
   classOverride: string | null
   postedVendor: string | null
   postedClass: string | null
+  postedCounterpartyGl: string | null
 }
 
 type PerTokenGlJoinRow = {
@@ -153,7 +154,13 @@ export function rowToTransaction(
     description: qbState?.description ?? null,
     descriptionDefault: defaultDescription(base),
     walletGlAccount: walletAccountCode,
-    counterpartyGlAccount: counterpartyGl?.glAccountNumber ?? null,
+    // Posted rows show the IMMUTABLE counterparty-GL snapshot written at
+    // post time (same faithful-display rule as postedGlAccount) — a later
+    // map edit must not rewrite what the export/list say went to QB.
+    // Legacy rows posted before the snapshot column fall back to the map.
+    counterpartyGlAccount: isPosted && qbState?.postedCounterpartyGl
+      ? qbState.postedCounterpartyGl
+      : (counterpartyGl?.glAccountNumber ?? null),
     glAccountOverride: qbState?.glAccountOverride ?? null,
     counterpartyGlOverride: qbState?.counterpartyGlOverride ?? null,
     // Wave 2c — qb_post fields. qbPostRow is null when no qb_post row is linked
@@ -306,6 +313,7 @@ export async function getTreasuryTransactions({
         classOverride: txQbState.classOverride,
         postedVendor: txQbState.postedVendor,
         postedClass: txQbState.postedClass,
+        postedCounterpartyGl: txQbState.postedCounterpartyGl,
       },
       counterpartyGl: {
         // D10 marker — counterpartyGlMap.entityId is notNull on the table.

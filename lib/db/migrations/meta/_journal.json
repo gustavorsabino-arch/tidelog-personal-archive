@@ -218,6 +218,13 @@
       "when": 1787321913499,
       "tag": "0030_steep_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1787338364538,
+      "tag": "0031_sleepy_stingray",
+      "breakpoints": true
     }
   ]
 }

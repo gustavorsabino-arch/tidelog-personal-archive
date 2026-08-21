@@ -22,13 +22,17 @@ export async function GET(req: Request) {
   const { deny } = await requirePermission('admin:manage_data', req)
   if (deny) return deny
 
+  // Keyed per (wallet, counterparty, DIRECTION) and restricted to LIVE
+  // posts — exactly mirroring lib/qb/posting-history.ts, so each audit row
+  // shows precisely what the smart prefill will show for that direction.
   const rows = await db.execute(sql`
     WITH last_posted AS (
-      SELECT DISTINCT ON (t.wallet_address, t.counterparty)
+      SELECT DISTINCT ON (t.wallet_address, t.counterparty, t.direction)
         t.entity_id,
         t.wallet_address,
         t.counterparty,
-        s.counterparty_gl_override AS history_gl,
+        t.direction,
+        COALESCE(s.posted_counterparty_gl, s.counterparty_gl_override) AS history_gl,
         t.block_time AS last_posted_at
       FROM "app"."tx_qb_state" s
       JOIN "app"."transaction" t
@@ -36,9 +40,12 @@ export async function GET(req: Request) {
        AND t.wallet_address = s.wallet_address
        AND t.direction = s.direction
        AND t.asset = s.asset
+      JOIN "app"."qb_post" p
+        ON p.id = s.post_id
+       AND p.posting_status IN ('posted', 'posted_modified', 'posted_manually')
       WHERE s.posted_gl_account IS NOT NULL
         AND t.counterparty IS NOT NULL
-      ORDER BY t.wallet_address, t.counterparty, t.block_time DESC
+      ORDER BY t.wallet_address, t.counterparty, t.direction, t.block_time DESC
     )
     SELECT
       lp.entity_id,
@@ -46,6 +53,7 @@ export async function GET(req: Request) {
       lp.wallet_address,
       COALESCE(cw.label, lp.counterparty) AS counterparty_label,
       lp.counterparty,
+      lp.direction,
       lp.history_gl,
       m.gl_account_number AS map_gl,
       to_char(lp.last_posted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS last_posted_on,
@@ -59,6 +67,7 @@ export async function GET(req: Request) {
          AND s2.asset = t2.asset
         WHERE t2.wallet_address = lp.wallet_address
           AND t2.counterparty = lp.counterparty
+          AND t2.direction = lp.direction
           AND t2.price_source IS DISTINCT FROM 'genesis'
           AND s2.posted_gl_account IS NULL
           AND s2.counterparty_gl_override IS NULL
@@ -71,13 +80,14 @@ export async function GET(req: Request) {
     WHERE lp.history_gl IS NOT NULL
       AND m.gl_account_number IS NOT NULL
       AND lp.history_gl <> m.gl_account_number
-    ORDER BY lp.entity_id, w.label, counterparty_label
+    ORDER BY lp.entity_id, w.label, counterparty_label, lp.direction
   `) as unknown as {
     entity_id: string
     wallet_label: string | null
     wallet_address: string
     counterparty_label: string
     counterparty: string
+    direction: 'in' | 'out'
     history_gl: string
     map_gl: string
     last_posted_on: string
@@ -93,6 +103,7 @@ export async function GET(req: Request) {
       entity: r.entity_id,
       wallet: r.wallet_label ?? r.wallet_address,
       counterparty: r.counterparty_label,
+      direction: r.direction,
       lastPostedGl: r.history_gl,
       oldMapGl: r.map_gl,
       lastPostedOn: r.last_posted_on,

@@ -57,6 +57,7 @@ function str(v: unknown): string | null {
 export async function POST(req: NextRequest) {
   const { user, deny } = await requirePermission('admin:manage_data', req)
   if (deny) return deny
+  await ensureApprovalsSchema().catch(() => {})
   const b = await req.json().catch(() => ({})) as Body
   const vendorName = str(b.vendorName)
   const glAccount = str(b.glAccount)
@@ -92,6 +93,7 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const { user, deny } = await requirePermission('admin:manage_data', req)
   if (deny) return deny
+  await ensureApprovalsSchema().catch(() => {})
   const b = await req.json().catch(() => ({})) as Body
   const vendorName = str(b.vendorName)
   if (!vendorName) return NextResponse.json({ error: 'vendorName is required' }, { status: 400 })
@@ -125,6 +127,7 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const { user, deny } = await requirePermission('admin:manage_data', req)
   if (deny) return deny
+  await ensureApprovalsSchema().catch(() => {})
   const name = new URL(req.url).searchParams.get('name')?.trim()
   if (!name) return NextResponse.json({ error: 'name query param is required' }, { status: 400 })
 
