@@ -217,6 +217,21 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
     return n
   }, [recon])
 
+  // Old ledger rows are history, not work: candidates/orphans older than
+  // 120 days belong to completed contracts and only add noise.
+  const historyCutoff = useMemo(
+    () => new Date(Date.now() - 120 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+    [],
+  )
+  const recentCandidates = useMemo(
+    () => recon.candidates.filter((c) => c.date >= historyCutoff),
+    [recon, historyCutoff],
+  )
+  const recentOrphans = useMemo(
+    () => recon.orphanNegatives.filter((o) => o.date >= historyCutoff),
+    [recon, historyCutoff],
+  )
+
   // "To book" list for the selected month.
   const toBook = useMemo(() => {
     const out: { item: PrepaymentApiRow; cell: MonthCell }[] = []
@@ -228,6 +243,50 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
     }
     return out
   }, [activeItems, recon, bookMonth])
+
+  // ── Global monthly JE: one QB journal entry with every pending release ──
+  const [postingJe, setPostingJe] = useState(false)
+  const jeLines = useMemo(() =>
+    toBook
+      .filter(({ cell }) => cell.status === 'overdue') // nothing posted yet — mismatches need a human look first
+      .map(({ item: it, cell }) => ({
+        vendorName: it.vendorName,
+        amount: cell.scheduled,
+        expenseGlAccount: it.expenseGlAccount,
+        className: it.className,
+      })),
+    [toBook])
+  const jeTotal = useMemo(() => Math.round(jeLines.reduce((s, l) => s + l.amount, 0) * 100) / 100, [jeLines])
+  const jeMissingGl = jeLines.filter((l) => !l.expenseGlAccount)
+
+  async function postGlobalJe() {
+    if (jeLines.length === 0 || jeMissingGl.length > 0) return
+    const summary = jeLines
+      .map((l) => `  DR ${l.expenseGlAccount}${l.className ? ` (${l.className})` : ''}  ${fmtUSD(l.amount)}  — ${l.vendorName}`)
+      .join('\n')
+    const ok = window.confirm(
+      `Post ONE journal entry to QuickBooks (${entity}), dated ${lastDayOfMonth(bookMonth)}?\n\n${summary}\n  CR ${account} Prepaid  ${fmtUSD(jeTotal)}\n\nThis creates a real JE in QuickBooks.`,
+    )
+    if (!ok) return
+    setPostingJe(true)
+    setError(null)
+    try {
+      const res = await apiFetch<{ docNumber: string; qbJournalEntryId: string; total: number }>(
+        '/api/prepayments/post-je',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ entity, month: bookMonth, prepaidAccount: account, lines: jeLines }),
+        },
+      )
+      flash(`✓ Posted ${res.docNumber} to QuickBooks — ${fmtUSD(res.total)} across ${jeLines.length} contracts`)
+      await load() // the fresh GL shows the new amortizations → cells turn ✓
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Posting failed')
+    } finally {
+      setPostingJe(false)
+    }
+  }
 
   function openAdd(prefill?: Partial<FormState>) {
     setForm({ ...EMPTY_FORM, startMonth: currentYm(), ...prefill })
@@ -455,23 +514,49 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
             Nothing pending for {bookMonth} — every scheduled amortization is posted. ✓
           </div>
         ) : (
-          <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 8 }}>
-            {toBook.map(({ item: it, cell }) => (
-              <li key={it.id} style={{ fontSize: '0.8rem', display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                <span style={{ color: CELL_STYLE[cell.status].fg, fontWeight: 700 }}>{CELL_STYLE[cell.status].icon}</span>
-                <strong>{it.vendorName}</strong>
-                <span style={{ fontFamily: 'var(--mono)' }}>
-                  DR {it.expenseGlAccount ?? '⚠ set expense GL'}{it.className ? ` (${it.className})` : ''} {fmtUSD(cell.scheduled)}
-                  {' · '}CR {account} Prepaid
-                </span>
-                {cell.status === 'mismatch' ? (
-                  <span style={{ color: '#d93025', fontSize: '0.7rem' }}>
-                    posted {fmtUSD(cell.posted)} — expected {fmtUSD(cell.scheduled)}
+          <>
+            <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 8 }}>
+              {toBook.map(({ item: it, cell }) => (
+                <li key={it.id} style={{ fontSize: '0.8rem', display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <span style={{ color: CELL_STYLE[cell.status].fg, fontWeight: 700 }}>{CELL_STYLE[cell.status].icon}</span>
+                  <strong>{it.vendorName}</strong>
+                  <span style={{ fontFamily: 'var(--mono)' }}>
+                    DR {it.expenseGlAccount ?? '⚠ set expense GL'}{it.className ? ` (${it.className})` : ''} {fmtUSD(cell.scheduled)}
+                    {' · '}CR {account} Prepaid
                   </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+                  {cell.status === 'mismatch' ? (
+                    <span style={{ color: '#d93025', fontSize: '0.7rem' }}>
+                      posted {fmtUSD(cell.posted)} — expected {fmtUSD(cell.scheduled)} · excluded from the global JE, resolve manually
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            {jeLines.length > 0 ? (
+              <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                <button
+                  className="fsel"
+                  onClick={() => void postGlobalJe()}
+                  disabled={postingJe || jeMissingGl.length > 0}
+                  style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)', fontWeight: 700 }}
+                  title={jeMissingGl.length > 0
+                    ? `Set the expense GL on: ${jeMissingGl.map((l) => l.vendorName).join(', ')}`
+                    : `Creates ONE journal entry in QuickBooks dated ${lastDayOfMonth(bookMonth)}`}
+                >
+                  {postingJe ? 'Posting to QuickBooks…' : `Post global JE to QB — ${fmtUSD(jeTotal)} (${jeLines.length} lines)`}
+                </button>
+                {jeMissingGl.length > 0 ? (
+                  <span style={{ fontSize: '0.7rem', color: '#D4A017' }}>
+                    ⚠ set the expense GL on {jeMissingGl.map((l) => l.vendorName).join(', ')} first
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
+                    One JE dated {lastDayOfMonth(bookMonth)}: {jeLines.length} debits · CR {account} {fmtUSD(jeTotal)}
+                  </span>
+                )}
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -479,13 +564,16 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           DERIVED from finance's booking convention: the original JE expenses
           the first month and parks the rest in the prepaid account, so
           contract total ("Total $X" in the memo) − prepaid = 1 month. */}
-      {recon.candidates.length > 0 ? (
+      {recentCandidates.length > 0 ? (
         <div className="card" style={{ padding: 16, marginBottom: 18 }}>
           <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            New prepayments detected in QB (account {account}) — {recon.candidates.length} to register
+            New prepayments detected in QB (account {account}) — {recentCandidates.length} to register
+            {recon.candidates.length > recentCandidates.length
+              ? ` · ${recon.candidates.length - recentCandidates.length} older additions hidden (completed history)`
+              : ''}
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
-            {recon.candidates.map((c, i) => {
+            {recentCandidates.map((c, i) => {
               const s = suggestFromAddition(c)
               const master = s.vendorGuess ? vendorMaster.get(s.vendorGuess.toLowerCase()) : undefined
               return (
@@ -548,15 +636,18 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           one-click registration: the memo's "Total $X" + the observed
           monthly amount derive the full term, and the first observed month
           anchors the schedule so past ✓s line up. */}
-      {recon.orphanNegatives.length > 0 ? (
+      {recentOrphans.length > 0 ? (
         <div className="card" style={{ padding: 16, marginBottom: 18 }}>
           <div style={{ fontSize: '0.72rem', color: '#d93025', marginBottom: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Amortizations in QB with no registered prepayment — register the contract to start tracking it
+            {recon.orphanNegatives.length > recentOrphans.length
+              ? ` · ${recon.orphanNegatives.length - recentOrphans.length} older ones hidden (completed history)`
+              : ''}
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
             {(() => {
               const groups = new Map<string, GlRow[]>()
-              for (const o of recon.orphanNegatives) {
+              for (const o of recentOrphans) {
                 const key = (o.memo ?? o.name ?? '—').toLowerCase().replace(/\s+/g, ' ').trim()
                 groups.set(key, [...(groups.get(key) ?? []), o])
               }

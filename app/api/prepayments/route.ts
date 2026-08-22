@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { prepayment } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import { toDbEntity } from '@/lib/entity'
 import { logAudit } from '@/lib/audit'
+import { OPCO_PREPAYMENT_SEED } from '@/lib/prepayments/seed-data'
 
 export const runtime = 'nodejs'
 
@@ -36,10 +37,35 @@ export async function GET(req: NextRequest) {
 
   try {
     await ensureApprovalsSchema().catch(() => {})
+    const entityId = toDbEntity(entity)
+
+    // One-time seed: the Opco register starts pre-loaded with the 13
+    // contracts finance classified in the 14000 ledger (validated terms),
+    // so the map renders complete on first open — no manual registration.
+    if (entityId === 'opco') {
+      const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(prepayment)
+        .where(eq(prepayment.entityId, 'opco'))
+      if (Number(n) === 0) {
+        await db.insert(prepayment).values(OPCO_PREPAYMENT_SEED.map((s) => ({
+          entityId: 'opco',
+          prepaidAccount: '14000',
+          vendorName: s.vendorName,
+          description: s.description,
+          totalAmount: s.totalAmount.toFixed(2),
+          startMonth: s.startMonth,
+          months: s.months,
+          expenseGlAccount: s.expenseGlAccount,
+          className: s.className,
+          sourceDate: s.sourceDate,
+          updatedBy: 'ledger-seed',
+        })))
+      }
+    }
+
     const items = await db
       .select()
       .from(prepayment)
-      .where(eq(prepayment.entityId, toDbEntity(entity)))
+      .where(eq(prepayment.entityId, entityId))
       .orderBy(asc(prepayment.startMonth), asc(prepayment.vendorName))
     return NextResponse.json({ items })
   } catch (err) {

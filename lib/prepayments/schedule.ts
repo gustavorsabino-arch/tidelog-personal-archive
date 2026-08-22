@@ -100,16 +100,43 @@ export function rowMatchesVendor(row: GlRow, vendorName: string): boolean {
   return tokens.every((t) => hay.includes(` ${t} `))
 }
 
+// Generic words that appear in almost every 14000 memo — useless as
+// discriminators when matching by description tokens.
+const GENERIC_MEMO_TOKENS = new Set([
+  'total', 'prepaid', 'monthly', 'services', 'service', 'invoice', 'transfer',
+  'mercury', 'opco', 'withdrawal', 'usdc', 'inc', 'labs', 'llc', 'ltd',
+])
+
+/** Does this GL row belong to the item? Two signals, either suffices:
+ *  1. the vendor name appears in the row text (whole-word tokens), or
+ *  2. the item's DESCRIPTION shares distinctive tokens with the row memo —
+ *     needed because many QB entries carry only a tx-hash memo (identical
+ *     on the addition and every amortization) and no vendor text at all.
+ *     One long token (≥10 chars, e.g. a hash) or two medium ones (≥5) count. */
+export function itemMatchesRow(
+  item: { vendorName: string; description: string | null },
+  row: GlRow,
+): boolean {
+  if (rowMatchesVendor(row, item.vendorName)) return true
+  if (!item.description) return false
+  const hay = ` ${normalize(`${row.name ?? ''} ${row.memo ?? ''}`)} `
+  const tokens = normalize(item.description)
+    .split(' ')
+    .filter((t) => t.length >= 5 && !GENERIC_MEMO_TOKENS.has(t) && !/^\d{1,4}$/.test(t))
+  const hits = tokens.filter((t) => hay.includes(` ${t} `))
+  return hits.some((t) => t.length >= 10) || hits.length >= 2
+}
+
 /** True when a positive GL row is already represented by an item — linked by
- * txnId, or same month + same amount + vendor text match. */
+ * txnId, or same month + same amount + vendor/description match. */
 function additionIsLinked(row: GlRow, items: PrepaymentItem[]): boolean {
   return items.some((it) => {
     if (it.sourceTxnId && row.txnId && it.sourceTxnId === row.txnId) return true
     const rowMonth = row.date.slice(0, 7)
     const sourceMonth = it.sourceDate?.slice(0, 7) ?? it.startMonth
     return rowMonth === sourceMonth
-      && Math.abs((row.amountUsd ?? 0) - it.totalAmount) < 0.01
-      && rowMatchesVendor(row, it.vendorName)
+      && Math.abs((row.amountUsd ?? 0) - it.totalAmount) < 0.02
+      && itemMatchesRow(it, row)
   })
 }
 
@@ -222,7 +249,7 @@ export function reconcile(
   for (const row of negatives) {
     let best: PrepaymentItem | null = null
     for (const it of items) {
-      if (!rowMatchesVendor(row, it.vendorName)) continue
+      if (!itemMatchesRow(it, row)) continue
       if (!best || it.vendorName.length > best.vendorName.length) best = it
     }
     if (best) rowAssignment.set(row, best.id)
@@ -249,7 +276,7 @@ export function reconcile(
       const posted = postedByMonth.get(month) ?? 0
       let status: CellStatus
       if (month > currentMonth && posted === 0) status = 'scheduled'
-      else if (Math.abs(posted - scheduled) < 0.01) status = 'posted'
+      else if (Math.abs(posted - scheduled) <= 0.02) status = 'posted' // 2¢ rounding tolerance
       else if (posted === 0) status = 'overdue'
       else status = 'mismatch'
       return { month, scheduled, posted, status }
