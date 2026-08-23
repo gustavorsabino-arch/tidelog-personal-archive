@@ -13,13 +13,14 @@
  */
 export type PrepaymentSeed = {
   vendorName: string
-  className: string
-  expenseGlAccount: string
-  totalAmount: number      // the prepaid balance parked in 14000
+  className: string | null        // null = pick in the Edit modal (entity has no confirmed class yet)
+  expenseGlAccount: string | null // null = pick in the Edit modal before posting the JE
+  totalAmount: number      // the prepaid balance parked in the prepaid account
   startMonth: string       // first amortization month
   months: number
   description: string
   sourceDate: string
+  prepaidAccount?: string  // defaults to the entity's primary prepaid account
 }
 
 export const OPCO_PREPAYMENT_SEED: PrepaymentSeed[] = [
@@ -102,3 +103,52 @@ export const OPCO_PREPAYMENT_SEED: PrepaymentSeed[] = [
     sourceDate: '2026-01-31',
   },
 ]
+
+/**
+ * Foundation register (account 14110) — built 2026-08-23 from the live QB
+ * additions. Both follow the Opco convention: annual fee, first month
+ * expensed at payment, remaining 11 parked in prepaid.
+ *   Hash Cayman: $26,250/yr directorship (1 Jan–31 Dec 2026) → 11 × 2,187.50
+ *   Horizon Global: $25,000/yr independent director (27 Feb 26–26 Feb 27)
+ *     → 11 × 2,083.33
+ * The 2025 contracts (Petri, Horizons, Fireblocks Ltd, Argus Inc.) are
+ * completed history and stay unregistered. Expense GL + class are left for
+ * finance to pick in Edit — Foundation's chart isn't confirmed yet.
+ */
+export const FOUNDATION_PREPAYMENT_SEED: PrepaymentSeed[] = [
+  {
+    vendorName: 'Hash Cayman Ltd', className: null, expenseGlAccount: null,
+    totalAmount: 24062.50, startMonth: '2026-02', months: 11,
+    description: 'Directorship Services Annual Fee (1 Jan - 31 Dec 2026) — contract $26,250/yr, Jan expensed at payment',
+    sourceDate: '2026-01-16', prepaidAccount: '14110',
+  },
+  {
+    vendorName: 'Horizon Global', className: null, expenseGlAccount: null,
+    totalAmount: 22916.67, startMonth: '2026-03', months: 11,
+    description: 'Independent Director Services 27 Feb 2026 - 26 Feb 2027 — contract $25,000/yr, first month expensed at payment',
+    sourceDate: '2026-03-02', prepaidAccount: '14110',
+  },
+]
+
+/**
+ * Zagreus register (account 14001) — from the live QB additions. The active
+ * contract is the Workers Comp renewal; the expired 11/15/25–4/14/26 policy
+ * ($535.54) stays unregistered history. 12-month term is inferred from the
+ * standard annual policy cycle (renewal aligned to 4/15) — confirm against
+ * the first amortizations the map shows.
+ */
+export const ZAGREUS_PREPAYMENT_SEED: PrepaymentSeed[] = [
+  {
+    vendorName: 'ShelterPoint', className: null, expenseGlAccount: null,
+    totalAmount: 1504.09, startMonth: '2026-04', months: 12,
+    description: 'Prepaid Workers Compensation Insurance 4/15/26 - 4/14/27 (renewal of the 11/15/25-4/14/26 policy)',
+    sourceDate: '2026-04-02', prepaidAccount: '14001',
+  },
+]
+
+/** Seed lists by DB entity id, with each entity's primary prepaid account. */
+export const PREPAYMENT_SEEDS_BY_ENTITY: Record<string, { defaultAccount: string; items: PrepaymentSeed[] }> = {
+  opco: { defaultAccount: '14000', items: OPCO_PREPAYMENT_SEED },
+  foundation: { defaultAccount: '14110', items: FOUNDATION_PREPAYMENT_SEED },
+  zagreus: { defaultAccount: '14001', items: ZAGREUS_PREPAYMENT_SEED },
+}

@@ -6,7 +6,7 @@ import { requirePermission } from '@/lib/auth/require-permission'
 import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import { toDbEntity } from '@/lib/entity'
 import { logAudit } from '@/lib/audit'
-import { OPCO_PREPAYMENT_SEED } from '@/lib/prepayments/seed-data'
+import { PREPAYMENT_SEEDS_BY_ENTITY } from '@/lib/prepayments/seed-data'
 import { errorMessage } from '@/lib/errors'
 
 export const runtime = 'nodejs'
@@ -40,23 +40,25 @@ export async function GET(req: NextRequest) {
     await ensureApprovalsSchema().catch(() => {})
     const entityId = toDbEntity(entity)
 
-    // Self-healing seed: the Opco register is pre-loaded with the contracts
-    // finance classified in the 14000 ledger (validated terms). Any seed
-    // contract missing from the DB — first open, or rows lost for whatever
-    // reason — is re-inserted, keyed by vendor + start month, so the map is
-    // never empty. Rows already present (edited or archived) are untouched.
-    if (entityId === 'opco') {
+    // Self-healing seed: each entity's register is pre-loaded with the
+    // contracts confirmed from its prepaid-account ledger (validated terms).
+    // Any seed contract missing from the DB — first open, or rows lost for
+    // whatever reason — is re-inserted, keyed by vendor + start month, so
+    // the map is never empty. Rows already present (edited or archived) are
+    // untouched.
+    const seed = PREPAYMENT_SEEDS_BY_ENTITY[entityId]
+    if (seed) {
       const existing = await db
         .select({ vendorName: prepayment.vendorName, startMonth: prepayment.startMonth })
         .from(prepayment)
-        .where(eq(prepayment.entityId, 'opco'))
+        .where(eq(prepayment.entityId, entityId))
       const have = new Set(existing.map((r) => `${r.vendorName.trim().toLowerCase()}|${r.startMonth}`))
-      const missing = OPCO_PREPAYMENT_SEED
+      const missing = seed.items
         .filter((s) => !have.has(`${s.vendorName.trim().toLowerCase()}|${s.startMonth}`))
       if (missing.length > 0) {
         await db.insert(prepayment).values(missing.map((s) => ({
-          entityId: 'opco',
-          prepaidAccount: '14000',
+          entityId,
+          prepaidAccount: s.prepaidAccount ?? seed.defaultAccount,
           vendorName: s.vendorName,
           description: s.description,
           totalAmount: s.totalAmount.toFixed(2),
