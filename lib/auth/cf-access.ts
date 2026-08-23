@@ -37,9 +37,17 @@ export async function fetchCfJwks(teamDomain: string): Promise<{ keys: any[] }> 
     return cachedJwks.data
   }
   const url = `https://${teamDomain}/cdn-cgi/access/certs`
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`CF JWKS fetch failed: ${res.status} ${res.statusText}`)
-  const data = await res.json() as { keys: any[] }
-  cachedJwks = { fetchedAt: now, data }
-  return data
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) })
+    if (!res.ok) throw new Error(`CF JWKS fetch failed: ${res.status} ${res.statusText}`)
+    const data = await res.json() as { keys: any[] }
+    cachedJwks = { fetchedAt: now, data }
+    return data
+  } catch (err) {
+    // Cloudflare rotates keys rarely — a stale key set still verifies real
+    // JWTs, while throwing locks every user out until the endpoint recovers.
+    // Serve stale and let the next request retry the fetch.
+    if (cachedJwks) return cachedJwks.data
+    throw err
+  }
 }

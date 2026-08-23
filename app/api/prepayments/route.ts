@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { and, asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { prepayment } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
@@ -40,14 +40,21 @@ export async function GET(req: NextRequest) {
     await ensureApprovalsSchema().catch(() => {})
     const entityId = toDbEntity(entity)
 
-    // One-time seed: the Opco register starts pre-loaded with the 13
-    // contracts finance classified in the 14000 ledger (validated terms),
-    // so the map renders complete on first open — no manual registration.
+    // Self-healing seed: the Opco register is pre-loaded with the contracts
+    // finance classified in the 14000 ledger (validated terms). Any seed
+    // contract missing from the DB — first open, or rows lost for whatever
+    // reason — is re-inserted, keyed by vendor + start month, so the map is
+    // never empty. Rows already present (edited or archived) are untouched.
     if (entityId === 'opco') {
-      const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(prepayment)
+      const existing = await db
+        .select({ vendorName: prepayment.vendorName, startMonth: prepayment.startMonth })
+        .from(prepayment)
         .where(eq(prepayment.entityId, 'opco'))
-      if (Number(n) === 0) {
-        await db.insert(prepayment).values(OPCO_PREPAYMENT_SEED.map((s) => ({
+      const have = new Set(existing.map((r) => `${r.vendorName.trim().toLowerCase()}|${r.startMonth}`))
+      const missing = OPCO_PREPAYMENT_SEED
+        .filter((s) => !have.has(`${s.vendorName.trim().toLowerCase()}|${s.startMonth}`))
+      if (missing.length > 0) {
+        await db.insert(prepayment).values(missing.map((s) => ({
           entityId: 'opco',
           prepaidAccount: '14000',
           vendorName: s.vendorName,

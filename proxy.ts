@@ -83,6 +83,22 @@ export async function proxy(request: NextRequest) {
       try {
         session = await auth.api.getSession({ headers: request.headers })
       } catch (err) {
+        // better-auth resolves an invalid/absent session to null — a throw
+        // here means infrastructure trouble (e.g. the session table is
+        // unreachable). Answering 401 would present a DB blip as a mass
+        // logout, so degrade to 503 unless the error explicitly carries an
+        // auth status.
+        const status = (err as { statusCode?: unknown }).statusCode
+          ?? (err as { status?: unknown }).status
+        const isAuthRejection = status === 401 || status === 403
+          || status === 'UNAUTHORIZED' || status === 'FORBIDDEN'
+        if (!isAuthRejection) {
+          logAudit({
+            action: 'access.error.session_unavailable',
+            metadata: { reason: (err as Error)?.message || String(err), path: pathname },
+          }).catch(() => {})
+          return serviceUnavailableResponse(request)
+        }
         await logAudit({
           action: 'access.denied.session_error',
           metadata: { reason: (err as Error).message, path: pathname },

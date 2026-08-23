@@ -196,7 +196,7 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
       problems.push(`QB ledger: ${e instanceof Error ? e.message : 'failed'}`)
     }
 
-    setError(problems.length > 0 ? `${problems.join(' · ')} — click "Refresh from QB" to retry` : null)
+    setError(problems.length > 0 ? `${problems.join(' · ')} — click Check QB postings to retry` : null)
     setLoading(false)
   }, [entity, account])
 
@@ -413,7 +413,7 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           onChange={(e) => setAccount(e.target.value.trim())}
         />
         <button className="fsel" onClick={() => void load()} disabled={loading}>
-          {loading ? 'Loading…' : 'Refresh from QB'}
+          {loading ? 'Loading…' : 'Check QB postings'}
         </button>
         <button
           className="fsel"
@@ -601,11 +601,10 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
         )}
       </div>
 
-      {/* Import candidates — additions in QB not registered yet. Terms are
-          DERIVED from finance's booking convention: the original JE expenses
-          the first month and parks the rest in the prepaid account, so
-          contract total ("Total $X" in the memo) − prepaid = 1 month. */}
-      {recentCandidates.length > 0 ? (
+      {/* Candidate/orphan suggestion cards removed 2026-08-23 at finance's
+          request — the register (seeded from their classified ledger) is the
+          single source of terms; new contracts enter via Add prepayment. */}
+      {false && recentCandidates.length > 0 ? (
         <div className="card" style={{ padding: 16, marginBottom: 18 }}>
           <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             New prepayments detected in QB (account {account}) — {recentCandidates.length} to register
@@ -673,11 +672,7 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
         </div>
       ) : null}
 
-      {/* Orphan amortizations — grouped per contract (same memo), with
-          one-click registration: the memo's "Total $X" + the observed
-          monthly amount derive the full term, and the first observed month
-          anchors the schedule so past ✓s line up. */}
-      {recentOrphans.length > 0 ? (
+      {false && recentOrphans.length > 0 ? (
         <div className="card" style={{ padding: 16, marginBottom: 18 }}>
           <div style={{ fontSize: '0.72rem', color: '#d93025', marginBottom: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Amortizations in QB with no registered prepayment — register the contract to start tracking it

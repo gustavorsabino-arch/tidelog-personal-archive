@@ -57,6 +57,9 @@ async function requestQboTokens(body: URLSearchParams): Promise<QboTokenResponse
       Accept: 'application/json',
     },
     body,
+    // A hung token endpoint must not pin the function (and, on the posting
+    // path, the DB advisory lock) until maxDuration kills it.
+    signal: AbortSignal.timeout(20_000),
   })
 
   if (!tokenRes.ok) {
@@ -81,16 +84,24 @@ async function requestQboJson<T>(
     },
     body: init?.body,
     cache: 'no-store',
+    // Big GL reports are slow but bounded; a blackholed connection is not.
+    // Post-batch holds a pg advisory lock across this call, so it must fail
+    // in bounded time rather than ride to the function's maxDuration.
+    signal: AbortSignal.timeout(60_000),
   })
 }
 
 function getRetryDelayMs(response: Response, attempt: number): number {
+  // Honor Retry-After but never sleep unbounded — QB may send large values,
+  // and on the posting path this sleep happens while holding the advisory
+  // lock inside an open transaction.
+  const MAX_RETRY_DELAY_MS = 10_000
   const retryAfterSeconds = Number.parseFloat(response.headers.get('retry-after') ?? '')
   if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
-    return retryAfterSeconds * 1000
+    return Math.min(retryAfterSeconds * 1000, MAX_RETRY_DELAY_MS)
   }
 
-  return 600 * 2 ** attempt
+  return Math.min(600 * 2 ** attempt, MAX_RETRY_DELAY_MS)
 }
 
 export function createQboConnectUrl(entity: QboEntity, email: string): string {
