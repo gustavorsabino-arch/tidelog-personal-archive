@@ -64,6 +64,11 @@ describe('rowMatchesVendor', () => {
     expect(rowMatchesVendor(row({ name: 'Horizons', memo: 'Independent Director Services global fee' }), 'Horizon Global')).toBe(true)
     expect(rowMatchesVendor(row({ name: 'ShelterPoint Group', memo: null }), 'ShelterPoint')).toBe(true)
   })
+  test('corporate suffixes are not required (real Foundation memo "Horizon Prepayment")', () => {
+    expect(rowMatchesVendor(row({ name: null, memo: 'Horizon Prepayment' }), 'Horizon Global')).toBe(true)
+    expect(rowMatchesVendor(row({ name: null, memo: 'TRM renewal' }), 'TRM Labs, Inc')).toBe(true)
+    expect(rowMatchesVendor(row({ name: null, memo: 'Prepayment misc' }), 'Horizon Global')).toBe(false)
+  })
 })
 
 describe('parseMemoMoney (real QB memo formats)', () => {
@@ -201,6 +206,35 @@ describe('reconcile', () => {
     expect(cells.find((c) => c.month === '2026-03')).toBeUndefined()
     expect(r.perItem.get('fb-new')!.postedTotal).toBe(3612.29)
     expect(r.orphanNegatives.length).toBe(2) // the old contract's rows
+  })
+
+  test('amount fallback: generic memo + no vendor matches the unique scheduled amount (real Zagreus case)', () => {
+    const sp = item({
+      id: 'sp', vendorName: 'ShelterPoint', totalAmount: 1504.09,
+      startMonth: '2026-05', months: 6, sourceDate: '2026-04-02',
+      description: 'Prepaid Workers Compensation Insurance 4/15/26 - 4/14/27',
+    })
+    const gl: GlRow[] = [
+      row({ date: '2026-05-31', name: null, memo: 'May-26 Monthly Prepaid Expenses: Prepaid Insurance Amortization', amountUsd: -250.68 }),
+      row({ date: '2026-06-30', name: null, memo: 'Jun-26 Monthly Prepaid Expenses: Prepaid Insurance Amortization', amountUsd: -250.68 }),
+      // old-policy tail: before the start month → must stay unmatched
+      row({ date: '2026-04-30', name: null, memo: 'Apr-26 Monthly Prepaid Expenses: Prepaid Insurance Amortization', amountUsd: -89.25 }),
+    ]
+    const r = reconcile([sp], gl, '2026-06')
+    const cells = r.perItem.get('sp')!.cells
+    expect(cells.find((c) => c.month === '2026-05')!.status).toBe('posted')
+    expect(cells.find((c) => c.month === '2026-06')!.status).toBe('posted')
+    expect(r.orphanNegatives.length).toBe(1)
+  })
+
+  test('amount fallback never guesses between two contracts with the same monthly amount', () => {
+    const a = item({ id: 'a', vendorName: 'Vendor Alpha', totalAmount: 1200, startMonth: '2026-05', months: 6 })
+    const b = item({ id: 'b', vendorName: 'Vendor Beta', totalAmount: 1200, startMonth: '2026-05', months: 6 })
+    const gl = [row({ date: '2026-05-31', name: null, memo: 'Monthly amortization', amountUsd: -200 })]
+    const r = reconcile([a, b], gl, '2026-05')
+    expect(r.perItem.get('a')!.postedTotal).toBe(0)
+    expect(r.perItem.get('b')!.postedTotal).toBe(0)
+    expect(r.orphanNegatives.length).toBe(1)
   })
 
   test('orphans and candidates', () => {

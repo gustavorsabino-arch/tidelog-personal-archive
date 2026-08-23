@@ -101,13 +101,24 @@ function stemmedHay(s: string): string {
   return ` ${normalize(s).split(' ').map(stem).join(' ')} `
 }
 
-/** Does this GL row's text mention the item's vendor? Every vendor token of
- * length ≥ 3 must appear as a WHOLE word in name+memo (word-boundary match,
- * so "AWS" never matches "JAWS"), singular/plural-insensitive. Vendors with
- * only short tokens fall back to matching the full normalized name. */
+// Corporate suffixes carry no identity and QB rows routinely drop them
+// ("Horizon Prepayment" for vendor "Horizon Global") — they must not be
+// REQUIRED for a match. If a vendor is nothing but suffixes, they stay.
+const VENDOR_STOPWORDS = new Set([
+  'inc', 'llc', 'ltd', 'corp', 'company', 'group', 'global', 'holdings',
+  'labs', 'services', 'solutions', 'technologies',
+])
+
+/** Does this GL row's text mention the item's vendor? Every DISTINCTIVE
+ * vendor token of length ≥ 3 must appear as a WHOLE word in name+memo
+ * (word-boundary match, so "AWS" never matches "JAWS"),
+ * singular/plural-insensitive. Vendors with only short tokens fall back to
+ * matching the full normalized name. */
 export function rowMatchesVendor(row: GlRow, vendorName: string): boolean {
   const hay = stemmedHay(`${row.name ?? ''} ${row.memo ?? ''}`)
-  const tokens = normalize(vendorName).split(' ').map(stem).filter((t) => t.length >= 3)
+  const all = normalize(vendorName).split(' ').filter((t) => t.length >= 3)
+  const distinctive = all.filter((t) => !VENDOR_STOPWORDS.has(t))
+  const tokens = (distinctive.length > 0 ? distinctive : all).map(stem)
   if (tokens.length === 0) {
     const short = normalize(vendorName)
     return short.length > 0 && hay.includes(` ${short} `)
@@ -261,6 +272,10 @@ export function reconcile(
   // Assign each negative row to at most ONE item: the matching item whose
   // vendor text is longest (most specific) — prevents "Orca" swallowing
   // "Orca Security" rows.
+  const scheduleByItem = new Map(items.map((it) => [
+    it.id,
+    new Map(monthlySchedule(it).map((s) => [s.month, s.amount])),
+  ]))
   const rowAssignment = new Map<GlRow, string>()
   for (const row of negatives) {
     const rowMonth = row.date.slice(0, 7)
@@ -275,6 +290,21 @@ export function reconcile(
       if (rowMonth > addMonths(it.startMonth, it.months + 2)) continue
       if (!itemMatchesRow(it, row)) continue
       if (!best || it.vendorName.length > best.vendorName.length) best = it
+    }
+    // Amount fallback: many QB amortizations carry only a generic memo and
+    // no vendor ("Monthly Prepaid Expenses: Prepaid Insurance Amortization").
+    // When text matches nothing, a row equal to exactly ONE item's scheduled
+    // amount for its month (±2¢) belongs to that item; an ambiguous amount
+    // stays unmatched — never guess between two contracts.
+    if (!best) {
+      const amt = Math.abs(row.amountUsd ?? 0)
+      const candidates = items.filter((it) => {
+        if (rowMonth < it.startMonth) return false
+        if (rowMonth > addMonths(it.startMonth, it.months + 2)) return false
+        const sched = scheduleByItem.get(it.id)?.get(rowMonth)
+        return sched !== undefined && Math.abs(sched - amt) <= 0.02
+      })
+      if (candidates.length === 1) best = candidates[0]
     }
     if (best) rowAssignment.set(row, best.id)
   }

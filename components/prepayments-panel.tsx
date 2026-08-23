@@ -614,7 +614,7 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                 <button
                   className="fsel"
                   onClick={() => { setJeError(null); setJeModalOpen(true) }}
-                  disabled={postingJe || jeMissingGl.length > 0}
+                  disabled={postingJe}
                   style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)', fontWeight: 700 }}
                   title={jeMissingGl.length > 0
                     ? `Set the expense GL on: ${jeMissingGl.map((l) => l.vendorName).join(', ')}`
@@ -739,6 +739,22 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                 {' '}One real journal entry will be created — don&apos;t close this browser tab until complete.
               </div>
 
+              {jeMissingGl.length > 0 ? (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 6,
+                    border: '1px solid var(--red, #dc2626)',
+                    background: 'color-mix(in srgb, var(--red, #dc2626) 8%, transparent)',
+                    fontSize: '0.78rem',
+                    color: 'var(--red, #dc2626)',
+                  }}
+                >
+                  <strong>Expense GL missing on: {jeMissingGl.map((l) => l.vendorName).join(', ')}.</strong>
+                  {' '}Click Edit on each contract row, pick the expense account (and class), save, then reopen this dialog.
+                </div>
+              ) : null}
+
               <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 12, background: 'var(--surface)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
                   <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -753,8 +769,8 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                     {jeLines.map((l, li) => (
                       <tr key={li} style={{ borderTop: li === 0 ? 'none' : '1px solid var(--border)' }}>
                         <td style={{ padding: '4px 8px 4px 0', color: 'var(--green, #10b981)', fontWeight: 600, width: 60 }}>Debit</td>
-                        <td style={{ padding: '4px 8px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-                          {l.expenseGlAccount}{l.className ? ` · ${l.className}` : ''}
+                        <td style={{ padding: '4px 8px', color: l.expenseGlAccount ? 'var(--muted)' : 'var(--red, #dc2626)', whiteSpace: 'nowrap' }}>
+                          {l.expenseGlAccount ? `${l.expenseGlAccount}${l.className ? ` · ${l.className}` : ''}` : '⚠ set expense GL'}
                         </td>
                         <td style={{ padding: '4px 8px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.vendorName}</td>
                         <td style={{ padding: '4px 0 4px 8px', textAlign: 'right', fontWeight: 500, whiteSpace: 'nowrap' }}>
@@ -795,8 +811,9 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
               <button
                 className="fsel"
                 onClick={() => void postGlobalJe()}
-                disabled={postingJe || jeLines.length === 0}
+                disabled={postingJe || jeLines.length === 0 || jeMissingGl.length > 0}
                 style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)', fontWeight: 700 }}
+                title={jeMissingGl.length > 0 ? `Set the expense GL on: ${jeMissingGl.map((l) => l.vendorName).join(', ')}` : undefined}
               >
                 {postingJe ? 'Posting…' : 'Post to QuickBooks'}
               </button>

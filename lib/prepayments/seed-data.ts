@@ -124,8 +124,8 @@ export const FOUNDATION_PREPAYMENT_SEED: PrepaymentSeed[] = [
   },
   {
     vendorName: 'Horizon Global', className: null, expenseGlAccount: null,
-    totalAmount: 22916.67, startMonth: '2026-03', months: 11,
-    description: 'Horizons — Independent Director Services 27 Feb 2026 - 26 Feb 2027 — contract $25,000/yr, first month expensed at payment',
+    totalAmount: 22916.67, startMonth: '2026-04', months: 11,
+    description: 'Horizons — Independent Director Services 27 Feb 2026 - 26 Feb 2027 — contract $25,000/yr, QB releases from Apr-2026',
     sourceDate: '2026-03-02', prepaidAccount: '14110',
   },
 ]
@@ -140,8 +140,8 @@ export const FOUNDATION_PREPAYMENT_SEED: PrepaymentSeed[] = [
 export const ZAGREUS_PREPAYMENT_SEED: PrepaymentSeed[] = [
   {
     vendorName: 'ShelterPoint', className: null, expenseGlAccount: null,
-    totalAmount: 1504.09, startMonth: '2026-04', months: 12,
-    description: 'Prepaid Workers Compensation Insurance 4/15/26 - 4/14/27 (renewal of the 11/15/25-4/14/26 policy)',
+    totalAmount: 1504.09, startMonth: '2026-05', months: 6,
+    description: 'Prepaid Workers Compensation Insurance 4/15/26 - 4/14/27 — QB releases 6 × 250.68 from May-2026',
     sourceDate: '2026-04-02', prepaidAccount: '14001',
   },
   // 14004 — the active contract; the 2025 software subscriptions and the

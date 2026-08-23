@@ -87,6 +87,18 @@ export async function GET(req: NextRequest) {
           await tx.delete(prepayment).where(inArray(prepayment.id, extraSeedIds))
         }
 
+        // Seed rows are declarative: an UNTOUCHED seed row whose (vendor,
+        // start month) left the seed list — terms corrected against real QB
+        // data — is removed and replaced by the corrected entry below.
+        // User-edited rows (updatedBy ≠ 'ledger-seed') are never touched.
+        const seedKeys = new Set(seed.items.map((s) => keyOf(s.vendorName, s.startMonth)))
+        const stale = [...keeper.entries()]
+          .filter(([key, r]) => r.updatedBy === 'ledger-seed' && !seedKeys.has(key))
+        if (stale.length > 0) {
+          await tx.delete(prepayment).where(inArray(prepayment.id, stale.map(([, r]) => r.id)))
+          for (const [key] of stale) keeper.delete(key)
+        }
+
         const missing = seed.items
           .filter((s) => !keeper.has(keyOf(s.vendorName, s.startMonth)))
         if (missing.length > 0) {
