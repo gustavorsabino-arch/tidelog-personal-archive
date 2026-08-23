@@ -144,14 +144,28 @@ export const ZAGREUS_PREPAYMENT_SEED: PrepaymentSeed[] = [
     description: 'Prepaid Workers Compensation Insurance 4/15/26 - 4/14/27 — QB releases 6 × 250.68 from May-2026',
     sourceDate: '2026-04-02', prepaidAccount: '14001',
   },
-  // 14004 — the active contract; the 2025 software subscriptions and the
-  // Jul-26 "ERP posting line" entries stay unregistered until finance
-  // identifies them.
+  // 14004 — confirmed by finance 2026-08-23: exactly these three contracts.
+  // The Jul-26 "ERP posting line" additions are the Rippling renewals net of
+  // July's release (contract 2,929.83 − 244.18 = 2,685.65 parked; contract
+  // 5,589.47 − 465.78 = 5,123.69), so the account amortizes 11 months from
+  // Aug-2026. The 2025 software subscriptions stay unregistered history.
   {
     vendorName: 'Blockworks', className: null, expenseGlAccount: null,
-    totalAmount: 1350, startMonth: '2026-07', months: 3,
-    description: 'Blockworks prepaid quarterly subscription (07/23/2026-10/23/26) Mercury CC',
+    totalAmount: 1350, startMonth: '2026-08', months: 3,
+    description: 'Blockworks prepaid quarterly (07/23/2026-10/23/26) Mercury CC — 3 × 450 from Aug-2026',
     sourceDate: '2026-07-23', prepaidAccount: '14004',
+  },
+  {
+    vendorName: 'Rippling HR', className: null, expenseGlAccount: null,
+    totalAmount: 2685.65, startMonth: '2026-08', months: 11,
+    description: 'Rippling HR annual plan — contract $2,929.83, Jul-26 (244.18) expensed at payment; ERP posting line ae98860b-dcf7-477c-b15a-12db1d422bac',
+    sourceDate: '2026-07-22', prepaidAccount: '14004',
+  },
+  {
+    vendorName: 'Rippling IT', className: null, expenseGlAccount: null,
+    totalAmount: 5123.69, startMonth: '2026-08', months: 11,
+    description: 'Rippling IT annual plan — contract $5,589.47, Jul-26 (465.78) expensed at payment; ERP posting line 42580869-142e-4cc0-91c6-dd881b6779eb',
+    sourceDate: '2026-07-22', prepaidAccount: '14004',
   },
 ]
 

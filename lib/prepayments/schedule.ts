@@ -85,6 +85,12 @@ export function monthlySchedule(item: PrepaymentItem): { month: string; amount: 
   return out
 }
 
+/** Rounding slack when comparing a posted amount to a scheduled one.
+ * QB bookkeepers round total/months differently by a cent or three
+ * (Rippling posts 244.18 where 2,929.83/12 rounds to 244.15) — real
+ * mismatches are dollars, not cents. */
+export const CENTS_TOLERANCE = 0.05
+
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
@@ -279,7 +285,13 @@ export function reconcile(
   const rowAssignment = new Map<GlRow, string>()
   for (const row of negatives) {
     const rowMonth = row.date.slice(0, 7)
-    let best: PrepaymentItem | null = null
+    const amt = Math.abs(row.amountUsd ?? 0)
+    const amountFits = (it: PrepaymentItem) => {
+      const sched = scheduleByItem.get(it.id)?.get(rowMonth)
+      return sched !== undefined && Math.abs(sched - amt) <= CENTS_TOLERANCE
+    }
+
+    const textMatches: PrepaymentItem[] = []
     for (const it of items) {
       // An amortization can only belong to a contract FROM its start month
       // on (allowing a couple of trailing months for late bookings) — the
@@ -289,20 +301,33 @@ export function reconcile(
       if (rowMonth < it.startMonth) continue
       if (rowMonth > addMonths(it.startMonth, it.months + 2)) continue
       if (!itemMatchesRow(it, row)) continue
-      if (!best || it.vendorName.length > best.vendorName.length) best = it
+      textMatches.push(it)
     }
-    // Amount fallback: many QB amortizations carry only a generic memo and
-    // no vendor ("Monthly Prepaid Expenses: Prepaid Insurance Amortization").
-    // When text matches nothing, a row equal to exactly ONE item's scheduled
-    // amount for its month (±2¢) belongs to that item; an ambiguous amount
-    // stays unmatched — never guess between two contracts.
-    if (!best) {
-      const amt = Math.abs(row.amountUsd ?? 0)
+
+    let best: PrepaymentItem | null = null
+    if (textMatches.length === 1) {
+      best = textMatches[0]
+    } else if (textMatches.length > 1) {
+      // Several contracts share the row's vendor text (two Rippling plans in
+      // one account): the scheduled AMOUNT disambiguates; if that too is
+      // ambiguous, the most specific (longest) vendor text wins.
+      const byAmount = textMatches.filter(amountFits)
+      if (byAmount.length === 1) best = byAmount[0]
+      else {
+        for (const it of textMatches) {
+          if (!best || it.vendorName.length > best.vendorName.length) best = it
+        }
+      }
+    } else {
+      // Amount fallback: many QB amortizations carry only a generic memo and
+      // no vendor ("Monthly Prepaid Expenses: Prepaid Insurance
+      // Amortization"). A row equal to exactly ONE item's scheduled amount
+      // for its month belongs to that item; an ambiguous amount stays
+      // unmatched — never guess between two contracts.
       const candidates = items.filter((it) => {
         if (rowMonth < it.startMonth) return false
         if (rowMonth > addMonths(it.startMonth, it.months + 2)) return false
-        const sched = scheduleByItem.get(it.id)?.get(rowMonth)
-        return sched !== undefined && Math.abs(sched - amt) <= 0.02
+        return amountFits(it)
       })
       if (candidates.length === 1) best = candidates[0]
     }
@@ -336,7 +361,7 @@ export function reconcile(
       const postedRows = rowsByMonth.get(month) ?? []
       let status: CellStatus
       if (month > currentMonth && posted === 0) status = 'scheduled'
-      else if (Math.abs(posted - scheduled) <= 0.02) status = 'posted' // 2¢ rounding tolerance
+      else if (Math.abs(posted - scheduled) <= CENTS_TOLERANCE) status = 'posted'
       else if (posted === 0) status = 'overdue'
       else status = 'mismatch'
       return { month, scheduled, posted, status, postedRows }

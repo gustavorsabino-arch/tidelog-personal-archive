@@ -227,6 +227,20 @@ describe('reconcile', () => {
     expect(r.orphanNegatives.length).toBe(1)
   })
 
+  test('same vendor text, two contracts: the amount splits them (real Rippling HR vs IT case)', () => {
+    const hr = item({ id: 'hr', vendorName: 'Rippling HR', totalAmount: 2685.65, startMonth: '2026-08', months: 11 })
+    const itPlan = item({ id: 'it', vendorName: 'Rippling IT', totalAmount: 5123.69, startMonth: '2026-08', months: 11 })
+    const gl: GlRow[] = [
+      row({ date: '2026-08-31', name: null, memo: 'Aug-26 Rippling HR Subscription', amountUsd: -244.18 }),
+      row({ date: '2026-08-31', name: null, memo: 'Aug-26 Rippling IT Subscription', amountUsd: -465.78 }),
+    ]
+    const r = reconcile([hr, itPlan], gl, '2026-08')
+    expect(r.perItem.get('hr')!.cells.find((c) => c.month === '2026-08')!.status).toBe('posted')
+    expect(r.perItem.get('hr')!.postedTotal).toBe(244.18)
+    expect(r.perItem.get('it')!.cells.find((c) => c.month === '2026-08')!.status).toBe('posted')
+    expect(r.perItem.get('it')!.postedTotal).toBe(465.78)
+  })
+
   test('amount fallback never guesses between two contracts with the same monthly amount', () => {
     const a = item({ id: 'a', vendorName: 'Vendor Alpha', totalAmount: 1200, startMonth: '2026-05', months: 6 })
     const b = item({ id: 'b', vendorName: 'Vendor Beta', totalAmount: 1200, startMonth: '2026-05', months: 6 })
