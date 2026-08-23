@@ -270,6 +270,8 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
 
   // ── Global monthly JE: one QB journal entry with every pending release ──
   const [postingJe, setPostingJe] = useState(false)
+  const [jeModalOpen, setJeModalOpen] = useState(false)
+  const [jeError, setJeError] = useState<string | null>(null)
   const jeLines = useMemo(() =>
     toBook
       .filter(({ cell }) => cell.status === 'overdue') // nothing posted yet — mismatches need a human look first
@@ -285,15 +287,8 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
 
   async function postGlobalJe() {
     if (jeLines.length === 0 || jeMissingGl.length > 0) return
-    const summary = jeLines
-      .map((l) => `  DR ${l.expenseGlAccount}${l.className ? ` (${l.className})` : ''}  ${fmtUSD(l.amount)}  — ${l.vendorName}`)
-      .join('\n')
-    const ok = window.confirm(
-      `Post ONE journal entry to QuickBooks (${entity}), dated ${lastDayOfMonth(bookMonth)}?\n\n${summary}\n  CR ${account} Prepaid  ${fmtUSD(jeTotal)}\n\nThis creates a real JE in QuickBooks.`,
-    )
-    if (!ok) return
     setPostingJe(true)
-    setError(null)
+    setJeError(null)
     try {
       const res = await apiFetch<{ docNumber: string; qbJournalEntryId: string; total: number }>(
         '/api/prepayments/post-je',
@@ -303,10 +298,11 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           body: JSON.stringify({ entity, month: bookMonth, prepaidAccount: account, lines: jeLines }),
         },
       )
+      setJeModalOpen(false)
       flash(`✓ Posted ${res.docNumber} to QuickBooks — ${fmtUSD(res.total)} across ${jeLines.length} contracts`)
       await load() // the fresh GL shows the new amortizations → cells turn ✓
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Posting failed')
+      setJeError(e instanceof Error ? e.message : 'Posting failed')
     } finally {
       setPostingJe(false)
     }
@@ -577,7 +573,7 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
               <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
                 <button
                   className="fsel"
-                  onClick={() => void postGlobalJe()}
+                  onClick={() => { setJeError(null); setJeModalOpen(true) }}
                   disabled={postingJe || jeMissingGl.length > 0}
                   style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)', fontWeight: 700 }}
                   title={jeMissingGl.length > 0
@@ -739,6 +735,106 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                 )
               })
             })()}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Global JE confirm modal — same visual language as the transactions
+          post modal: warning banner, balanced JE preview, explicit footer. */}
+      {jeModalOpen ? (
+        <div className="modal-overlay open" onClick={postingJe ? undefined : () => setJeModalOpen(false)}>
+          <div
+            className="modal post-qb-modal"
+            style={{ width: 640, maxWidth: '96vw', maxHeight: '88vh' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <div className="modal-title">Post global JE to QuickBooks</div>
+                <div className="modal-sub">
+                  Entity: {entity} · 1 journal entry · {jeLines.length} contract{jeLines.length === 1 ? '' : 's'} · dated {lastDayOfMonth(bookMonth)}
+                </div>
+              </div>
+              <button className="modal-close" onClick={() => setJeModalOpen(false)} disabled={postingJe} aria-label="Close">×</button>
+            </div>
+
+            <div className="modal-body" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 6,
+                  border: '1px solid var(--warn, #d97706)',
+                  background: 'color-mix(in srgb, var(--warn, #d97706) 8%, transparent)',
+                  fontSize: '0.74rem',
+                  color: 'var(--text)',
+                }}
+              >
+                <strong style={{ color: 'var(--warn, #d97706)' }}>⚠ Posting hits QuickBooks.</strong>
+                {' '}One real journal entry will be created — don&apos;t close this browser tab until complete.
+              </div>
+
+              <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 12, background: 'var(--surface)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Prepaid amortization {bookMonth} · doc number allocated on post
+                  </span>
+                  <span style={{ fontSize: '0.7rem', fontFamily: 'var(--mono)', color: 'var(--green, #10b981)', fontWeight: 600 }}>
+                    ✓ Balanced
+                  </span>
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: '0.7rem' }}>
+                  <tbody>
+                    {jeLines.map((l, li) => (
+                      <tr key={li} style={{ borderTop: li === 0 ? 'none' : '1px solid var(--border)' }}>
+                        <td style={{ padding: '4px 8px 4px 0', color: 'var(--green, #10b981)', fontWeight: 600, width: 60 }}>Debit</td>
+                        <td style={{ padding: '4px 8px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                          {l.expenseGlAccount}{l.className ? ` · ${l.className}` : ''}
+                        </td>
+                        <td style={{ padding: '4px 8px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.vendorName}</td>
+                        <td style={{ padding: '4px 0 4px 8px', textAlign: 'right', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                          ${l.amount.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: '2px solid var(--border)' }}>
+                      <td style={{ padding: '4px 8px 4px 0', color: 'var(--red, #dc2626)', fontWeight: 600, width: 60 }}>Credit</td>
+                      <td style={{ padding: '4px 8px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{account} · Prepaid expenses</td>
+                      <td style={{ padding: '4px 8px' }} />
+                      <td style={{ padding: '4px 0 4px 8px', textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                        ${jeTotal.toFixed(2)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {jeError ? (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 6,
+                    border: '1px solid var(--red, #dc2626)',
+                    background: 'color-mix(in srgb, var(--red, #dc2626) 8%, transparent)',
+                    fontSize: '0.78rem',
+                    color: 'var(--red, #dc2626)',
+                  }}
+                >
+                  Post failed: {jeError}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="fsel" onClick={() => setJeModalOpen(false)} disabled={postingJe}>Cancel</button>
+              <button
+                className="fsel"
+                onClick={() => void postGlobalJe()}
+                disabled={postingJe || jeLines.length === 0}
+                style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)', fontWeight: 700 }}
+              >
+                {postingJe ? 'Posting…' : 'Post to QuickBooks'}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
