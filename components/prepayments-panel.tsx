@@ -272,6 +272,16 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
     [recon, historyCutoff, activeItems],
   )
 
+  // Diagnostic: recent amortizations in QB that no registered contract
+  // claims. When a month shows pending but QB already posted it, the row is
+  // here — usually a vendor-spelling/description mismatch to fix via Edit.
+  const unmatchedAmorts = useMemo(
+    () => (activeItems.length === 0
+      ? []
+      : recon.orphanNegatives.filter((o) => o.date >= historyCutoff)),
+    [recon, historyCutoff, activeItems],
+  )
+
   // "To book" list for the selected month.
   const toBook = useMemo(() => {
     const out: { item: PrepaymentApiRow; cell: MonthCell }[] = []
@@ -668,6 +678,29 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           </div>
           <div style={{ fontSize: '0.68rem', color: 'var(--muted)', marginTop: 8 }}>
             Values come straight from QB — confirm the number of months (and expense GL / class when not prefilled) and save.
+          </div>
+        </div>
+      ) : null}
+
+      {/* Diagnostic: amortizations in QB no registered contract claims —
+          explains any month that shows pending although QB has the posting. */}
+      {unmatchedAmorts.length > 0 ? (
+        <div className="card" style={{ padding: 14, marginBottom: 18 }}>
+          <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
+            Amortizations in QB not matched to any registered contract — {unmatchedAmorts.length}
+          </div>
+          <div style={{ display: 'grid', gap: 4 }}>
+            {unmatchedAmorts.map((o, i) => (
+              <div key={`${o.txnId ?? i}-${o.date}-${o.amountUsd}`} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.76rem' }}>
+                <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted)' }}>{o.date}</span>
+                <strong>{o.name ?? '—'}</strong>
+                <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{fmtUSD(Math.abs(o.amountUsd ?? 0))}</span>
+                <span style={{ color: 'var(--muted)', flex: 1, minWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.memo ?? ''}>{o.memo ?? ''}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--muted)', marginTop: 8 }}>
+            These reduce the prepaid account but no contract claims them. If a month above shows pending although QB posted it, adjust that contract&apos;s vendor spelling or description (Edit) so these rows match.
           </div>
         </div>
       ) : null}

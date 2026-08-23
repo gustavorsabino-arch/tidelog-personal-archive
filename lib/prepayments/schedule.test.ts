@@ -60,6 +60,10 @@ describe('rowMatchesVendor', () => {
     expect(rowMatchesVendor(row({ name: 'AWS monthly' }), 'AWS')).toBe(true)
     expect(rowMatchesVendor(row({ name: 'JAWS media' }), 'AWS')).toBe(false)
   })
+  test('singular/plural tolerance (QB "Horizons" vs vendor "Horizon Global")', () => {
+    expect(rowMatchesVendor(row({ name: 'Horizons', memo: 'Independent Director Services global fee' }), 'Horizon Global')).toBe(true)
+    expect(rowMatchesVendor(row({ name: 'ShelterPoint Group', memo: null }), 'ShelterPoint')).toBe(true)
+  })
 })
 
 describe('parseMemoMoney (real QB memo formats)', () => {

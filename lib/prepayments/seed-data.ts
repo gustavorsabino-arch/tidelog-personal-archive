@@ -125,7 +125,7 @@ export const FOUNDATION_PREPAYMENT_SEED: PrepaymentSeed[] = [
   {
     vendorName: 'Horizon Global', className: null, expenseGlAccount: null,
     totalAmount: 22916.67, startMonth: '2026-03', months: 11,
-    description: 'Independent Director Services 27 Feb 2026 - 26 Feb 2027 — contract $25,000/yr, first month expensed at payment',
+    description: 'Horizons — Independent Director Services 27 Feb 2026 - 26 Feb 2027 — contract $25,000/yr, first month expensed at payment',
     sourceDate: '2026-03-02', prepaidAccount: '14110',
   },
 ]
@@ -143,6 +143,15 @@ export const ZAGREUS_PREPAYMENT_SEED: PrepaymentSeed[] = [
     totalAmount: 1504.09, startMonth: '2026-04', months: 12,
     description: 'Prepaid Workers Compensation Insurance 4/15/26 - 4/14/27 (renewal of the 11/15/25-4/14/26 policy)',
     sourceDate: '2026-04-02', prepaidAccount: '14001',
+  },
+  // 14004 — the active contract; the 2025 software subscriptions and the
+  // Jul-26 "ERP posting line" entries stay unregistered until finance
+  // identifies them.
+  {
+    vendorName: 'Blockworks', className: null, expenseGlAccount: null,
+    totalAmount: 1350, startMonth: '2026-07', months: 3,
+    description: 'Blockworks prepaid quarterly subscription (07/23/2026-10/23/26) Mercury CC',
+    sourceDate: '2026-07-23', prepaidAccount: '14004',
   },
 ]
 

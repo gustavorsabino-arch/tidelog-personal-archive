@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { prepayment } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
@@ -48,28 +48,63 @@ export async function GET(req: NextRequest) {
     // untouched.
     const seed = PREPAYMENT_SEEDS_BY_ENTITY[entityId]
     if (seed) {
-      const existing = await db
-        .select({ vendorName: prepayment.vendorName, startMonth: prepayment.startMonth })
-        .from(prepayment)
-        .where(eq(prepayment.entityId, entityId))
-      const have = new Set(existing.map((r) => `${r.vendorName.trim().toLowerCase()}|${r.startMonth}`))
-      const missing = seed.items
-        .filter((s) => !have.has(`${s.vendorName.trim().toLowerCase()}|${s.startMonth}`))
-      if (missing.length > 0) {
-        await db.insert(prepayment).values(missing.map((s) => ({
-          entityId,
-          prepaidAccount: s.prepaidAccount ?? seed.defaultAccount,
-          vendorName: s.vendorName,
-          description: s.description,
-          totalAmount: s.totalAmount.toFixed(2),
-          startMonth: s.startMonth,
-          months: s.months,
-          expenseGlAccount: s.expenseGlAccount,
-          className: s.className,
-          sourceDate: s.sourceDate,
-          updatedBy: 'ledger-seed',
-        })))
-      }
+      // The advisory lock serializes concurrent first-opens (the panel can
+      // fire two GETs when switching tabs) — without it both requests see an
+      // empty register and both insert, duplicating every contract.
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`prepayment-seed:${entityId}`}))`)
+
+        const existing = await tx
+          .select({
+            id: prepayment.id,
+            vendorName: prepayment.vendorName,
+            startMonth: prepayment.startMonth,
+            updatedBy: prepayment.updatedBy,
+            createdAt: prepayment.createdAt,
+          })
+          .from(prepayment)
+          .where(eq(prepayment.entityId, entityId))
+          .orderBy(asc(prepayment.createdAt))
+
+        // Heal duplicates a past race already created: per (vendor, start
+        // month) keep one row — a user-edited row wins over seed rows,
+        // otherwise the earliest — and delete the extra SEED rows only.
+        const keyOf = (v: string, m: string) => `${v.trim().toLowerCase()}|${m}`
+        const keeper = new Map<string, { id: string; updatedBy: string | null }>()
+        const extraSeedIds: string[] = []
+        for (const r of existing) {
+          const key = keyOf(r.vendorName, r.startMonth)
+          const cur = keeper.get(key)
+          if (!cur) { keeper.set(key, r); continue }
+          if (cur.updatedBy === 'ledger-seed' && r.updatedBy !== 'ledger-seed') {
+            extraSeedIds.push(cur.id)
+            keeper.set(key, r)
+          } else if (r.updatedBy === 'ledger-seed') {
+            extraSeedIds.push(r.id)
+          }
+        }
+        if (extraSeedIds.length > 0) {
+          await tx.delete(prepayment).where(inArray(prepayment.id, extraSeedIds))
+        }
+
+        const missing = seed.items
+          .filter((s) => !keeper.has(keyOf(s.vendorName, s.startMonth)))
+        if (missing.length > 0) {
+          await tx.insert(prepayment).values(missing.map((s) => ({
+            entityId,
+            prepaidAccount: s.prepaidAccount ?? seed.defaultAccount,
+            vendorName: s.vendorName,
+            description: s.description,
+            totalAmount: s.totalAmount.toFixed(2),
+            startMonth: s.startMonth,
+            months: s.months,
+            expenseGlAccount: s.expenseGlAccount,
+            className: s.className,
+            sourceDate: s.sourceDate,
+            updatedBy: 'ledger-seed',
+          })))
+        }
+      })
     }
 
     const items = await db

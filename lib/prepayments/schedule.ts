@@ -89,13 +89,25 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
+/** Singular/plural tolerance: QB text often pluralizes vendor names
+ * ("Horizons" for vendor "Horizon Global"). One trailing 's' is stripped
+ * from words of length ≥ 4 on BOTH sides of every comparison. */
+function stem(w: string): string {
+  return w.length >= 4 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w
+}
+
+/** Normalized, stemmed word list padded for whole-word lookups. */
+function stemmedHay(s: string): string {
+  return ` ${normalize(s).split(' ').map(stem).join(' ')} `
+}
+
 /** Does this GL row's text mention the item's vendor? Every vendor token of
  * length ≥ 3 must appear as a WHOLE word in name+memo (word-boundary match,
- * so "AWS" never matches "JAWS"). Vendors with only short tokens fall back
- * to matching the full normalized name as one word. */
+ * so "AWS" never matches "JAWS"), singular/plural-insensitive. Vendors with
+ * only short tokens fall back to matching the full normalized name. */
 export function rowMatchesVendor(row: GlRow, vendorName: string): boolean {
-  const hay = ` ${normalize(`${row.name ?? ''} ${row.memo ?? ''}`)} `
-  const tokens = normalize(vendorName).split(' ').filter((t) => t.length >= 3)
+  const hay = stemmedHay(`${row.name ?? ''} ${row.memo ?? ''}`)
+  const tokens = normalize(vendorName).split(' ').map(stem).filter((t) => t.length >= 3)
   if (tokens.length === 0) {
     const short = normalize(vendorName)
     return short.length > 0 && hay.includes(` ${short} `)
@@ -122,9 +134,10 @@ export function itemMatchesRow(
 ): boolean {
   if (rowMatchesVendor(row, item.vendorName)) return true
   if (!item.description) return false
-  const hay = ` ${normalize(`${row.name ?? ''} ${row.memo ?? ''}`)} `
+  const hay = stemmedHay(`${row.name ?? ''} ${row.memo ?? ''}`)
   const tokens = normalize(item.description)
     .split(' ')
+    .map(stem)
     .filter((t) => t.length >= 5 && !GENERIC_MEMO_TOKENS.has(t) && !/^\d{1,4}$/.test(t))
   const hits = tokens.filter((t) => hay.includes(` ${t} `))
   return hits.some((t) => t.length >= 10) || hits.length >= 2
