@@ -176,6 +176,29 @@ describe('reconcile', () => {
     expect(r.orphanNegatives.length).toBe(0)
   })
 
+  test('amortizations BEFORE the contract start belong to the old contract, not the new one', () => {
+    // Real case: Fireblocks renews yearly with the same memo and monthly
+    // amount. The 2025 contract's amortizations must not light up the
+    // Jul-2026 contract as mismatches.
+    const newContract = item({
+      id: 'fb-new', vendorName: 'Fireblocks', totalAmount: 39735.21,
+      startMonth: '2026-07', months: 11, sourceDate: '2026-07-14',
+      description: 'Prepaid Fireblocks Monthly - Total - $43,347.48',
+    })
+    const gl: GlRow[] = [
+      row({ date: '2025-09-30', name: null, memo: 'Fireblocks Prepaid monthy', amountUsd: -3612.29 }),
+      row({ date: '2026-03-31', name: null, memo: 'Prepaid Fireblocks Monthly - Total - $ 43.347,48', amountUsd: -3612.29 }),
+      row({ date: '2026-07-31', name: null, memo: 'Prepaid Fireblocks Monthly - Total - $ 43.347,48', amountUsd: -3612.29 }),
+    ]
+    const r = reconcile([newContract], gl, '2026-08')
+    const cells = r.perItem.get('fb-new')!.cells
+    expect(cells.find((c) => c.month === '2026-07')!.status).toBe('posted')
+    expect(cells.find((c) => c.month === '2025-09')).toBeUndefined()
+    expect(cells.find((c) => c.month === '2026-03')).toBeUndefined()
+    expect(r.perItem.get('fb-new')!.postedTotal).toBe(3612.29)
+    expect(r.orphanNegatives.length).toBe(2) // the old contract's rows
+  })
+
   test('orphans and candidates', () => {
     const it = item({ vendorName: 'Rippling', startMonth: '2026-07', totalAmount: 12000, months: 12, sourceDate: '2026-07-01' })
     const gl: GlRow[] = [

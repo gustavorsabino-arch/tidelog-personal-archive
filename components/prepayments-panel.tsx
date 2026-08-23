@@ -91,6 +91,30 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
 
+  // Resizable sticky first column — drag the handle on the header edge.
+  const [supW, setSupW] = useState(240)
+  function startColResize(e: React.MouseEvent) {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = supW
+    const onMove = (ev: MouseEvent) => {
+      setSupW(Math.min(560, Math.max(140, startW + (ev.clientX - startX))))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+  const supCellStyle: React.CSSProperties = {
+    position: 'sticky', left: 0, zIndex: 2,
+    background: 'var(--card, #ffffff)',
+    width: supW, minWidth: supW, maxWidth: supW,
+    overflow: 'hidden',
+    borderRight: '2px solid var(--border)',
+  }
+
   const { accounts } = useQbAccounts(entity)
   const glOptions = useMemo(
     () => accounts.map((a) => ({ value: a.qbAccountNumber, label: `${a.qbAccountNumber} — ${a.qbAccountName}` })),
@@ -436,7 +460,16 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           <table>
             <thead>
               <tr>
-                <th style={{ textAlign: 'left', position: 'sticky', left: 0, background: 'var(--card, inherit)' }}>Prepayment</th>
+                <th style={{ ...supCellStyle, zIndex: 3, textAlign: 'left' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Prepayment</span>
+                    <span
+                      onMouseDown={startColResize}
+                      title="Drag to resize this column"
+                      style={{ cursor: 'col-resize', userSelect: 'none', padding: '0 4px', color: 'var(--muted)' }}
+                    >⇔</span>
+                  </div>
+                </th>
                 <th style={{ textAlign: 'right' }}>Total</th>
                 {recon.months.map((m) => (
                   <th key={m} style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '0.66rem' }}>{m}</th>
@@ -452,9 +485,12 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                 const cellsByMonth = new Map((r?.cells ?? []).map((c) => [c.month, c]))
                 return (
                   <tr key={it.id}>
-                    <td style={{ position: 'sticky', left: 0, background: 'var(--card, inherit)' }}>
-                      <div style={{ fontWeight: 600 }}>{it.vendorName}</div>
-                      <div style={{ fontSize: '0.66rem', color: 'var(--muted)' }}>
+                    <td style={supCellStyle}>
+                      <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.vendorName}</div>
+                      <div
+                        title={`${it.description ?? ''}${it.expenseGlAccount ? ` · DR ${it.expenseGlAccount}` : ''}${it.className ? ` · ${it.className}` : ''}`}
+                        style={{ fontSize: '0.66rem', color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
                         {it.description || ''} {it.expenseGlAccount ? `· DR ${it.expenseGlAccount}` : '· ⚠ no expense GL'}
                         {it.className ? ` · ${it.className}` : ''}
                       </div>
@@ -466,10 +502,15 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                         return <td key={m} style={{ textAlign: 'right', color: 'var(--muted)' }}>—</td>
                       }
                       const s = CELL_STYLE[c.status]
+                      const rowsDetail = c.postedRows.length > 0
+                        ? '\n\nQB rows matched:\n' + c.postedRows
+                            .map((pr) => `  ${pr.date}  ${fmt(Math.abs(pr.amount))}  ${(pr.memo ?? '').slice(0, 70)}`)
+                            .join('\n')
+                        : ''
                       return (
                         <td
                           key={m}
-                          title={`${it.vendorName} · ${m}\nScheduled: $${fmt(c.scheduled)}\nPosted in QB: $${fmt(c.posted)}\nStatus: ${c.status}`}
+                          title={`${it.vendorName} · ${m}\nScheduled: $${fmt(c.scheduled)}\nPosted in QB: $${fmt(c.posted)}\nStatus: ${c.status}${rowsDetail}`}
                           style={{ textAlign: 'right', fontFamily: 'var(--mono)', background: s.bg, color: s.fg, whiteSpace: 'nowrap' }}
                         >
                           {s.icon ? `${s.icon} ` : ''}{fmt(c.status === 'mismatch' ? c.posted : c.scheduled)}
@@ -485,7 +526,7 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                 )
               })}
               <tr style={{ fontWeight: 700 }}>
-                <td style={{ position: 'sticky', left: 0, background: 'var(--card, inherit)' }}>Total scheduled / month</td>
+                <td style={supCellStyle}>Total scheduled / month</td>
                 <td />
                 {recon.months.map((m) => (
                   <td key={m} style={{ textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmt(monthTotals.get(m) ?? 0)}</td>

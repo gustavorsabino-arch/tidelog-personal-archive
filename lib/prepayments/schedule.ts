@@ -39,6 +39,9 @@ export type MonthCell = {
   scheduled: number
   posted: number
   status: CellStatus
+  // The ledger rows that produced `posted` — surfaced in the UI tooltip so
+  // any surprising number explains itself.
+  postedRows: { date: string; memo: string | null; amount: number }[]
 }
 
 export type ItemReconciliation = {
@@ -247,8 +250,16 @@ export function reconcile(
   // "Orca Security" rows.
   const rowAssignment = new Map<GlRow, string>()
   for (const row of negatives) {
+    const rowMonth = row.date.slice(0, 7)
     let best: PrepaymentItem | null = null
     for (const it of items) {
+      // An amortization can only belong to a contract FROM its start month
+      // on (allowing a couple of trailing months for late bookings) — the
+      // previous year's contract for the same vendor amortizes the same
+      // monthly amount with near-identical memos, and without this window
+      // its rows would light up the NEW contract as mismatches.
+      if (rowMonth < it.startMonth) continue
+      if (rowMonth > addMonths(it.startMonth, it.months + 2)) continue
       if (!itemMatchesRow(it, row)) continue
       if (!best || it.vendorName.length > best.vendorName.length) best = it
     }
@@ -264,22 +275,28 @@ export function reconcile(
 
     // Posted per month for this item = |sum of assigned negatives| that month.
     const postedByMonth = new Map<string, number>()
+    const rowsByMonth = new Map<string, { date: string; memo: string | null; amount: number }[]>()
     for (const [row, itemId] of rowAssignment) {
       if (itemId !== it.id) continue
       const m = row.date.slice(0, 7)
       postedByMonth.set(m, round2((postedByMonth.get(m) ?? 0) + Math.abs(row.amountUsd ?? 0)))
+      rowsByMonth.set(m, [
+        ...(rowsByMonth.get(m) ?? []),
+        { date: row.date, memo: row.memo ?? row.name, amount: row.amountUsd ?? 0 },
+      ])
     }
 
     const months = [...new Set([...scheduledByMonth.keys(), ...postedByMonth.keys()])].sort()
     const cells: MonthCell[] = months.map((month) => {
       const scheduled = scheduledByMonth.get(month) ?? 0
       const posted = postedByMonth.get(month) ?? 0
+      const postedRows = rowsByMonth.get(month) ?? []
       let status: CellStatus
       if (month > currentMonth && posted === 0) status = 'scheduled'
       else if (Math.abs(posted - scheduled) <= 0.02) status = 'posted' // 2¢ rounding tolerance
       else if (posted === 0) status = 'overdue'
       else status = 'mismatch'
-      return { month, scheduled, posted, status }
+      return { month, scheduled, posted, status, postedRows }
     })
     for (const m of months) allMonths.add(m)
 
