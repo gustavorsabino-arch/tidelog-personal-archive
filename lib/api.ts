@@ -7,6 +7,26 @@
  * reaches our route handlers. Nothing to attach here.
  */
 
+/**
+ * Build a readable Error from a failed response. Our route handlers always
+ * return `{ error: string }`, but platform-level failures (middleware crash,
+ * function timeout) answer with plain text or HTML and no reason phrase on
+ * HTTP/2 — without this, those surface as a blank "API error: 500".
+ */
+async function responseError(res: Response): Promise<Error & { status?: number; payload?: unknown }> {
+  const text = await res.text().catch(() => '')
+  let payload: { error?: unknown } = {}
+  try { payload = JSON.parse(text) } catch { /* non-JSON body */ }
+  const fromBody = typeof payload.error === 'string' && payload.error.trim() ? payload.error.trim() : ''
+  const snippet = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140)
+  const error = new Error(
+    fromBody || (snippet ? `HTTP ${res.status} — ${snippet}` : `API error: ${res.status}`),
+  ) as Error & { status?: number; payload?: unknown }
+  error.status = res.status
+  error.payload = payload
+  return error
+}
+
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...options,
@@ -15,8 +35,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     },
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error || `API error: ${res.status}`)
+    throw await responseError(res)
   }
   return res.json()
 }
@@ -40,14 +59,7 @@ export async function apiFormFetch<T>(path: string, body: FormData, options: Req
   })
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }))
-    const error = new Error(err.error || `API error: ${res.status}`) as Error & {
-      status?: number
-      payload?: unknown
-    }
-    error.status = res.status
-    error.payload = err
-    throw error
+    throw await responseError(res)
   }
 
   return res.json()

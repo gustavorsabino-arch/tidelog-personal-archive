@@ -114,7 +114,17 @@ export async function proxy(request: NextRequest) {
         : NextResponse.redirect(new URL('/no-access', request.url))
     }
 
-    user = await loadUserByEmail(identityEmail)
+    // A DB blip here must degrade to a clean 503, never crash the middleware
+    // — an unhandled throw becomes a platform 500 for every request.
+    try {
+      user = await loadUserByEmail(identityEmail)
+    } catch (err) {
+      logAudit({
+        action: 'access.error.db_unavailable',
+        metadata: { email: identityEmail, path: pathname, reason: (err as Error)?.message || String(err) },
+      }).catch(() => {})
+      return serviceUnavailableResponse(request)
+    }
 
     if (!user) {
       await logAudit({
@@ -168,6 +178,19 @@ function denyResponse(request: NextRequest, status: number, code: string, messag
     return NextResponse.json({ error: message, code }, { status })
   }
   return NextResponse.redirect(new URL('/no-access', request.url))
+}
+
+function serviceUnavailableResponse(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    return NextResponse.json(
+      { error: 'Database temporarily unreachable — retry in a few seconds', code: 'auth.db_unavailable' },
+      { status: 503, headers: { 'Retry-After': '5' } },
+    )
+  }
+  return new NextResponse('Service temporarily unavailable — refresh in a few seconds.', {
+    status: 503,
+    headers: { 'Retry-After': '5', 'Content-Type': 'text/plain; charset=utf-8' },
+  })
 }
 
 function unauthenticatedResponse(request: NextRequest, pathname: string) {

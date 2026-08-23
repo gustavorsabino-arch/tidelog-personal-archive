@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { isQboEntity } from '@/lib/qb/config'
 import { getGlForAccount, GlNotCachedError } from '@/lib/qb/gl-data'
+import { errorMessage } from '@/lib/errors'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -47,6 +48,6 @@ export async function GET(req: NextRequest) {
         { status: 404 },
       )
     }
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return NextResponse.json({ error: errorMessage(err) }, { status: 500 })
   }
 }

@@ -7,6 +7,7 @@ import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import { toDbEntity } from '@/lib/entity'
 import { logAudit } from '@/lib/audit'
 import { OPCO_PREPAYMENT_SEED } from '@/lib/prepayments/seed-data'
+import { errorMessage } from '@/lib/errors'
 
 export const runtime = 'nodejs'
 
@@ -69,7 +70,7 @@ export async function GET(req: NextRequest) {
       .orderBy(asc(prepayment.startMonth), asc(prepayment.vendorName))
     return NextResponse.json({ items })
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return NextResponse.json({ error: errorMessage(err) }, { status: 500 })
   }
 }
 

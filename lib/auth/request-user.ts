@@ -38,6 +38,27 @@ export async function loadUserByEmail(email: string): Promise<RequestUser | null
   const hit = cache.get(lower)
   if (hit && hit.expiresAt > Date.now()) return hit.user
 
+  // This runs in the middleware on every authenticated request, so a
+  // transient DB failure here must never escape as a crash. One short retry
+  // rides out sub-second connection blips; if both attempts fail and we
+  // still hold an expired cache entry for this email, serve it stale —
+  // a ≤few-minutes-old role/ban snapshot beats a 500 on the whole app.
+  let firstError: unknown
+  try {
+    return await lookupAndCache(lower)
+  } catch (err) {
+    firstError = err
+  }
+  await new Promise((r) => setTimeout(r, 400))
+  try {
+    return await lookupAndCache(lower)
+  } catch {
+    if (hit) return hit.user
+    throw firstError
+  }
+}
+
+async function lookupAndCache(lower: string): Promise<RequestUser | null> {
   // Primary lookup: account table (where linked emails live)
   const [acc] = await db.select({ userId: account.userId })
     .from(account)

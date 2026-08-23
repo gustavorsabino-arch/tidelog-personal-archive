@@ -6,6 +6,7 @@ import { fetchQboJson } from '@/lib/qb/client'
 import { readCachedAccountCatalogByNumber, readCachedClassCatalogByName } from '@/lib/qb/cache-reads'
 import { formatIndividualDocNumber, getNextIndividualSequence } from '@/lib/qb/doc-number'
 import { logAudit } from '@/lib/audit'
+import { errorMessage } from '@/lib/errors'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -145,6 +146,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, docNumber, qbJournalEntryId, total, lineCount: lines.length })
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return NextResponse.json({ error: errorMessage(err) }, { status: 500 })
   }
 }
