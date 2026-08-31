@@ -84,6 +84,27 @@ export function TransactionsPageClient({
   const [entity, setEntity] = useState<string>(initialEntity)
   // Sub-view: the regular transactions list, or the Prepayments map.
   const [view, setView] = useState<'transactions' | 'prepayments'>('transactions')
+
+  // Manual on-chain sync — the same job the twice-daily cron runs. Surfaces
+  // the job's error message when it fails, which is the fastest way to see
+  // WHY the scheduled sync stopped.
+  const [syncing, setSyncing] = useState(false)
+  const [syncNote, setSyncNote] = useState<string | null>(null)
+  async function syncTransactionsNow() {
+    setSyncing(true)
+    setSyncNote('Syncing from the blockchain — this can take a few minutes…')
+    try {
+      const res = await apiFetch<{ ok: boolean; inserted?: number; failed?: number }>(
+        '/api/admin/cron/fetch-transactions',
+        { method: 'POST' },
+      )
+      setSyncNote(`✓ Sync finished — ${res.inserted ?? 0} new transactions${res.failed ? `, ${res.failed} wallet(s) failed` : ''}. Reloading…`)
+      setTimeout(() => window.location.reload(), 1800)
+    } catch (e) {
+      setSyncNote(`✗ Sync failed: ${e instanceof Error ? e.message : 'unknown error'}`)
+      setSyncing(false)
+    }
+  }
   const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions)
   const [total, setTotal] = useState(initialTotal)
   const [summary, setSummary] = useState<TransactionSummary>(initialSummary)
@@ -1272,6 +1293,14 @@ export function TransactionsPageClient({
         </div>
         <div className="entity-tabs" style={{ marginLeft: 'auto' }}>
           <button
+            className="entity-tab"
+            onClick={() => void syncTransactionsNow()}
+            disabled={syncing}
+            title="Fetch the latest on-chain transactions now (the automatic sync runs at 08:30 and 20:30 UTC)"
+          >
+            {syncing ? '↻ Syncing…' : '↻ Sync transactions'}
+          </button>
+          <button
             className={`entity-tab${view === 'transactions' ? ' active' : ''}`}
             onClick={() => setView('transactions')}
           >
@@ -1286,6 +1315,18 @@ export function TransactionsPageClient({
           </button>
         </div>
       </div>
+
+      {syncNote ? (
+        <div
+          className="card"
+          style={{
+            padding: '8px 12px', marginBottom: 12, fontSize: '0.78rem',
+            color: syncNote.startsWith('✗') ? '#d93025' : 'var(--muted)',
+          }}
+        >
+          {syncNote}
+        </div>
+      ) : null}
 
       {view === 'prepayments' ? (
         <PrepaymentsPanel entity={entity} />

@@ -6,6 +6,10 @@ import { fetchTransactionsJob } from '@/lib/cron/fetch-transactions'
 import { fetchQbReportsJob } from '@/lib/cron/fetch-qb-reports'
 import { refreshQbTokensJob } from '@/lib/cron/refresh-qb-tokens'
 
+// Manual runs carry the same backlog as scheduled ones — give them the same
+// time budget the cron routes get, or a 20-day catch-up dies at the default.
+export const maxDuration = 300
+
 const JOBS: Record<string, () => Promise<unknown>> = {
   'fetch-balances': fetchBalancesJob,
   'fetch-transactions': fetchTransactionsJob,
