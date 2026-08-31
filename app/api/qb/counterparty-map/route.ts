@@ -5,10 +5,23 @@ import { db } from '@/lib/db'
 import { counterpartyGlMap } from '@/lib/db/schema'
 import { toDbEntity } from '@/lib/entity'
 import { logAudit } from '@/lib/audit'
+import { errorMessage } from '@/lib/errors'
+
+// An unhandled throw becomes a bodyless 500 ("API error: 500" in the UI) —
+// wrap every handler so failures answer with the real message.
+function withErrorBody(handler: (req: NextRequest) => Promise<NextResponse>) {
+  return async (req: NextRequest) => {
+    try {
+      return await handler(req)
+    } catch (err) {
+      return NextResponse.json({ error: errorMessage(err) }, { status: 500 })
+    }
+  }
+}
 
 // GET /api/qb/counterparty-map?entity=Opco
 // Returns the full memorized map for one entity. Read-only.
-export async function GET(req: NextRequest) {
+export const GET = withErrorBody(async (req: NextRequest) => {
   const { deny } = await requirePermission('qb:read', req)
   if (deny) return deny
 
@@ -30,14 +43,14 @@ export async function GET(req: NextRequest) {
       updatedAt: r.updatedAt.toISOString(),
     })),
   })
-}
+})
 
 // PUT /api/qb/counterparty-map
 //   Body: { entity: string, counterpartyAddress: string, glAccountNumber: string }
 // Upserts one (entity, counterparty) → gl mapping. Called automatically by
 // the transactions page whenever a user picks a GL via the Counterparty GL
 // dropdown (D3: auto-memorize).
-export async function PUT(req: NextRequest) {
+export const PUT = withErrorBody(async (req: NextRequest) => {
   const { user, deny } = await requirePermission('qb:post', req)
   if (deny) return deny
 
@@ -103,14 +116,14 @@ export async function PUT(req: NextRequest) {
   }).catch(() => { /* swallow */ })
 
   return NextResponse.json({ ok: true })
-}
+})
 
 // DELETE /api/qb/counterparty-map?entity=Opco&counterpartyAddress=...
 // Removes the memorized default for a counterparty. Triggered by the
 // transactions page when the user clicks ∅ on a counterparty GL cell —
 // aggressive clear so inheriting siblings lose the italic default too.
 // Sibling rows that have their own per-tx override are untouched.
-export async function DELETE(req: NextRequest) {
+export const DELETE = withErrorBody(async (req: NextRequest) => {
   const { user, deny } = await requirePermission('qb:post', req)
   if (deny) return deny
 
@@ -152,4 +165,4 @@ export async function DELETE(req: NextRequest) {
   }).catch(() => { /* swallow */ })
 
   return NextResponse.json({ ok: true })
-}
+})

@@ -4,6 +4,7 @@ import { requirePermission } from '@/lib/auth/require-permission'
 import { db } from '@/lib/db'
 import { transaction, txQbState, qbPost } from '@/lib/db/schema'
 import { logAudit } from '@/lib/audit'
+import { errorMessage } from '@/lib/errors'
 
 // PATCH /api/treasury/transactions/[id]/qb-state
 //   Body: any subset of { description, glAccountOverride, counterpartyGlOverride }
@@ -15,6 +16,16 @@ import { logAudit } from '@/lib/audit'
 // `id` is the transaction.id UUID; we look it up to learn the composite key
 // (tx_hash, wallet_address, direction, asset) the tx_qb_state row needs.
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  // An unhandled throw here becomes a bodyless 500 and the UI can only say
+  // "API error: 500" — always answer with the real message.
+  try {
+    return await patchImpl(req, ctx)
+  } catch (err) {
+    return NextResponse.json({ error: errorMessage(err) }, { status: 500 })
+  }
+}
+
+async function patchImpl(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { user, deny } = await requirePermission('qb:post', req)
   if (deny) return deny
   const { id } = await ctx.params
