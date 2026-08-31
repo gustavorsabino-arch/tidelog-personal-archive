@@ -54,7 +54,12 @@ export const txQbState = app.table(
     // time (override ?? history ?? map, resolved in buildPostPlan). Without
     // this snapshot the export/list re-derive the CR/DR leg from CURRENT
     // state, and history-inherited posts can't become precedent themselves.
-    postedCounterpartyGl: text('posted_counterparty_gl'),
+    // posted_counterparty_gl deliberately NOT declared here: drizzle names
+    // EVERY schema column in generated INSERTs, and this column is OPTIONAL
+    // in prod (legacy-table ownership — the runtime role can't ALTER it in).
+    // Declaring it broke every tx_qb_state upsert with `column ... does not
+    // exist`. Gated readers/writers reference it via raw SQL fragments after
+    // probing hasPostedCounterpartyGlColumn().
     // Audit
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     updatedBy: text('updated_by').references(() => user.id),

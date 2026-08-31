@@ -781,13 +781,6 @@ async function postOneGroupLocked(
           postedGlSource: m.walletGlSource,
           postedVendor: m.effectiveVendor,
           postedClass: m.effectiveClass,
-          // The counterparty-side GL actually sent to QB — same resolution
-          // buildPostPlan used (override ?? history/map). Snapshotting it
-          // keeps the export/list faithful and lets history-inherited posts
-          // become precedents themselves.
-          ...(writeCpGlSnapshot
-            ? { postedCounterpartyGl: m.counterpartyGlOverride ?? m.counterpartyGlMapValue }
-            : {}),
           updatedAt: new Date(),
           updatedBy: userId,
         })
@@ -810,13 +803,27 @@ async function postOneGroupLocked(
             postedGlSource: m.walletGlSource,
             postedVendor: m.effectiveVendor,
             postedClass: m.effectiveClass,
-            ...(writeCpGlSnapshot
-              ? { postedCounterpartyGl: m.counterpartyGlOverride ?? m.counterpartyGlMapValue }
-              : {}),
             updatedAt: new Date(),
             updatedBy: userId,
           },
         })
+
+      // The counterparty-side GL actually sent to QB — same resolution
+      // buildPostPlan used (override ?? history/map). Snapshotting it keeps
+      // the export/list faithful and lets history-inherited posts become
+      // precedents themselves. Raw SQL because the OPTIONAL column is not in
+      // the drizzle schema (it may not exist on the DB — probed above).
+      if (writeCpGlSnapshot) {
+        const snapshot = m.counterpartyGlOverride ?? m.counterpartyGlMapValue ?? null
+        await tx.execute(sql`
+          UPDATE "app"."tx_qb_state"
+             SET "posted_counterparty_gl" = ${snapshot}
+           WHERE "tx_hash" = ${m.txHash}
+             AND "wallet_address" = ${m.walletAddress}
+             AND "direction" = ${m.direction}
+             AND "asset" = ${m.asset}
+        `)
+      }
     }
 
     logAudit({

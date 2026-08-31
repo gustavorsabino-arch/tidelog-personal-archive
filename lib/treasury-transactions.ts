@@ -322,9 +322,11 @@ export async function getTreasuryTransactions({
         postedClass: txQbState.postedClass,
         // OPTIONAL column (legacy-table ownership): select NULL until a
         // credentialed migration adds it — the display then falls back to
-        // the live map exactly as before the snapshot existed.
+        // the live map exactly as before the snapshot existed. Referenced as
+        // raw SQL because the column is not declared in the drizzle schema
+        // (declaring it breaks every generated INSERT on DBs without it).
         postedCounterpartyGl: hasCpGlSnapshot
-          ? txQbState.postedCounterpartyGl
+          ? sql<string | null>`"tx_qb_state"."posted_counterparty_gl"`
           : sql<string | null>`NULL`,
       },
       counterpartyGl: {
