@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import type { QboEntity } from '@/lib/qb/config'
 import type { QbJournalEntry, QbJournalEntryLine } from '@/lib/qb/types'
@@ -76,6 +76,7 @@ export function PostToQbModal({
   const [previewLoading, setPreviewLoading] = useState(false)
 
   const [submitting, setSubmitting] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitResult, setSubmitResult] = useState<PostBatchResponse | null>(null)
   const [showFailureDetail, setShowFailureDetail] = useState(false)
@@ -140,19 +141,33 @@ export function PostToQbModal({
     setSubmitting(true)
     setSubmitError(null)
     setSubmitResult(null)
+    // Abortable so the user is never trapped on a spinning dialog, plus a
+    // client-side ceiling under the server's 300s function budget.
+    const controller = new AbortController()
+    abortRef.current = controller
+    const clientTimeout = setTimeout(() => controller.abort(), 280_000)
     try {
       const res = await apiFetch<PostBatchResponse>('/api/qb/post-batch', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ entity, txIds: selectedTxIds }),
+        signal: controller.signal,
       })
       setSubmitResult(res)
       // Even with partial failures, successes are real — refresh the parent so
       // posted rows render their badges. Parent decides whether to clear selection.
       onSuccess()
     } catch (e: unknown) {
-      setSubmitError(e instanceof Error ? e.message : 'Post failed')
+      if ((e as { name?: string })?.name === 'AbortError') {
+        // The server request may still finish and create the JE — the tx will
+        // then show posted on refresh; adoption prevents a duplicate re-post.
+        setSubmitError('Posting was stopped. If QuickBooks had already received it, the entry may still have posted — reload and check the row before trying again.')
+      } else {
+        setSubmitError(e instanceof Error ? e.message : 'Post failed')
+      }
     } finally {
+      clearTimeout(clientTimeout)
+      abortRef.current = null
       setSubmitting(false)
     }
   }
@@ -485,11 +500,10 @@ export function PostToQbModal({
         <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button
             className="fsel"
-            onClick={onClose}
-            disabled={submitting}
-            style={{ cursor: submitting ? 'wait' : 'pointer' }}
+            onClick={submitting ? () => abortRef.current?.abort() : onClose}
+            style={{ cursor: 'pointer' }}
           >
-            {submitResult ? 'Close' : 'Cancel'}
+            {submitting ? 'Stop posting' : submitResult ? 'Close' : 'Cancel'}
           </button>
           {!submitResult && (
             <button

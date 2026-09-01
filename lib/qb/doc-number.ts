@@ -1,6 +1,5 @@
 import { like } from 'drizzle-orm'
-import { fetchQboJson } from './client'
-import { getQboRealmId, type QboEntity } from './config'
+import { type QboEntity } from './config'
 
 const MONTH_ABBREV = [
   'Jan',
@@ -40,24 +39,23 @@ export function parseDocSequence(docNumber: string, prefix: string): number | nu
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
-// Returns the next free `TL-{Mon}-JE##` sequence for the given month.
+// Returns the next free `TL-{Mon}-JE##` sequence for the given month, from the
+// LOCAL qb_post table only — instant, zero QuickBooks calls.
 //
-// The previous implementation asked QBO for `DocNumber LIKE ... ORDER BY
-// DocNumber DESC` — a full JournalEntry scan on QBO's side that started
-// timing out (>60s) as the books grew, blocking every post. Now:
-//   1. the local qb_post table supplies the max sequence tidelog itself has
-//      ever posted for this month prefix (instant, covers prior years), and
-//   2. a TxnDate-scoped QBO query (fast, indexed; no LIKE, no ORDER BY)
-//      catches JEs created manually in QB for the SAME month.
-// If the QBO query still fails, the local max alone decides — worst case a
-// number that exists only in QB gets reused, and the post-POST duplicate
-// scan flags it for manual review.
+// History: the original implementation queried QBO (`DocNumber LIKE ... ORDER
+// BY DocNumber DESC`), a full JournalEntry scan that began timing out as the
+// books grew. Replacing it with a TxnDate-scoped QBO query still put a heavy
+// (up-to-1000-row) read on QBO right before every POST, which contributed to
+// QBO 504s. The local qb_post table already records every JE tidelog posts, so
+// it is the authoritative source for tidelog's own sequence. A JE created
+// MANUALLY in QB with a TL- number (rare) could collide; the post-POST
+// duplicate scan flags that for manual review.
 //
 // IMPORTANT: callers must run this inside a Postgres advisory lock keyed by
 // (entity, year-month) to prevent two concurrent posts from picking the same
 // sequence. See `lib/qb/post-batch.ts` for the locking wrapper.
 export async function getNextIndividualSequence(
-  entity: QboEntity,
+  _entity: QboEntity,
   blockTime: Date,
 ): Promise<number> {
   const mon = MONTH_ABBREV[blockTime.getUTCMonth()]
@@ -78,33 +76,6 @@ export async function getNextIndividualSequence(
   for (const r of local) {
     const n = parseDocSequence(r.docNumber, prefix)
     if (n && n > maxSeq) maxSeq = n
-  }
-
-  try {
-    const yyyy = blockTime.getUTCFullYear()
-    const m = blockTime.getUTCMonth()
-    const monthStart = `${yyyy}-${String(m + 1).padStart(2, '0')}-01`
-    const monthEnd = new Date(Date.UTC(yyyy, m + 1, 0)).toISOString().slice(0, 10)
-    const realmId = getQboRealmId(entity)
-    const query = `SELECT DocNumber FROM JournalEntry WHERE TxnDate >= '${monthStart}' AND TxnDate <= '${monthEnd}' MAXRESULTS 1000`
-    const res = await fetchQboJson<{
-      QueryResponse?: { JournalEntry?: Array<{ DocNumber?: string }> }
-    }>(
-      entity,
-      `/v3/company/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`,
-      // Best-effort only: the local qb_post max already gives a safe number,
-      // so this reconciliation must never dominate the post. Short timeout,
-      // no retry — on failure we proceed with the local max.
-      { timeoutMs: 15_000 },
-    )
-    for (const je of res.QueryResponse?.JournalEntry ?? []) {
-      const n = je.DocNumber ? parseDocSequence(je.DocNumber, prefix) : null
-      if (n && n > maxSeq) maxSeq = n
-    }
-  } catch (err) {
-    console.warn(
-      `[doc-number] QBO month query failed — sequencing from local max ${maxSeq}: ${(err as Error).message}`,
-    )
   }
 
   return maxSeq + 1
