@@ -35,6 +35,11 @@ type PostBatchResponse = {
     error: string
     memberTxIds: string[]
   }>
+  pending: Array<{
+    postId: string
+    docNumber: string
+    memberTxIds: string[]
+  }>
   skipped: Array<{ txId: string; reason: string }>
 }
 
@@ -76,6 +81,7 @@ export function PostToQbModal({
   const [previewLoading, setPreviewLoading] = useState(false)
 
   const [submitting, setSubmitting] = useState(false)
+  const [reconciling, setReconciling] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitResult, setSubmitResult] = useState<PostBatchResponse | null>(null)
@@ -92,6 +98,37 @@ export function PostToQbModal({
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [open, onClose])
+
+  // Background confirmation: when a post comes back 'pending' (QB is slow and
+  // hasn't confirmed the create yet), poll the reconciler until QB makes the
+  // JE visible, refreshing the list so the row flips to Posted on its own —
+  // the user never has to wait on the slow create.
+  useEffect(() => {
+    if (!submitResult || submitResult.pending.length === 0) return
+    let cancelled = false
+    let tries = 0
+    let adoptedTotal = 0
+    const target = submitResult.pending.length
+    let timer: ReturnType<typeof setTimeout>
+    setReconciling(true)
+    const tick = async () => {
+      tries += 1
+      try {
+        const r = await apiFetch<{ adopted: number }>('/api/qb/reconcile-posts', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ entity }),
+        })
+        adoptedTotal += r.adopted ?? 0
+        if ((r.adopted ?? 0) > 0) onSuccess()
+      } catch { /* transient — keep trying */ }
+      if (cancelled) return
+      if (adoptedTotal >= target || tries >= 12) { setReconciling(false); return }
+      timer = setTimeout(tick, 15000)
+    }
+    timer = setTimeout(tick, 12000)
+    return () => { cancelled = true; clearTimeout(timer); setReconciling(false) }
+  }, [submitResult, entity, onSuccess])
 
   // Fetch preview on open. We re-fetch every time `open` flips to true so a
   // close-then-reopen with a different selection picks up the new ids.
@@ -451,6 +488,11 @@ export function PostToQbModal({
                 <span style={{ color: 'var(--green, #10b981)', fontWeight: 600 }}>
                   ✓ {submitResult.successes.length} posted
                 </span>
+                {submitResult.pending.length > 0 && (
+                  <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                    ⧗ {submitResult.pending.length} confirming
+                  </span>
+                )}
                 {submitResult.failures.length > 0 && (
                   <span style={{ color: 'var(--red, #dc2626)', fontWeight: 600 }}>
                     ✗ {submitResult.failures.length} failed
@@ -462,6 +504,13 @@ export function PostToQbModal({
                   </span>
                 )}
               </div>
+              {submitResult.pending.length > 0 && (
+                <div style={{ fontSize: '0.74rem', color: 'var(--text)' }}>
+                  QuickBooks is slow right now and hasn&apos;t confirmed{' '}
+                  {submitResult.pending.length === 1 ? 'this entry' : 'these entries'} yet — but they were submitted and will
+                  post. {reconciling ? 'Checking QuickBooks…' : 'They&apos;ll flip to Posted automatically'} (you can close this and reload in a minute; nothing is lost and it will not duplicate).
+                </div>
+              )}
               {submitResult.failures.length > 0 && (
                 <div>
                   <button
