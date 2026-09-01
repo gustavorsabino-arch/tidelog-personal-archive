@@ -224,7 +224,19 @@ export async function fetchQboJson<T>(
   let response: Response | null = null
 
   for (let attempt = 0; attempt <= QBO_MAX_RETRIES; attempt += 1) {
-    response = await requestQboJson<T>(connection, path, init)
+    try {
+      response = await requestQboJson<T>(connection, path, init)
+    } catch (err) {
+      // Reads are idempotent — one slow QBO answer must not fail the whole
+      // operation, so retry timeouts. Writes are NOT retried (a timed-out
+      // write may have landed; retrying would double-post).
+      const isRead = (init?.method ?? 'GET') === 'GET'
+      if (isRead && attempt < QBO_MAX_RETRIES && /did not respond/.test((err as Error).message ?? '')) {
+        console.warn(`[qbo] read timeout, retrying (attempt ${attempt + 1})`)
+        continue
+      }
+      throw err
+    }
 
     if (response.status === 401 && attempt < QBO_MAX_RETRIES) {
       connection = await refreshQboConnection(entity)
