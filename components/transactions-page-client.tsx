@@ -959,37 +959,45 @@ export function TransactionsPageClient({
               )
               if (!ok) throw new Error('Save cancelled')
             }
-            // Vendor master auto-fill: the Book12 mapping supplies the class
-            // and counterparty GL for this vendor. Fill VISIBLY-EMPTY slots
-            // only — not just "no per-tx override": an inherited default the
-            // user can see in the cell (memorized map / wallet config /
-            // posting history) counts as filled and is never displaced.
+            // Vendor master auto-fill: picking a vendor that exists in
+            // Vendors brings its class + counterparty GL ALONG, replacing
+            // whatever the row showed before — the explicit pick carries the
+            // intent (GitHub → Timescale must not keep GitHub's class/GL).
+            // Fields the master does not define stay untouched.
             const patchBody: Record<string, unknown> = { vendorOverride: next }
             const master = next ? vendorMaster.get(next.toLowerCase()) : undefined
-            if (master) {
-              if (master.className && t.classOverride == null && t.counterpartyClassName == null) {
-                patchBody.classOverride = master.className
-              }
-              if (master.glAccount && t.counterpartyGlOverride == null && t.counterpartyGlAccount == null && t.counterparty) {
-                patchBody.counterpartyGlOverride = master.glAccount
-              }
-            }
+            if (master?.className) patchBody.classOverride = master.className
+            if (master?.glAccount && t.counterparty) patchBody.counterpartyGlOverride = master.glAccount
             await apiFetch(`/api/treasury/transactions/${t.id}/qb-state`, {
               method: 'PATCH',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(patchBody),
             })
-            // Memorize on the counterparty wallet (same auto-memorize
-            // pattern as the GL cell) so SIBLING rows of this counterparty
-            // inherit the vendor immediately — not only after posting.
-            // Registered counterparties only (label present = wallet row).
+            // Memorize for the future (same auto-memorize pattern as the GL
+            // cell) so sibling and FUTURE rows of this counterparty inherit
+            // vendor, class and GL immediately — not only after posting.
             // PICKS only: clearing a per-tx override (next === null) means
             // "fall back to the default" — it must never DELETE the default.
             if (next != null && t.counterparty && t.counterpartyLabel) {
+              // Registered counterparties only (label present = wallet row).
               await apiFetch(`/api/wallets/${t.counterparty}`, {
                 method: 'PATCH',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ qbVendorName: next }),
+                body: JSON.stringify({
+                  qbVendorName: next,
+                  ...(master?.className ? { qbClassName: master.className } : {}),
+                }),
+              }).catch(() => {}) // memorization is best-effort
+            }
+            if (next != null && master?.glAccount && t.counterparty) {
+              await apiFetch('/api/qb/counterparty-map', {
+                method: 'PUT',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  entity: t.entity,
+                  counterpartyAddress: t.counterparty,
+                  glAccountNumber: master.glAccount,
+                }),
               }).catch(() => {}) // memorization is best-effort
             }
             fetchTransactions(offset)
