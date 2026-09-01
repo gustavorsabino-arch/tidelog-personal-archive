@@ -1,8 +1,6 @@
 import { like } from 'drizzle-orm'
 import { fetchQboJson } from './client'
 import { getQboRealmId, type QboEntity } from './config'
-import { db } from '@/lib/db'
-import { qbPost } from '@/lib/db/schema'
 
 const MONTH_ABBREV = [
   'Jan',
@@ -66,6 +64,13 @@ export async function getNextIndividualSequence(
   const prefix = `TL-${mon}`
   let maxSeq = 0
 
+  // Lazy imports: '@/lib/db' (and the schema barrel, which pulls it in)
+  // validate DB_MODE at module load, so importing them at the top would break
+  // every unit test of the pure formatters in this file.
+  const [{ db }, { qbPost }] = await Promise.all([
+    import('@/lib/db'),
+    import('@/lib/db/schema'),
+  ])
   const local = await db
     .select({ docNumber: qbPost.docNumber })
     .from(qbPost)
@@ -87,6 +92,10 @@ export async function getNextIndividualSequence(
     }>(
       entity,
       `/v3/company/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`,
+      // Best-effort only: the local qb_post max already gives a safe number,
+      // so this reconciliation must never dominate the post. Short timeout,
+      // no retry — on failure we proceed with the local max.
+      { timeoutMs: 15_000 },
     )
     for (const je of res.QueryResponse?.JournalEntry ?? []) {
       const n = je.DocNumber ? parseDocSequence(je.DocNumber, prefix) : null

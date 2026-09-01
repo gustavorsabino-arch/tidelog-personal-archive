@@ -73,15 +73,16 @@ async function requestQboTokens(body: URLSearchParams): Promise<QboTokenResponse
 async function requestQboJson<T>(
   connection: QboConnection,
   path: string,
-  init?: { method?: 'GET' | 'POST'; body?: string },
+  init?: { method?: 'GET' | 'POST'; body?: string; timeoutMs?: number },
 ): Promise<Response> {
   // Bounded time: post-batch holds a pg advisory lock across this call, so a
   // blackholed connection must fail rather than ride to the function's
   // maxDuration. Writes get a longer budget than reads — QBO can take over a
   // minute to accept a journal entry on a slow day, and aborting a write is
-  // costlier than waiting (the entry may land server-side anyway).
+  // costlier than waiting (the entry may land server-side anyway). Callers can
+  // pass a shorter per-call timeout (e.g. best-effort reconciliation queries).
   const isWrite = (init?.method ?? 'GET') === 'POST'
-  const timeoutMs = isWrite ? 150_000 : 60_000
+  const timeoutMs = init?.timeoutMs ?? (isWrite ? 150_000 : 60_000)
   try {
     return await fetch(`${QBO_BASE_URL}${path}`, {
       method: init?.method ?? 'GET',
@@ -218,25 +219,16 @@ export async function ensureQboConnection(entity: QboEntity): Promise<QboConnect
 export async function fetchQboJson<T>(
   entity: QboEntity,
   path: string,
-  init?: { method?: 'GET' | 'POST'; body?: string },
+  init?: { method?: 'GET' | 'POST'; body?: string; timeoutMs?: number },
 ): Promise<T> {
   let connection = await ensureQboConnection(entity)
   let response: Response | null = null
 
+  // A timeout throws out of requestQboJson (not retried here): retrying a
+  // read multiplies the wait toward the function's maxDuration, and a write
+  // must never be replayed. The 401/429 branches below still retry.
   for (let attempt = 0; attempt <= QBO_MAX_RETRIES; attempt += 1) {
-    try {
-      response = await requestQboJson<T>(connection, path, init)
-    } catch (err) {
-      // Reads are idempotent — one slow QBO answer must not fail the whole
-      // operation, so retry timeouts. Writes are NOT retried (a timed-out
-      // write may have landed; retrying would double-post).
-      const isRead = (init?.method ?? 'GET') === 'GET'
-      if (isRead && attempt < QBO_MAX_RETRIES && /did not respond/.test((err as Error).message ?? '')) {
-        console.warn(`[qbo] read timeout, retrying (attempt ${attempt + 1})`)
-        continue
-      }
-      throw err
-    }
+    response = await requestQboJson<T>(connection, path, init)
 
     if (response.status === 401 && attempt < QBO_MAX_RETRIES) {
       connection = await refreshQboConnection(entity)
