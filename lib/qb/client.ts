@@ -82,7 +82,10 @@ async function requestQboJson<T>(
   // costlier than waiting (the entry may land server-side anyway). Callers can
   // pass a shorter per-call timeout (e.g. best-effort reconciliation queries).
   const isWrite = (init?.method ?? 'GET') === 'POST'
-  const timeoutMs = init?.timeoutMs ?? (isWrite ? 150_000 : 60_000)
+  // Writes: abort at 90s — BELOW QB's own ~2min gateway timeout — so we stop
+  // waiting on a create that QB will 504 anyway and hand off to the caller's
+  // poll (which adopts the JE once QB finishes it in the background). Reads: 60s.
+  const timeoutMs = init?.timeoutMs ?? (isWrite ? 90_000 : 60_000)
   try {
     return await fetch(`${QBO_BASE_URL}${path}`, {
       method: init?.method ?? 'GET',
@@ -228,13 +231,12 @@ export async function fetchQboJson<T>(
   let connection = await ensureQboConnection(entity)
   let response: Response | null = null
 
-  // Intuit 5xx (incl. 504 "stream timeout") are transient gateway failures
-  // Intuit itself says to retry. Retrying is safe ONLY with a Request-Id
-  // (idempotent — a create that actually landed returns the same result, not
-  // a duplicate), so 5xx retry is gated on requestId. A bare timeout still
-  // throws out of requestQboJson; the caller's adoption check is the net for
-  // the case where even the retries can't get a clean response.
-  const canRetry5xx = !!init?.requestId
+  // Do NOT auto-retry 5xx on the WRITE path: a create that 504s may have
+  // landed, and a second full ~2min attempt would blow the request's time
+  // budget (the caller polls-and-adopts instead — that's the safe recovery).
+  // Reads carry no requestId and are not retried here either; only 401/429
+  // are retried below.
+  const canRetry5xx = !!init?.requestId && (init?.method ?? 'GET') !== 'POST'
   const started = Date.now()
   for (let attempt = 0; attempt <= QBO_MAX_RETRIES; attempt += 1) {
     response = await requestQboJson<T>(connection, path, init)
