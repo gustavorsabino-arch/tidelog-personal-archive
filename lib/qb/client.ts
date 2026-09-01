@@ -75,20 +75,36 @@ async function requestQboJson<T>(
   path: string,
   init?: { method?: 'GET' | 'POST'; body?: string },
 ): Promise<Response> {
-  return fetch(`${QBO_BASE_URL}${path}`, {
-    method: init?.method ?? 'GET',
-    headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
-      Accept: 'application/json',
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: init?.body,
-    cache: 'no-store',
-    // Big GL reports are slow but bounded; a blackholed connection is not.
-    // Post-batch holds a pg advisory lock across this call, so it must fail
-    // in bounded time rather than ride to the function's maxDuration.
-    signal: AbortSignal.timeout(60_000),
-  })
+  // Bounded time: post-batch holds a pg advisory lock across this call, so a
+  // blackholed connection must fail rather than ride to the function's
+  // maxDuration. Writes get a longer budget than reads — QBO can take over a
+  // minute to accept a journal entry on a slow day, and aborting a write is
+  // costlier than waiting (the entry may land server-side anyway).
+  const isWrite = (init?.method ?? 'GET') === 'POST'
+  const timeoutMs = isWrite ? 150_000 : 60_000
+  try {
+    return await fetch(`${QBO_BASE_URL}${path}`, {
+      method: init?.method ?? 'GET',
+      headers: {
+        Authorization: `Bearer ${connection.accessToken}`,
+        Accept: 'application/json',
+        ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: init?.body,
+      cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    const name = (err as { name?: string })?.name
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      throw new Error(
+        isWrite
+          ? `QuickBooks did not respond within ${timeoutMs / 1000}s. IMPORTANT: the entry MAY still have been created on QB's side — check QuickBooks for the doc number before re-posting (a re-post would duplicate it; the duplicate scan will flag it if so).`
+          : `QuickBooks did not respond within ${timeoutMs / 1000}s — retry in a moment.`,
+      )
+    }
+    throw err
+  }
 }
 
 function getRetryDelayMs(response: Response, attempt: number): number {
