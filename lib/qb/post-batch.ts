@@ -697,13 +697,20 @@ async function postOneGroupLocked(
     })
 
     // Post the JE. The happy path is a single QBO call — no pre-flight
-    // queries (those extra reads were contributing to QBO 504s).
+    // queries (those extra reads were contributing to QBO 504s). A stable
+    // Request-Id (derived from the tx/doc, ≤50 alphanumerics per Intuit)
+    // makes the create idempotent: fetchQboJson can retry Intuit's transient
+    // 5xx (504 "stream timeout") without ever creating a duplicate.
+    const requestId = (group.kind === 'individual'
+      ? `tl-${group.tx.txHash}`
+      : `tl-${docNumber}`
+    ).replace(/[^a-zA-Z0-9-]/g, '').slice(0, 50)
     let qbJournalEntryId = ''
     try {
       const resp = await fetchQboJson<QbJournalEntryResponse>(
         entity,
         `/v3/company/${getQboRealmId(entity)}/journalentry?minorversion=65`,
-        { method: 'POST', body: JSON.stringify(je) },
+        { method: 'POST', body: JSON.stringify(je), requestId },
       )
       qbJournalEntryId = resp.JournalEntry.Id
     } catch (postErr) {

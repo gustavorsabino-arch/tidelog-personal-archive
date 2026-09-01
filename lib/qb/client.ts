@@ -73,7 +73,7 @@ async function requestQboTokens(body: URLSearchParams): Promise<QboTokenResponse
 async function requestQboJson<T>(
   connection: QboConnection,
   path: string,
-  init?: { method?: 'GET' | 'POST'; body?: string; timeoutMs?: number },
+  init?: { method?: 'GET' | 'POST'; body?: string; timeoutMs?: number; requestId?: string },
 ): Promise<Response> {
   // Bounded time: post-batch holds a pg advisory lock across this call, so a
   // blackholed connection must fail rather than ride to the function's
@@ -90,6 +90,10 @@ async function requestQboJson<T>(
         Authorization: `Bearer ${connection.accessToken}`,
         Accept: 'application/json',
         ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+        // Intuit idempotency key: retrying a create with the SAME Request-Id
+        // returns the original result instead of creating a duplicate. This is
+        // what makes retrying a 5xx/timeout on a write safe.
+        ...(init?.requestId ? { 'Request-Id': init.requestId } : {}),
       },
       body: init?.body,
       cache: 'no-store',
@@ -219,14 +223,19 @@ export async function ensureQboConnection(entity: QboEntity): Promise<QboConnect
 export async function fetchQboJson<T>(
   entity: QboEntity,
   path: string,
-  init?: { method?: 'GET' | 'POST'; body?: string; timeoutMs?: number },
+  init?: { method?: 'GET' | 'POST'; body?: string; timeoutMs?: number; requestId?: string },
 ): Promise<T> {
   let connection = await ensureQboConnection(entity)
   let response: Response | null = null
 
-  // A timeout throws out of requestQboJson (not retried here): retrying a
-  // read multiplies the wait toward the function's maxDuration, and a write
-  // must never be replayed. The 401/429 branches below still retry.
+  // Intuit 5xx (incl. 504 "stream timeout") are transient gateway failures
+  // Intuit itself says to retry. Retrying is safe ONLY with a Request-Id
+  // (idempotent — a create that actually landed returns the same result, not
+  // a duplicate), so 5xx retry is gated on requestId. A bare timeout still
+  // throws out of requestQboJson; the caller's adoption check is the net for
+  // the case where even the retries can't get a clean response.
+  const canRetry5xx = !!init?.requestId
+  const started = Date.now()
   for (let attempt = 0; attempt <= QBO_MAX_RETRIES; attempt += 1) {
     response = await requestQboJson<T>(connection, path, init)
 
@@ -237,6 +246,12 @@ export async function fetchQboJson<T>(
 
     if (response.status === 429 && attempt < QBO_MAX_RETRIES) {
       await sleep(getRetryDelayMs(response, attempt))
+      continue
+    }
+
+    // 5xx: retry the idempotent request while there's time budget left.
+    if (response.status >= 500 && canRetry5xx && attempt < QBO_MAX_RETRIES && Date.now() - started < 120_000) {
+      await sleep(Math.min(1500 * 2 ** attempt, 6000))
       continue
     }
 
