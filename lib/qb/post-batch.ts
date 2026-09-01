@@ -595,6 +595,30 @@ export async function postBatch(args: {
 // Per-group transaction: advisory lock + idempotent QB write + persist
 // ────────────────────────────────────────────────────────────────────────────
 
+// Query QB for journal entries dated exactly `txnDate` (YYYY-MM-DD), returning
+// each match's Id, DocNumber and PrivateNote (the memo — for individual posts
+// it carries this tx's unique on-chain hash). Used to recognize a JE that
+// ALREADY exists in QB so we adopt it instead of creating a duplicate:
+//   • before posting, by tx-hash in the memo (a prior attempt whose response
+//     we lost, or a manual re-post), and
+//   • after a failed write, by our deterministic DocNumber (the 504 / stream
+//     timeout case — the JE landed but QB never sent us a clean response).
+// Bounded (20s) and called best-effort by the caller.
+async function findJournalEntriesOnDate(
+  entity: QboEntity,
+  txnDate: string,
+): Promise<Array<{ Id: string; DocNumber?: string; PrivateNote?: string }>> {
+  const q = `SELECT Id, DocNumber, PrivateNote FROM JournalEntry WHERE TxnDate = '${txnDate}' MAXRESULTS 1000`
+  const res = await fetchQboJson<
+    QbQueryResponse<'JournalEntry', { Id: string; DocNumber?: string; PrivateNote?: string }>
+  >(
+    entity,
+    `/v3/company/${getQboRealmId(entity)}/query?query=${encodeURIComponent(q)}&minorversion=65`,
+    { timeoutMs: 20_000 },
+  )
+  return res.QueryResponse?.JournalEntry ?? []
+}
+
 async function postOneGroupLocked(
   group: GroupSpec,
   entity: QboEntity,
@@ -633,7 +657,7 @@ async function postOneGroupLocked(
     // Sequence query runs INSIDE the advisory lock — two concurrent posts to
     // the same (entity, year-month) will serialize here, preventing duplicate
     // sequence assignment.
-    const docNumber =
+    let docNumber =
       group.kind === 'individual'
         ? formatIndividualDocNumber(
             group.tx.blockTime,
@@ -675,12 +699,62 @@ async function postOneGroupLocked(
       resolveVendor,
     })
 
-    const resp = await fetchQboJson<QbJournalEntryResponse>(
-      entity,
-      `/v3/company/${getQboRealmId(entity)}/journalentry?minorversion=65`,
-      { method: 'POST', body: JSON.stringify(je) },
-    )
-    const qbJournalEntryId = resp.JournalEntry.Id
+    // ── Idempotent write: never create a JE that already exists in QB ──
+    // 1) Pre-post (individual): the memo carries this tx's unique on-chain
+    //    hash. If a JE with that hash is already in QB — a prior attempt whose
+    //    response we lost, or a re-post — adopt it and skip the POST. This is
+    //    what makes re-posting a previously-orphaned tx safe.
+    let qbJournalEntryId = ''
+    if (group.kind === 'individual') {
+      const hash = group.tx.txHash
+      const existing = await findJournalEntriesOnDate(entity, je.TxnDate)
+        .then((jes) => jes.find((j) => (j.PrivateNote ?? '').includes(hash)) ?? null)
+        .catch(() => null)
+      if (existing) {
+        qbJournalEntryId = existing.Id
+        if (existing.DocNumber) docNumber = existing.DocNumber
+        logAudit({
+          userId,
+          action: 'qb_post.adopted_existing',
+          resourceType: 'qb_post',
+          resourceId: pending.id,
+          metadata: { entity, docNumber, qbJournalEntryId, txnDate: je.TxnDate, txHash: hash },
+        }).catch(() => { /* swallow */ })
+      }
+    }
+
+    if (!qbJournalEntryId) {
+      try {
+        const resp = await fetchQboJson<QbJournalEntryResponse>(
+          entity,
+          `/v3/company/${getQboRealmId(entity)}/journalentry?minorversion=65`,
+          { method: 'POST', body: JSON.stringify(je) },
+        )
+        qbJournalEntryId = resp.JournalEntry.Id
+      } catch (postErr) {
+        // 2) Post-failure adoption: the write may have LANDED even though we
+        //    got no clean response (504 / stream timeout / aborted read).
+        //    Blindly failing orphans the JE and a re-post would duplicate it.
+        //    Ask QB whether our JE exists (by the deterministic DocNumber we
+        //    chose) and adopt it; only fail — safe to retry — if it is truly
+        //    not there.
+        const found = await findJournalEntriesOnDate(entity, je.TxnDate)
+          .then((jes) => jes.find((j) => j.DocNumber === docNumber) ?? null)
+          .catch(() => null)
+        if (!found) throw postErr
+        qbJournalEntryId = found.Id
+        logAudit({
+          userId,
+          action: 'qb_post.adopted_after_lost_response',
+          resourceType: 'qb_post',
+          resourceId: pending.id,
+          metadata: {
+            entity, docNumber, qbJournalEntryId, txnDate: je.TxnDate,
+            postError: postErr instanceof Error ? postErr.message : String(postErr),
+          },
+        }).catch(() => { /* swallow */ })
+      }
+    }
 
     // Inline duplicate scan — the POST already succeeded. Query QB: how many
     // JEs exist with this exact DocNumber + TxnDate? Expected 1 (the one we
@@ -752,6 +826,9 @@ async function postOneGroupLocked(
       .update(qbPost)
       .set({
         qbJournalEntryId,
+        // docNumber may have changed if we ADOPTED an existing JE (its real
+        // number, not the sequence we speculatively assigned this attempt).
+        docNumber,
         postingStatus: 'posted',
         postedAt: new Date(),
         postedBy: userId,
