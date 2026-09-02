@@ -7,9 +7,9 @@
 // (see lib/qb/post-batch.ts for the orchestration). All posts/voids/failures
 // go through logAudit().
 
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import { requirePermission } from '@/lib/auth/require-permission'
-import { postBatch } from '@/lib/qb/post-batch'
+import { preparePostBatch, runJobsBackground } from '@/lib/qb/post-batch'
 import { isQboEntity } from '@/lib/qb/config'
 import { logAudit } from '@/lib/audit'
 
@@ -58,14 +58,22 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await postBatch({
+    // Reserve + build the JEs synchronously (fast: DB + local only), then fire
+    // them at QuickBooks in the BACKGROUND via after(). QB now takes minutes to
+    // create a JE, so the request returns immediately with the reserved entries
+    // as 'pending'; the background worker POSTs each (idempotent Request-Id) and
+    // flips them to posted once QB confirms — the user never waits on QB.
+    const { jobs, ...result } = await preparePostBatch({
       entity: b.entity,
       txIds: b.txIds as string[],
       userId: user!.id,
     })
 
-    // Batch-level audit. Per-JE successes/failures are also logged inside
-    // post-batch.ts; this row gives forensics a single entry per batch.
+    if (jobs.length > 0) {
+      const userId = user!.id
+      after(async () => { await runJobsBackground(jobs, userId).catch(() => { /* logged per-job */ }) })
+    }
+
     logAudit({
       userId: user!.id,
       action: 'qb_post.batch',
@@ -73,7 +81,7 @@ export async function POST(req: NextRequest) {
       metadata: {
         entity: b.entity,
         attempted: (b.txIds as string[]).length,
-        succeeded: result.successes.length,
+        reserved: jobs.length,
         failed: result.failures.length,
         skipped: result.skipped.length,
       },

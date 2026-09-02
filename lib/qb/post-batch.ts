@@ -486,6 +486,12 @@ export async function buildPostPlan(args: {
       skipped.push({ txId: t.id, reason: 'already posted (use Re-post)' })
       continue
     }
+    if (t.postId && t.existingPostStatus === 'unposted') {
+      // Already reserved and submitted to QB (awaiting background confirmation).
+      // Don't fire a second create — the reconciler/after() will confirm it.
+      skipped.push({ txId: t.id, reason: 'already submitted — confirming with QuickBooks' })
+      continue
+    }
     eligible.push(t)
   }
 
@@ -527,40 +533,24 @@ export function loadedTxToTxForPost(t: LoadedTx): TxForPost {
 // re-declaring its own copy of the type.
 export type { GroupSpec, IndividualGroup, BulkGroup, LoadedTx }
 
-export async function postBatch(args: {
+// Reserve + build every eligible JE (fast: DB + local only, no QB call), then
+// hand the jobs to the caller to fire in the background via after(). Returns
+// the immediate response: everything reservable is 'pending' (it posts in the
+// background), plus any reserve/build failures and skips. This is what lets
+// the request return in ~seconds even while QB takes minutes to create a JE.
+export async function preparePostBatch(args: {
   entity: QboEntity
   txIds: string[]
   userId: string
-}): Promise<PostBatchResult> {
-  // First, adopt any prior submissions QB has since confirmed (reserved rows
-  // still 'unposted' because a previous request returned before QB finished).
-  // This heals the exact "posted in QB but not marked in tidelog" case before
-  // we plan — so those txs are seen as posted and not re-posted here.
-  await reconcileEntity(args.entity, args.userId).catch(() => { /* best-effort */ })
+}): Promise<{ jobs: PostJob[] } & PostBatchResult> {
+  const { groups, skipped } = await buildPostPlan({ entity: args.entity, txIds: args.txIds })
 
-  // D13 — batch cap is enforced inside buildPostPlan; we delegate the whole
-  // load+verify+partition step so postBatch and post-preview stay aligned.
-  const { groups, skipped } = await buildPostPlan({
-    entity: args.entity,
-    txIds: args.txIds,
-  })
-
-  // Resolve GL account NUMBERS → QB account Ids at post time. QB rejects a bare
-  // account number in AccountRef; the catalog (synced from QB) holds number↔Id.
-  // A code missing from the catalog throws UnresolvedAccountError, which the
-  // per-group catch below turns into a failure (with the rollback of that
-  // group's pre-allocated qb_post row) — never a post with a bad ref.
   const catalog = await readCachedAccountCatalogByNumber(args.entity)
   const resolveAccount: AccountResolver = (accountNumber) => {
     const account = catalog.get(accountNumber)
     if (!account) throw new UnresolvedAccountError(accountNumber)
     return { value: account.qbAccountId, name: account.qbAccountName }
   }
-
-  // Resolve per-tx class/vendor names → QB Ids at post time. Names come from
-  // effectiveVendor/effectiveClass (override → counterparty wallet). A name
-  // not found in the catalog returns null — the JE builder omits the ref rather
-  // than throwing, so an unresolved name is a silent no-op (not a hard failure).
   const classByNameMap = await readCachedClassCatalogByName(args.entity)
   const vendorByNameMap = await readCachedVendorCatalogByName(args.entity)
   const resolveClass: BuildArgs['resolveClass'] = (name) => {
@@ -571,61 +561,32 @@ export async function postBatch(args: {
     const r = vendorByNameMap.get(name)
     return r ? { value: r.qbVendorId } : null
   }
+  const writeCpGlSnapshot = await hasPostedCounterpartyGlColumn().catch(() => false)
 
-  const successes: PostBatchResult['successes'] = []
-  const failures: PostBatchResult['failures'] = []
+  const jobs: PostJob[] = []
   const pending: PostBatchResult['pending'] = []
+  const failures: PostBatchResult['failures'] = []
 
-  // Time budget: each group awaits the QB POST up to 90s + a brief confirm
-  // poll, then returns (posted or pending). Keep margin under the route's 300s
-  // limit / the client's 280s abort so a later group never starts a write we
-  // can't finish waiting on.
-  const deadline = Date.now() + 250_000
-
-  // D9 — partial-failure tolerant: iterate groups sequentially, isolate errors
-  // per JE. Successful groups commit independently of failed ones.
   for (const group of groups) {
-    // Don't START a new (potentially multi-minute) create without budget left
-    // to await it; the rest come back as pending and the reconciler/next post
-    // picks them up.
-    if (Date.now() > deadline - 120_000) {
-      const [pendingId, docNumber] = ['', group.kind === 'individual'
-        ? formatIndividualDocNumber(group.tx.blockTime, 0)
-        : formatBulkDocNumber(group.token, group.monthDate)]
-      pending.push({ postId: pendingId, docNumber, memberTxIds: memberTxIdsOf(group) })
-      continue
-    }
     try {
-      const result = await postOneGroup(group, args.entity, args.userId, resolveAccount, resolveClass, resolveVendor)
-      if (result.status === 'posted') {
-        successes.push({ postId: result.postId, docNumber: result.docNumber, qbJournalEntryId: result.qbJournalEntryId, memberTxIds: result.memberTxIds, ...(result.duplicateWarning ? { duplicateWarning: true } : {}) })
-      } else {
-        pending.push({ postId: result.postId, docNumber: result.docNumber, memberTxIds: result.memberTxIds })
-      }
+      const job = await reserveAndBuildJob(group, args.entity, args.userId, resolveAccount, resolveClass, resolveVendor, writeCpGlSnapshot)
+      jobs.push(job)
+      pending.push({ postId: job.pendingId, docNumber: job.docNumber, memberTxIds: job.memberTxIds })
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
       const memberTxIds = memberTxIdsOf(group)
-      // We may not have a final DocNumber if we failed before computing it.
-      // Best-effort: produce the would-be DocNumber for display. Sequence "0"
-      // signals "never assigned" to the UI without crashing the result shape.
-      const docNumber =
-        group.kind === 'individual'
-          ? formatIndividualDocNumber(group.tx.blockTime, 0)
-          : formatBulkDocNumber(group.token, group.monthDate)
+      const docNumber = group.kind === 'individual'
+        ? formatIndividualDocNumber(group.tx.blockTime, 0)
+        : formatBulkDocNumber(group.token, group.monthDate)
       failures.push({ docNumber, error, memberTxIds })
-
-      logAudit({
-        userId: args.userId,
-        action: 'qb_post.failed',
-        resourceType: 'qb_post',
-        metadata: { entity: args.entity, error, attemptedTxIds: memberTxIds },
-      }).catch(() => {
-        /* swallow */
-      })
+      logAudit({ userId: args.userId, action: 'qb_post.failed', resourceType: 'qb_post', metadata: { entity: args.entity, error, attemptedTxIds: memberTxIds } })
+        .catch(() => { /* swallow */ })
     }
   }
 
-  return { successes, failures, pending, skipped }
+  // successes is empty here — the actual QB creates run in the background; rows
+  // flip to posted as the reconciler/after() confirm them.
+  return { jobs, successes: [], failures, pending, skipped }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -725,26 +686,40 @@ async function linkGroupMembers(
   }
 }
 
-type GroupOutcome =
-  | (PostBatchResult['successes'][number] & { status: 'posted' })
-  | (PostBatchResult['pending'][number] & { status: 'pending' })
+// A reserved JE ready to be fired at QB. Built (and committed) in the request;
+// actually POSTed in the background so the user never waits on QB's slow
+// create. The JE body + Request-Id live here so the background worker can
+// (re)POST idempotently — Intuit replays the original response for a repeated
+// Request-Id, so retrying is safe and never duplicates.
+type PostJob = {
+  entity: QboEntity
+  pendingId: string
+  docNumber: string
+  jeBody: string
+  requestId: string
+  txnDate: string
+  memberTxIds: string[]
+}
 
-async function postOneGroup(
+// PHASE 1 — RESERVE + LINK + BUILD (short tx; advisory lock held for ms only).
+// Commits a durable qb_post row and links its member txs BEFORE any QB call,
+// then builds the JE. Returns a PostJob for the background worker. A build
+// error (bad account) marks the row failed and rethrows so the caller reports
+// a failure.
+async function reserveAndBuildJob(
   group: GroupSpec,
   entity: QboEntity,
   userId: string,
   resolveAccount: AccountResolver,
   resolveClass: BuildArgs['resolveClass'],
   resolveVendor: BuildArgs['resolveVendor'],
-): Promise<GroupOutcome> {
+  writeCpGlSnapshot: boolean,
+): Promise<PostJob> {
   const yyyymm = monthKeyOf(group)
   const lockKey = `qb-post:${entity}:${yyyymm}`
   const dbEntity = toDbEntity(entity)
   const memberTxIds = memberTxIdsOf(group)
-  const writeCpGlSnapshot = await hasPostedCounterpartyGlColumn().catch(() => false)
 
-  // Build the JE up front so a resolution error (bad account, etc.) fails
-  // cleanly BEFORE we reserve anything in the DB.
   const txsForPost = (group.kind === 'individual' ? [group.tx] : group.members).map((t) =>
     toTxForPost(t, {
       walletAccountCode: t.walletGl as string,
@@ -752,12 +727,6 @@ async function postOneGroup(
     }),
   )
 
-  // ── PHASE 1 — RESERVE + LINK (short tx; advisory lock held for ms only) ──
-  // Commit a durable qb_post row AND link its member txs BEFORE the slow QB
-  // call. This is what makes the whole thing recoverable: if QB's response is
-  // lost (its ~2min gateway 504s while finishing the create in the
-  // background), the row + links survive, and the background reconciler adopts
-  // the JE by DocNumber. Status stays 'unposted' (reserved) until confirmed.
   const { pendingId, docNumber } = await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`)
     const [pending] = await tx
@@ -771,8 +740,6 @@ async function postOneGroup(
         monthYyyymm: yyyymm,
       })
       .returning({ id: qbPost.id })
-    // Sequence counts ALL rows for the month prefix regardless of status, so a
-    // committed reservation permanently owns its number.
     const doc =
       group.kind === 'individual'
         ? formatIndividualDocNumber(
@@ -785,78 +752,95 @@ async function postOneGroup(
     return { pendingId: pending.id, docNumber: doc }
   })
 
-  const je: QbJournalEntry = buildJournalEntry({
-    txs: txsForPost,
-    docNumber,
-    description: groupDescription(group),
-    resolveAccount,
-    resolveClass,
-    resolveVendor,
-  })
+  let je: QbJournalEntry
+  try {
+    je = buildJournalEntry({
+      txs: txsForPost,
+      docNumber,
+      description: groupDescription(group),
+      resolveAccount,
+      resolveClass,
+      resolveVendor,
+    })
+  } catch (buildErr) {
+    await db.update(qbPost)
+      .set({ postingStatus: 'failed', postingError: buildErr instanceof Error ? buildErr.message : String(buildErr) })
+      .where(eq(qbPost.id, pendingId))
+    throw buildErr
+  }
+
+  // Intuit idempotency key MUST be a URL query parameter (requestid=…); the
+  // header form is not honored. Unique per company; ≤50 chars.
   const requestId = (group.kind === 'individual' ? `tl-${group.tx.txHash}` : `tl-${docNumber}`)
     .replace(/[^a-zA-Z0-9-]/g, '')
     .slice(0, 50)
-  const txnDateIso = je.TxnDate
 
-  // ── PHASE 2 — FIRE (no lock, no DB connection held) ──
-  let qbJournalEntryId: string | null = null
-  try {
-    const resp = await fetchQboJson<QbJournalEntryResponse>(
-      entity,
-      `/v3/company/${getQboRealmId(entity)}/journalentry?minorversion=65`,
-      { method: 'POST', body: JSON.stringify(je), requestId },
-    )
-    qbJournalEntryId = resp.JournalEntry.Id
-  } catch (postErr) {
-    const status = (postErr as { status?: number }).status
-    // A real 4xx rejection (bad account / validation) means the JE was NOT
-    // created — fail cleanly so the user sees the reason, and re-post is safe.
-    if (typeof status === 'number' && status >= 400 && status < 500) {
-      await db.update(qbPost)
-        .set({ postingStatus: 'failed', postingError: postErr instanceof Error ? postErr.message : String(postErr) })
-        .where(eq(qbPost.id, pendingId))
-      throw postErr
-    }
-    // 5xx / timeout: QB is slow and likely creating the JE in the background.
-    // Try a couple quick lookups in case it's already visible; otherwise leave
-    // it reserved for the background reconciler and return fast.
-    logAudit({
-      userId,
-      action: 'qb_post.create_response_lost',
-      resourceType: 'qb_post',
-      resourceId: pendingId,
-      metadata: { entity, docNumber, txnDate: txnDateIso, error: postErr instanceof Error ? postErr.message : String(postErr) },
-    }).catch(() => { /* swallow */ })
-    for (let i = 0; i < 3 && !qbJournalEntryId; i += 1) {
-      await new Promise((r) => setTimeout(r, 8000))
-      qbJournalEntryId = (await findJournalEntryByDocNumber(entity, docNumber, txnDateIso).catch(() => null))?.Id ?? null
-    }
-  }
+  return { entity, pendingId, docNumber, jeBody: JSON.stringify(je), requestId, txnDate: je.TxnDate, memberTxIds }
+}
 
-  // ── PHASE 3 — PERSIST ──
-  if (!qbJournalEntryId) {
-    // Not confirmed yet. Keep the reserved row (members already linked) with a
-    // friendly note; the background reconciler will adopt the JE once QB makes
-    // it visible. NEVER delete — that is what orphans the JE.
-    await db.update(qbPost)
-      .set({ postingError: 'Submitted to QuickBooks — awaiting confirmation (QB is slow right now).' })
-      .where(eq(qbPost.id, pendingId))
-    return { status: 'pending', postId: pendingId, docNumber, memberTxIds }
-  }
-
+async function markPosted(pendingId: string, qbJournalEntryId: string, userId: string, docNumber: string, entity: QboEntity, memberTxIds: string[]): Promise<void> {
   await db.update(qbPost)
     .set({ qbJournalEntryId, postingStatus: 'posted', postingError: null, postedAt: new Date(), postedBy: userId })
     .where(eq(qbPost.id, pendingId))
+  logAudit({ userId, action: 'qb_post.create', resourceType: 'qb_post', resourceId: pendingId, metadata: { entity, docNumber, qbJournalEntryId, memberTxIds } })
+    .catch(() => { /* swallow */ })
+}
 
-  logAudit({
-    userId,
-    action: 'qb_post.create',
-    resourceType: 'qb_post',
-    resourceId: pendingId,
-    metadata: { entity, docNumber, qbJournalEntryId, memberTxIds },
-  }).catch(() => { /* swallow */ })
+// PHASE 2 — FIRE & CONFIRM (background, in after()). POSTs the JE with the
+// Request-Id as a URL query param. On Intuit's slow-create 504/stream-timeout,
+// it RE-POSTs the same request (same requestid) with backoff: Intuit replays
+// the original response (returns the created JE) once the create finishes, so
+// this confirms reliably WITHOUT depending on QB's laggy query index, and
+// never duplicates. Leaves the row reserved if it can't confirm in the budget
+// (the reconciler / next post finishes it).
+async function runJob(job: PostJob, userId: string): Promise<void> {
+  const url = `/v3/company/${getQboRealmId(job.entity)}/journalentry?minorversion=65&requestid=${encodeURIComponent(job.requestId)}`
+  const deadline = Date.now() + 240_000
+  let attempt = 0
+  while (Date.now() < deadline) {
+    attempt += 1
+    try {
+      const resp = await fetchQboJson<QbJournalEntryResponse>(
+        job.entity,
+        url,
+        { method: 'POST', body: job.jeBody, requestId: job.requestId, timeoutMs: 90_000 },
+      )
+      await markPosted(job.pendingId, resp.JournalEntry.Id, userId, job.docNumber, job.entity, job.memberTxIds)
+      return
+    } catch (postErr) {
+      const status = (postErr as { status?: number }).status
+      if (typeof status === 'number' && status >= 400 && status < 500) {
+        await db.update(qbPost)
+          .set({ postingStatus: 'failed', postingError: postErr instanceof Error ? postErr.message : String(postErr) })
+          .where(eq(qbPost.id, job.pendingId))
+        return
+      }
+      logAudit({
+        userId,
+        action: 'qb_post.create_response_lost',
+        resourceType: 'qb_post',
+        resourceId: job.pendingId,
+        metadata: { entity: job.entity, docNumber: job.docNumber, attempt, error: postErr instanceof Error ? postErr.message : String(postErr) },
+      }).catch(() => { /* swallow */ })
+      if (Date.now() + 12000 >= deadline) break
+      await new Promise((r) => setTimeout(r, 10000))
+    }
+  }
+  // Not confirmed in the background budget — leave it reserved with a note.
+  await db.update(qbPost)
+    .set({ postingError: 'Submitted to QuickBooks — awaiting confirmation (QB is slow right now).' })
+    .where(eq(qbPost.id, job.pendingId))
+    .catch(() => { /* swallow */ })
+}
 
-  return { status: 'posted', postId: pendingId, docNumber, qbJournalEntryId, memberTxIds }
+// Run reserved jobs in the background (via after()) so the request returns
+// immediately. Sequential — each JE is one QB create.
+export async function runJobsBackground(jobs: PostJob[], userId: string): Promise<void> {
+  for (const job of jobs) {
+    await runJob(job, userId).catch(() => { /* isolate per-job */ })
+  }
+  // Sweep anything still unconfirmed (e.g. earlier pendings) best-effort.
+  if (jobs[0]) await reconcileEntity(jobs[0].entity, userId).catch(() => { /* swallow */ })
 }
 
 // Background reconciliation: adopt JEs that QB created but never confirmed to

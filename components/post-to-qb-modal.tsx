@@ -107,23 +107,24 @@ export function PostToQbModal({
     if (!submitResult || submitResult.pending.length === 0) return
     let cancelled = false
     let tries = 0
-    let adoptedTotal = 0
-    const target = submitResult.pending.length
     let timer: ReturnType<typeof setTimeout>
     setReconciling(true)
     const tick = async () => {
       tries += 1
+      // Best-effort sweep (helps cross-session), then always refresh the list —
+      // the background worker flips rows to posted, so re-fetching surfaces them.
       try {
-        const r = await apiFetch<{ adopted: number }>('/api/qb/reconcile-posts', {
+        await apiFetch('/api/qb/reconcile-posts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ entity }),
         })
-        adoptedTotal += r.adopted ?? 0
-        if ((r.adopted ?? 0) > 0) onSuccess()
       } catch { /* transient — keep trying */ }
       if (cancelled) return
-      if (adoptedTotal >= target || tries >= 12) { setReconciling(false); return }
+      onSuccess()
+      // Poll for ~4 min (QB creates take ~2.5 min) then stop; the row will also
+      // show posted on any later manual reload.
+      if (tries >= 16) { setReconciling(false); return }
       timer = setTimeout(tick, 15000)
     }
     timer = setTimeout(tick, 12000)
