@@ -9,23 +9,24 @@ import { logAudit } from '@/lib/audit'
 import { errorMessage } from '@/lib/errors'
 
 export const runtime = 'nodejs'
-export const maxDuration = 120
+export const maxDuration = 300
 
 /**
- * POST /api/prepayments/post-je — book the month's GLOBAL prepaid
- * amortization as ONE journal entry in QuickBooks:
- *   DR each contract's expense account (+class), one line per supplier
- *   CR the prepaid asset account for the total
+ * POST /api/prepayments/post-je — book each month's prepaid amortization as
+ * its OWN journal entry in QuickBooks (one JE per contract):
+ *   DR the contract's expense account (+class)   amount
+ *   CR the prepaid asset account                  amount
  *
  * Body: {
  *   entity: 'Opco', month: 'YYYY-MM', prepaidAccount: '14000',
  *   lines: [{ vendorName, amount, expenseGlAccount, className? }]
  * }
  *
- * The client computes the lines from the reconciled map; this endpoint
- * validates them, resolves QB ids, allocates the next TL-<Mon>-JE## doc
- * number, posts, and audit-logs. Line descriptions carry the vendor name
- * so the map's reconciler recognizes the amortizations automatically.
+ * Each contract gets a distinct TL-<Mon>-JE## doc number and a stable
+ * Request-Id (per entity+month+contract) as a URL query param, so re-running
+ * after a QB timeout replays the originals instead of duplicating and resumes
+ * the rest. Partial success is reported per contract. Line descriptions carry
+ * the vendor name so the map's reconciler recognizes the amortizations.
  */
 export async function POST(req: NextRequest) {
   const { user, deny } = await requirePermission('qb:post', req)
@@ -63,7 +64,6 @@ export async function POST(req: NextRequest) {
   if (lines.length > 50) return NextResponse.json({ error: 'max 50 lines' }, { status: 400 })
 
   const round2 = (n: number) => Math.round(n * 100) / 100
-  const total = round2(lines.reduce((s, l) => s + (l.amount as number), 0))
 
   try {
     // Resolve account numbers → QB internal ids (QB rejects bare numbers).
@@ -80,71 +80,85 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Expense account(s) not in the ${entity} QB catalog: ${missing.join(', ')}` }, { status: 400 })
     }
 
-    // TxnDate = last day of the month; DocNumber follows the existing
-    // TL-<Mon>-JE## convention (max existing + 1).
+    // TxnDate = last day of the month; each contract gets its own sequential
+    // TL-<Mon>-JE## number (base = max existing + 1).
     const [yy, mm] = month.split('-').map(Number)
     const txnDate = new Date(Date.UTC(yy, mm, 0))
     const txnDateIso = txnDate.toISOString().slice(0, 10)
-    const seq = await getNextIndividualSequence(entity, txnDate)
-    const docNumber = formatIndividualDocNumber(txnDate, seq)
-
+    const baseSeq = await getNextIndividualSequence(entity, txnDate)
     const monthLabel = txnDate.toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })
-    const jeLines = lines.map((l) => {
+    const realmId = getQboRealmId(entity)
+
+    const posted: { vendorName: string; docNumber: string; qbJournalEntryId: string; amount: number }[] = []
+    const failed: { vendorName: string; error: string }[] = []
+
+    // One JE per contract, posted sequentially. Stable Request-Id (per
+    // entity+month+contract) makes each create idempotent so a re-run after a
+    // QB timeout replays the original (no duplicate) and finishes the rest.
+    for (let i = 0; i < lines.length; i += 1) {
+      const l = lines[i]
+      const amount = round2(l.amount as number)
       const acct = accounts.get(l.expenseGlAccount!.trim())!
-      const detail: Record<string, unknown> = {
+      const debitDetail: Record<string, unknown> = {
         PostingType: 'Debit',
         AccountRef: { value: acct.qbAccountId, name: acct.qbAccountName },
       }
       const cls = l.className ? classes.get(l.className) : undefined
-      if (cls) detail.ClassRef = { value: cls.qbClassId, name: cls.qbClassName }
-      return {
-        DetailType: 'JournalEntryLineDetail',
-        Amount: round2(l.amount as number),
-        Description: `${l.vendorName!.trim()} — prepaid release ${monthLabel}`,
-        JournalEntryLineDetail: detail,
-      }
-    })
-    jeLines.push({
-      DetailType: 'JournalEntryLineDetail',
-      Amount: total,
-      Description: `Prepaid amortization ${monthLabel} — global (tidelog)`,
-      JournalEntryLineDetail: {
-        PostingType: 'Credit',
-        AccountRef: { value: prepaidRef.qbAccountId, name: prepaidRef.qbAccountName },
-      },
-    })
+      if (cls) debitDetail.ClassRef = { value: cls.qbClassId, name: cls.qbClassName }
 
-    const payload = {
-      DocNumber: docNumber,
-      TxnDate: txnDateIso,
-      PrivateNote: `Prepaid amortization ${monthLabel} — global JE (tidelog prepayment map)`,
-      Line: jeLines,
+      const docNumber = formatIndividualDocNumber(txnDate, baseSeq + i)
+      const payload = {
+        DocNumber: docNumber,
+        TxnDate: txnDateIso,
+        PrivateNote: `${l.vendorName!.trim()} — prepaid release ${monthLabel} (tidelog)`,
+        Line: [
+          {
+            DetailType: 'JournalEntryLineDetail',
+            Amount: amount,
+            Description: `${l.vendorName!.trim()} — prepaid release ${monthLabel}`,
+            JournalEntryLineDetail: debitDetail,
+          },
+          {
+            DetailType: 'JournalEntryLineDetail',
+            Amount: amount,
+            Description: `${l.vendorName!.trim()} — prepaid release ${monthLabel}`,
+            JournalEntryLineDetail: {
+              PostingType: 'Credit',
+              AccountRef: { value: prepaidRef.qbAccountId, name: prepaidRef.qbAccountName },
+            },
+          },
+        ],
+      }
+      const requestId = `pp-${entity}-${month}-${l.expenseGlAccount!.trim()}-${l.vendorName!.trim()}`
+        .replace(/[^a-zA-Z0-9-]/g, '')
+        .slice(0, 50)
+
+      try {
+        const resp = await fetchQboJson<{ JournalEntry: { Id: string } }>(
+          entity,
+          `/v3/company/${realmId}/journalentry?minorversion=65&requestid=${encodeURIComponent(requestId)}`,
+          { method: 'POST', body: JSON.stringify(payload), requestId },
+        )
+        posted.push({ vendorName: l.vendorName!.trim(), docNumber, qbJournalEntryId: resp.JournalEntry.Id, amount })
+        logAudit({
+          userId: user.id === 'dev-user' ? null : user.id,
+          action: 'prepayment.je_posted',
+          resourceType: 'qb_journal_entry',
+          resourceId: resp.JournalEntry.Id,
+          metadata: { entity, month, docNumber, amount, prepaidAccount, vendor: l.vendorName, account: l.expenseGlAccount, class: l.className ?? null, byEmail: user.email },
+        }).catch(() => {})
+      } catch (jeErr) {
+        failed.push({ vendorName: l.vendorName!.trim(), error: errorMessage(jeErr) })
+      }
     }
 
-    const resp = await fetchQboJson<{ JournalEntry: { Id: string } }>(
-      entity,
-      `/v3/company/${getQboRealmId(entity)}/journalentry?minorversion=65`,
-      { method: 'POST', body: JSON.stringify(payload) },
-    )
-    const qbJournalEntryId = resp.JournalEntry.Id
-
-    await logAudit({
-      userId: user.id === 'dev-user' ? null : user.id,
-      action: 'prepayment.je_posted',
-      resourceType: 'qb_journal_entry',
-      resourceId: qbJournalEntryId,
-      metadata: {
-        entity,
-        month,
-        docNumber,
-        total,
-        prepaidAccount,
-        lines: lines.map((l) => ({ vendor: l.vendorName, amount: l.amount, account: l.expenseGlAccount, class: l.className ?? null })),
-        byEmail: user.email,
-      },
-    }).catch(() => {})
-
-    return NextResponse.json({ ok: true, docNumber, qbJournalEntryId, total, lineCount: lines.length })
+    return NextResponse.json({
+      ok: failed.length === 0,
+      posted,
+      failed,
+      count: posted.length,
+      total: round2(posted.reduce((s, p) => s + p.amount, 0)),
+    })
   } catch (err) {
     return NextResponse.json({ error: errorMessage(err) }, { status: 500 })
   }

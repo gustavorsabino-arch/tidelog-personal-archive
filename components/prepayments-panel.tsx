@@ -316,7 +316,13 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
     setPostingJe(true)
     setJeError(null)
     try {
-      const res = await apiFetch<{ docNumber: string; qbJournalEntryId: string; total: number }>(
+      const res = await apiFetch<{
+        ok: boolean
+        posted: { vendorName: string; docNumber: string; amount: number }[]
+        failed: { vendorName: string; error: string }[]
+        count: number
+        total: number
+      }>(
         '/api/prepayments/post-je',
         {
           method: 'POST',
@@ -324,9 +330,15 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           body: JSON.stringify({ entity, month: bookMonth, prepaidAccount: account, lines: jeLines }),
         },
       )
-      setJeModalOpen(false)
-      flash(`✓ Posted ${res.docNumber} to QuickBooks — ${fmtUSD(res.total)} across ${jeLines.length} contracts`)
-      await load() // the fresh GL shows the new amortizations → cells turn ✓
+      await load() // fresh GL turns posted cells ✓
+      if (res.failed.length > 0) {
+        // Partial: keep the modal open so the failures are visible; the posted
+        // ones are done and re-running is idempotent (won't duplicate them).
+        setJeError(`Posted ${res.count} of ${jeLines.length}. Failed: ${res.failed.map((f) => `${f.vendorName} (${f.error})`).join('; ')}. QuickBooks is slow right now — you can click Post again to retry the failed ones (no duplicates).`)
+      } else {
+        setJeModalOpen(false)
+        flash(`✓ Posted ${res.count} journal entr${res.count === 1 ? 'y' : 'ies'} to QuickBooks — ${fmtUSD(res.total)}`)
+      }
     } catch (e) {
       setJeError(e instanceof Error ? e.message : 'Posting failed')
     } finally {
@@ -620,7 +632,7 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                     ? `Set the expense GL on: ${jeMissingGl.map((l) => l.vendorName).join(', ')}`
                     : `Creates ONE journal entry in QuickBooks dated ${lastDayOfMonth(bookMonth)}`}
                 >
-                  {postingJe ? 'Posting to QuickBooks…' : `Post global JE to QB — ${fmtUSD(jeTotal)} (${jeLines.length} lines)`}
+                  {postingJe ? 'Posting to QuickBooks…' : `Post ${jeLines.length} JE${jeLines.length === 1 ? '' : 's'} to QB — ${fmtUSD(jeTotal)} (one per contract)`}
                 </button>
                 {jeMissingGl.length > 0 ? (
                   <span style={{ fontSize: '0.7rem', color: '#D4A017' }}>
@@ -716,9 +728,9 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
           >
             <div className="modal-header">
               <div>
-                <div className="modal-title">Post global JE to QuickBooks</div>
+                <div className="modal-title">Post prepayment JEs to QuickBooks</div>
                 <div className="modal-sub">
-                  Entity: {entity} · 1 journal entry · {jeLines.length} contract{jeLines.length === 1 ? '' : 's'} · dated {lastDayOfMonth(bookMonth)}
+                  Entity: {entity} · {jeLines.length} journal entr{jeLines.length === 1 ? 'y' : 'ies'} (one per contract) · dated {lastDayOfMonth(bookMonth)}
                 </div>
               </div>
               <button className="modal-close" onClick={() => setJeModalOpen(false)} disabled={postingJe} aria-label="Close">×</button>
@@ -736,7 +748,7 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
                 }}
               >
                 <strong style={{ color: 'var(--warn, #d97706)' }}>⚠ Posting hits QuickBooks.</strong>
-                {' '}One real journal entry will be created — don&apos;t close this browser tab until complete.
+                {' '}{jeLines.length} real journal entr{jeLines.length === 1 ? 'y' : 'ies'} — one per contract, each DR expense / CR {account} — will be created. Don&apos;t close this browser tab until complete.
               </div>
 
               {jeMissingGl.length > 0 ? (
@@ -756,31 +768,24 @@ export function PrepaymentsPanel({ entity }: { entity: string }) {
               ) : null}
 
               <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 12, background: 'var(--surface)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
-                  <span style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Prepaid amortization {bookMonth} · doc number allocated on post
-                  </span>
-                  <span style={{ fontSize: '0.7rem', fontFamily: 'var(--mono)', color: 'var(--green, #10b981)', fontWeight: 600 }}>
-                    ✓ Balanced
-                  </span>
+                <div style={{ fontSize: '0.68rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                  {jeLines.length} journal entr{jeLines.length === 1 ? 'y' : 'ies'} · one per contract · {bookMonth} · doc numbers allocated on post
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: '0.7rem' }}>
                   <tbody>
                     {jeLines.map((l, li) => (
                       <tr key={li} style={{ borderTop: li === 0 ? 'none' : '1px solid var(--border)' }}>
-                        <td style={{ padding: '4px 8px 4px 0', color: 'var(--green, #10b981)', fontWeight: 600, width: 60 }}>Debit</td>
+                        <td style={{ padding: '4px 8px 4px 0', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 600 }}>{l.vendorName}</td>
                         <td style={{ padding: '4px 8px', color: l.expenseGlAccount ? 'var(--muted)' : 'var(--red, #dc2626)', whiteSpace: 'nowrap' }}>
-                          {l.expenseGlAccount ? `${l.expenseGlAccount}${l.className ? ` · ${l.className}` : ''}` : '⚠ set expense GL'}
+                          {l.expenseGlAccount ? `DR ${l.expenseGlAccount}${l.className ? ` · ${l.className}` : ''} → CR ${account}` : '⚠ set expense GL'}
                         </td>
-                        <td style={{ padding: '4px 8px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.vendorName}</td>
                         <td style={{ padding: '4px 0 4px 8px', textAlign: 'right', fontWeight: 500, whiteSpace: 'nowrap' }}>
                           ${l.amount.toFixed(2)}
                         </td>
                       </tr>
                     ))}
                     <tr style={{ borderTop: '2px solid var(--border)' }}>
-                      <td style={{ padding: '4px 8px 4px 0', color: 'var(--red, #dc2626)', fontWeight: 600, width: 60 }}>Credit</td>
-                      <td style={{ padding: '4px 8px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{account} · Prepaid expenses</td>
+                      <td style={{ padding: '4px 8px 4px 0', fontWeight: 700 }}>Total</td>
                       <td style={{ padding: '4px 8px' }} />
                       <td style={{ padding: '4px 0 4px 8px', textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>
                         ${jeTotal.toFixed(2)}
