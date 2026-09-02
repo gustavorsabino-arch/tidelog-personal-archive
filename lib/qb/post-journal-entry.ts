@@ -57,9 +57,23 @@ export type BuildArgs = {
   // A resolver returning null means the name is not in the catalog — omit the ref.
   resolveClass?: (name: string) => { value: string; name?: string } | null
   resolveVendor?: (name: string) => { value: string } | null
+  // Realized Gain/Loss GL for this entity. Callers pass gainLossGlForEntity();
+  // defaults to 70150 when omitted (preview / tests without an entity).
+  gainLossGl?: string
 }
 
-const GAIN_LOSS_GL = '70150'
+// Realized Gain/Loss GL, per entity. Opco + Zagreus moved to 70510
+// (chart-of-accounts change, 2026-09); Foundation + Juku stay on 70150.
+const GAIN_LOSS_GL_DEFAULT = '70150'
+const GAIN_LOSS_GL_BY_ENTITY: Record<string, string> = {
+  opco: '70510',
+  zagreus: '70510',
+  foundation: '70150',
+  juku: '70150',
+}
+export function gainLossGlForEntity(entity: string): string {
+  return GAIN_LOSS_GL_BY_ENTITY[entity.toLowerCase()] ?? GAIN_LOSS_GL_DEFAULT
+}
 const BALANCE_EPSILON = 0.005 // half a cent — JE amounts are rounded to 2 dp
 
 function round2(n: number): number {
@@ -167,15 +181,16 @@ function buildGainPair(
   gain: number,
   resolve: AccountResolver,
   classRef: { value: string; name?: string } | undefined,
+  gainLossGl: string,
 ): QbJournalEntryLine[] {
-  // gain > 0 (profit): Credit 70150 + Debit Wallet GL (reduces net asset credit
-  //                    to cost basis; records realized gain).
-  // gain < 0 (loss):   Debit 70150 + Credit Wallet GL (records realized loss).
+  // gain > 0 (profit): Credit gain/loss GL + Debit Wallet GL (reduces net asset
+  //                    credit to cost basis; records realized gain).
+  // gain < 0 (loss):   Debit gain/loss GL + Credit Wallet GL (records realized loss).
   const abs = round2(Math.abs(gain))
   const isProfit = gain > 0
   const glDetail: QbJournalEntryLine['JournalEntryLineDetail'] = {
     PostingType: isProfit ? 'Credit' : 'Debit',
-    AccountRef: resolve(GAIN_LOSS_GL),
+    AccountRef: resolve(gainLossGl),
   }
   if (classRef !== undefined) glDetail.ClassRef = classRef
   const walletDetail: QbJournalEntryLine['JournalEntryLineDetail'] = {
@@ -226,6 +241,7 @@ export function buildJournalEntry(args: BuildArgs): QbJournalEntry {
   // for missing names, which causes the ref to be omitted).
   const resolveClass = args.resolveClass ?? ((n) => ({ value: n }))
   const resolveVendor = args.resolveVendor ?? ((n) => ({ value: n }))
+  const gainLossGl = args.gainLossGl ?? GAIN_LOSS_GL_DEFAULT
 
   // 1. Main debit/credit pairs (aggregated across bulk members).
   for (const agg of aggregateMainLines(args.txs)) {
@@ -253,8 +269,8 @@ export function buildJournalEntry(args: BuildArgs): QbJournalEntry {
     const stRounded = round2(stGain)
     const ltRounded = round2(ltGain)
     const classRef = className != null ? resolveClass(className) ?? undefined : undefined
-    if (stRounded !== 0) lines.push(...buildGainPair(walletAccountCode, stRounded, resolve, classRef))
-    if (ltRounded !== 0) lines.push(...buildGainPair(walletAccountCode, ltRounded, resolve, classRef))
+    if (stRounded !== 0) lines.push(...buildGainPair(walletAccountCode, stRounded, resolve, classRef, gainLossGl))
+    if (ltRounded !== 0) lines.push(...buildGainPair(walletAccountCode, ltRounded, resolve, classRef, gainLossGl))
   }
 
   // Description → the Memo (PrivateNote) AND every line's Description. v1 used

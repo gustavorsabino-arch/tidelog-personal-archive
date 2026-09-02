@@ -18,7 +18,7 @@ import {
   loadedTxToTxForPost,
   type GroupSpec,
 } from '@/lib/qb/post-batch'
-import { buildJournalEntry } from '@/lib/qb/post-journal-entry'
+import { buildJournalEntry, gainLossGlForEntity } from '@/lib/qb/post-journal-entry'
 import {
   formatBulkDocNumber,
   formatIndividualDocNumber,
@@ -76,6 +76,7 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     )
   }
+  const entity = b.entity // narrowed to QboEntity; stable inside the map closures below
   if (
     !Array.isArray(b.txIds) ||
     b.txIds.length === 0 ||
@@ -109,6 +110,7 @@ export async function POST(req: NextRequest) {
           // per-tx catalog and are shown verbatim in the modal. Real posting
           // supplies resolvers that map names → QB Ids.
           description: groupDescription(group),
+          gainLossGl: gainLossGlForEntity(entity),
         })
         return {
           kind: 'individual',
@@ -124,6 +126,7 @@ export async function POST(req: NextRequest) {
         txs: group.members.map(loadedTxToTxForPost),
         docNumber: docNumberPreview,
         description: groupDescription(group),
+        gainLossGl: gainLossGlForEntity(entity),
       })
       return {
         kind: 'bulk',

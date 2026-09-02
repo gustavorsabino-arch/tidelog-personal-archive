@@ -14,7 +14,7 @@ import { toDbEntity } from '@/lib/entity'
 import { logAudit } from '@/lib/audit'
 import { fetchQboJson } from './client.ts'
 import { getQboRealmId, type QboEntity } from './config.ts'
-import { buildJournalEntry, UnresolvedAccountError, type TxForPost, type AccountResolver, type BuildArgs } from './post-journal-entry.ts'
+import { buildJournalEntry, gainLossGlForEntity, UnresolvedAccountError, type TxForPost, type AccountResolver, type BuildArgs } from './post-journal-entry.ts'
 import { readCachedAccountCatalogByNumber, readCachedClassCatalogByName, readCachedVendorCatalogByName } from './cache-reads.ts'
 import {
   formatBulkDocNumber,
@@ -761,6 +761,7 @@ async function reserveAndBuildJob(
       resolveAccount,
       resolveClass,
       resolveVendor,
+      gainLossGl: gainLossGlForEntity(entity),
     })
   } catch (buildErr) {
     await db.update(qbPost)
