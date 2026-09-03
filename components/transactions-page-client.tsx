@@ -1552,6 +1552,8 @@ export function TransactionsPageClient({
                   <option value="ORCA">ORCA</option>
                   <option value="USDC">USDC</option>
                   <option value="USDT">USDT</option>
+                  <option value="USDG">USDG</option>
+                  <option value="PYUSD">PYUSD</option>
                 </select>
                 <select className="fsel" value={dirFilter} onChange={e => setDirFilter(e.target.value)}>
                   <option value="">In + Out</option>
