@@ -1357,19 +1357,19 @@ export function TransactionsPageClient({
             <div className="card">
               <div className="card-label">Inflows</div>
               <div className="card-value green">{fmtUSD(totalIn, 0)}</div>
-              <div className="card-sub">Full entity data</div>
+              <div className="card-sub">matching filters</div>
             </div>
             <div className="card">
               <div className="card-label">Outflows</div>
               <div className="card-value red">{fmtUSD(totalOut, 0)}</div>
-              <div className="card-sub">Full entity data</div>
+              <div className="card-sub">matching filters</div>
             </div>
             <div className="card">
               <div className="card-label">Net</div>
               <div className={`card-value ${totalNet >= 0 ? 'green' : 'red'}`}>
                 {totalNet >= 0 ? '+' : ''}{fmtUSD(totalNet, 0)}
               </div>
-              <div className="card-sub">Full entity data</div>
+              <div className="card-sub">matching filters</div>
             </div>
             <div className="card">
               <div className="card-label">Transactions</div>
