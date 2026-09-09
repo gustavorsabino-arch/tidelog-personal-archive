@@ -64,6 +64,10 @@ if (config.mode === 'local') {
       return value
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e))
+      console.error('[db] RDS IAM auth token failed', {
+        error: err.message,
+        name: err.name,
+      })
       cachedError = { error: err, expiresAt: Date.now() + NEG_CACHE_MS }
       throw err
     }
