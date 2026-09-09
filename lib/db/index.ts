@@ -61,6 +61,7 @@ if (config.mode === 'local') {
       ])
       cachedToken = { value, expiresAt: Date.now() + TOKEN_TTL_MS }
       cachedError = null
+      console.info('[db] RDS IAM auth token retrieved')
       return value
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e))
