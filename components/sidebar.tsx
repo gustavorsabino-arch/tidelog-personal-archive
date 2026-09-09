@@ -35,6 +35,10 @@ function renderNavItem(item: typeof NAV_ITEMS[number], pathname: string) {
     <Link
       key={item.href}
       href={item.href}
+      // Viewport prefetch on all 14 nav links fired ~14 RSC requests per page
+      // load; each runs the proxy's per-request auth lookup against Postgres, which
+      // is what drove the connection spike. false still prefetches on hover.
+      prefetch={false}
       className={`sb-item${active ? ' active' : ''}`}
       style={{ '--dot-glow': `${item.color}33` } as React.CSSProperties}
     >
