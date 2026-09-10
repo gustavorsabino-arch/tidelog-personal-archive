@@ -46,9 +46,15 @@ if (config.mode === 'local') {
   const AUTH_TIMEOUT_MS = 5 * 1000
   let cachedToken: { value: string; expiresAt: number } | null = null
   let cachedError: { error: Error; expiresAt: number } | null = null
-  const getAuthToken = async () => {
-    if (cachedToken && cachedToken.expiresAt > Date.now()) return cachedToken.value
-    if (cachedError && cachedError.expiresAt > Date.now()) throw cachedError.error
+  // Dedupe concurrent token fetches. postgres-js opens its pool connections in
+  // parallel and invokes this password callback for each, so a cold instance was
+  // firing several simultaneous STS AssumeRoleWithWebIdentity + RDS-signer calls
+  // at once (logs showed "4 RDS IAM auth token retrieved" within one request).
+  // That concurrent signing is what stalled connection establishment for 8-20s
+  // while the DB itself sat idle. Sharing a single in-flight promise collapses
+  // the burst to one sign; every other caller awaits the same result.
+  let inflight: Promise<string> | null = null
+  const fetchAuthToken = async () => {
     try {
       const value = await Promise.race([
         signer.getAuthToken(),
@@ -72,6 +78,15 @@ if (config.mode === 'local') {
       cachedError = { error: err, expiresAt: Date.now() + NEG_CACHE_MS }
       throw err
     }
+  }
+  const getAuthToken = async () => {
+    if (cachedToken && cachedToken.expiresAt > Date.now()) return cachedToken.value
+    if (cachedError && cachedError.expiresAt > Date.now()) throw cachedError.error
+    if (inflight) return inflight
+    inflight = fetchAuthToken().finally(() => {
+      inflight = null
+    })
+    return inflight
   }
 
   client = postgres({
