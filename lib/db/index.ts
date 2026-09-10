@@ -91,7 +91,7 @@ if (config.mode === 'local') {
     // Bound how long we'll wait to establish a connection. Default is 30s
     // which is long enough that a broken DB (e.g. AWS OIDC misconfig, RDS
     // unavailable) makes login requests appear to hang indefinitely.
-    connect_timeout: 10,
+    connect_timeout: 20,
   })
 }
 
