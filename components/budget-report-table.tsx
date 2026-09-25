@@ -250,18 +250,28 @@ export function BudgetReportTable({ report, loadingActuals, onBudgetCellClick, o
                   </td>
                   <td className="budget-table-divider" />
                   <td className="num">
-                    {row.adjustmentUsd
-                      ? (
-                        <span title={adjustmentBreakdownTitle(row)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-                          <span aria-hidden="true" style={{ color: 'var(--accent)' }}>●</span>
-                          {renderCellButton(
-                            formatAdjustmentCell(row.adjustmentUsd),
-                            Boolean(onAdjustmentClick),
-                            onAdjustmentClick ? () => onAdjustmentClick(row) : undefined,
-                          )}
-                        </span>
-                      )
-                      : '—'}
+                    {(() => {
+                      const isAdjustable = row.kind === 'line' && !!row.budgetKeys && row.budgetKeys.length === 1 && row.key !== 'coreProductRevenue'
+                      const label = row.adjustmentUsd ? formatAdjustmentCell(row.adjustmentUsd) : '—'
+                      const title = row.adjustmentUsd ? adjustmentBreakdownTitle(row) : 'Add an adjustment'
+                      const marker = row.adjustmentUsd ? <span aria-hidden="true" style={{ color: 'var(--accent)' }}>●</span> : null
+                      if (isAdjustable && onAdjustmentClick) {
+                        return (
+                          <button
+                            type="button"
+                            className="budget-table-cell-button"
+                            title={title}
+                            onClick={(event) => { event.stopPropagation(); onAdjustmentClick(row) }}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
+                          >
+                            {marker}{label}
+                          </button>
+                        )
+                      }
+                      return row.adjustmentUsd
+                        ? <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>{marker}{label}</span>
+                        : '—'
+                    })()}
                   </td>
                 </tr>
               )

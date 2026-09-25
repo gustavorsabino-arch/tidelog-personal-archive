@@ -85,17 +85,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Notes are required — say why you are adjusting' }, { status: 400 })
   }
 
-  const created = await createBudgetAdjustment({
-    year: Number(year),
-    department,
-    lineItem: lineItem.trim(),
-    kind,
-    amount: amountNum,
-    startPeriod: startPeriod as never,
-    durationMonths: duration,
-    notes: notes.trim(),
-    createdBy: accessResult.user.email,
-  })
+  let created: { id: string }
+  try {
+    created = await createBudgetAdjustment({
+      year: Number(year),
+      department,
+      lineItem: lineItem.trim(),
+      kind,
+      amount: amountNum,
+      startPeriod: startPeriod as never,
+      durationMonths: duration,
+      notes: notes.trim(),
+      createdBy: accessResult.user.email,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // The most common failure right after deploy: the table hasn't been created
+    // yet because migrations don't run on build. Surface a clear, actionable
+    // message instead of an opaque 500.
+    if (/relation .*budget_adjustment.* does not exist|42P01/i.test(message)) {
+      return NextResponse.json(
+        { error: 'The budget_adjustment table is not set up yet. Run the database migration (bun run db:migrate).' },
+        { status: 503 },
+      )
+    }
+    console.error('[budget/adjustments] create failed', error)
+    return NextResponse.json({ error: `Failed to save adjustment: ${message}` }, { status: 500 })
+  }
 
   await logAudit({
     userId: accessResult.user.id === 'dev-user' ? null : accessResult.user.id,
