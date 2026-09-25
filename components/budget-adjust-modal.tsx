@@ -3,6 +3,20 @@
 import { useState } from 'react'
 
 import { apiPost } from '@/lib/api'
+import { fmtUSD } from '@/lib/format'
+import type { BudgetAdjustment } from '@/lib/budget/adjustments-db'
+
+const MONTH_LABEL: Record<string, string> = {
+  '01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+  '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec',
+}
+
+function describeAdjustment(a: BudgetAdjustment): string {
+  if (a.kind === 'recurring') {
+    return `${MONTH_LABEL[a.startPeriod] ?? a.startPeriod} ×${a.durationMonths} (recurring)`
+  }
+  return `${MONTH_LABEL[a.startPeriod] ?? a.startPeriod} (one-time)`
+}
 
 const MONTHS: Array<{ value: string; label: string }> = [
   { value: '01', label: 'January' }, { value: '02', label: 'February' },
@@ -20,11 +34,13 @@ type BudgetAdjustModalProps = {
   year: number
   departments: readonly string[]
   lineItems: BudgetAdjustLineOption[]
+  existing?: BudgetAdjustment[]
   onClose: () => void
   onSaved: () => Promise<void> | void
+  onReverse?: (id: string) => Promise<void> | void
 }
 
-export function BudgetAdjustModal({ open, year, departments, lineItems, onClose, onSaved }: BudgetAdjustModalProps) {
+export function BudgetAdjustModal({ open, year, departments, lineItems, existing = [], onClose, onSaved, onReverse }: BudgetAdjustModalProps) {
   const [department, setDepartment] = useState('')
   const [lineItem, setLineItem] = useState('')
   const [amountText, setAmountText] = useState('')
@@ -135,6 +151,37 @@ export function BudgetAdjustModal({ open, year, departments, lineItems, onClose,
 
           {error ? (
             <div className="status-bar"><span className="status-dot warn" /><span className="status-text">{error}</span></div>
+          ) : null}
+
+          {existing.length > 0 ? (
+            <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+              <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6 }}>
+                Adjustment log ({existing.length})
+              </div>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {existing.map((a) => {
+                  const label = lineItems.find((li) => li.key === a.lineItem)?.label ?? a.lineItem
+                  const reversed = a.status === 'reversed'
+                  return (
+                    <li key={a.id} style={{ fontSize: '0.72rem', background: 'var(--surface2)', borderRadius: 4, padding: '6px 8px', opacity: reversed ? 0.55 : 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                        <span style={{ fontWeight: 600, textDecoration: reversed ? 'line-through' : 'none' }}>
+                          {a.amount > 0 ? '+' : '-'}{fmtUSD(Math.abs(a.amount), 0)} · {label} · {a.department}
+                        </span>
+                        {onReverse && !reversed ? (
+                          <button type="button" className="btn-secondary" style={{ fontSize: '0.68rem', padding: '1px 8px' }} disabled={submitting} onClick={() => void onReverse(a.id)}>
+                            Reverse
+                          </button>
+                        ) : reversed ? <span style={{ color: 'var(--muted)' }}>reversed</span> : null}
+                      </div>
+                      <div style={{ color: 'var(--muted)', marginTop: 2 }}>
+                        {describeAdjustment(a)} · {a.notes} · by {a.createdBy}
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
           ) : null}
         </div>
 

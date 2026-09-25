@@ -1926,10 +1926,16 @@ export default function BudgetPage() {
         year={budgetYear}
         departments={BUDGET_DEPTS}
         lineItems={adjustLineOptions}
+        existing={adjustments}
         onClose={() => setIsAdjustModalOpen(false)}
         onSaved={async () => {
           await loadAdjustments()
           setLastActionMessage('Budget adjustment saved.')
+        }}
+        onReverse={async (id) => {
+          await apiPost(`/api/budget/adjustments/${id}/reverse`, {})
+          await loadAdjustments()
+          setLastActionMessage('Budget adjustment reversed.')
         }}
       />
       <BudgetImportModal
