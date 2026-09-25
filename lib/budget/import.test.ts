@@ -14,6 +14,7 @@ import {
   parseBudgetWorkbook,
   prepareDepartmentPlanForImport,
   mergeDepartmentPeriods,
+  isMonthScopedWorkbook,
 } from './import.ts'
 import type { BudgetDepartmentPlan } from './types.ts'
 
@@ -103,6 +104,39 @@ test('captures top-level monthly rows whose label sits in column 0', () => {
   assert.equal(dept?.lines.industryRelations, 60)
   assert.equal(dept?.lines.contingency, 15)
   assert.equal(dept?.unmappedLineItems.length, 0)
+})
+
+test('isMonthScopedWorkbook: true when every parsed department is monthly-columns', () => {
+  const workbook = XLSX.utils.book_new()
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['', '', '', 'Oct', 'Nov', 'Dec'],
+    ['', '', 'Cloud Hosting & Compute', 100, 150, 200],
+    ['', '', 'Department Tools', 25, 30, 45],
+  ])
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Engineering')
+  const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+  const parsed = parseBudgetWorkbook(buffer, 'Engineering', 'annual')
+
+  assert.deepEqual(parsed.departments[0]?.importedPeriods, ['10', '11', '12'])
+  assert.equal(isMonthScopedWorkbook(parsed), true)
+})
+
+test('isMonthScopedWorkbook: false for a line-item/annual workbook with no month columns', () => {
+  const workbook = XLSX.utils.book_new()
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['Line Item', 'Budget'],
+    ['Cloud Hosting & Compute', 480000],
+    ['Department Tools', 115000],
+  ])
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Engineering')
+  const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+  const parsed = parseBudgetWorkbook(buffer, 'Engineering', 'annual')
+
+  assert.equal(isMonthScopedWorkbook(parsed), false)
+})
+
+test('isMonthScopedWorkbook: false when no departments parsed', () => {
+  assert.equal(isMonthScopedWorkbook({ departments: [], departmentsMissing: [], invalidSheets: [] }), false)
 })
 
 test('parses multi-month sheets using the requested month column', () => {
@@ -407,6 +441,53 @@ test('monthly workbook imports replace stale annual periods before merging', () 
     '01': { hosting: 100 },
     '02': { hosting: 200 },
   })
+})
+
+test('Q4 month-scoped merge preserves Jan-Sep and clears the stale annual (recomputed on save)', () => {
+  const existingPlan: BudgetDepartmentPlan = {
+    version: 1,
+    year: 2026,
+    department: 'Engineering',
+    periods: {
+      '01': { hosting: 100 }, '02': { hosting: 100 }, '03': { hosting: 100 },
+      '04': { hosting: 100 }, '05': { hosting: 100 }, '06': { hosting: 100 },
+      '07': { hosting: 100 }, '08': { hosting: 100 }, '09': { hosting: 100 },
+      '10': { hosting: 100 }, '11': { hosting: 100 }, '12': { hosting: 100 },
+      annual: { hosting: 1200 },
+    },
+    source: 'sheet-import' as const,
+    importMeta: null,
+  }
+
+  const prepared = prepareDepartmentPlanForImport(existingPlan, {
+    layout: 'monthly-columns',
+    importedPeriods: ['10', '11', '12'],
+  })
+  const merged = mergeDepartmentPeriods(prepared, {
+    year: 2026,
+    department: 'Engineering',
+    periods: {
+      '10': { hosting: 500 }, '11': { hosting: 500 }, '12': { hosting: 500 },
+    },
+    importMeta: {
+      lastImportedAt: '2026-09-25T00:00:00.000Z',
+      lastImportedBy: 'tester@orca.so',
+      sourceFileName: 'q4.xlsx',
+      templateVersion: 'budget-v1-sheet',
+    },
+  })
+
+  // Jan-Sep untouched.
+  for (const m of ['01', '02', '03', '04', '05', '06', '07', '08', '09']) {
+    assert.deepEqual(merged?.periods[m as '01'], { hosting: 100 })
+  }
+  // Q4 replaced with the new numbers.
+  assert.deepEqual(merged?.periods['10'], { hosting: 500 })
+  assert.deepEqual(merged?.periods['11'], { hosting: 500 })
+  assert.deepEqual(merged?.periods['12'], { hosting: 500 })
+  // Stale annual removed here; saveBudgetDepartmentPlan recomputes it as the
+  // sum of all twelve merged months (9*100 + 3*500 = 2400).
+  assert.equal(merged?.periods.annual, undefined)
 })
 
 test('annual workbook imports replace stale monthly periods before merging', () => {

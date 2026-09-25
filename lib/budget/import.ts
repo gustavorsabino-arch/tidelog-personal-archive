@@ -759,6 +759,18 @@ export function parseBudgetWorkbook(
   }
 }
 
+// True only when every parsed department sheet used the monthly-columns
+// layout — i.e. the workbook is clearly scoped to specific months. The
+// merge-import path uses this to refuse a line-item/annual workbook, which
+// would otherwise impact ALL months and silently wipe the ones absent from
+// the file. Q4 (Oct/Nov/Dec = 3 month headers) satisfies this.
+export function isMonthScopedWorkbook(workbook: ParsedBudgetWorkbook): boolean {
+  return (
+    workbook.departments.length > 0 &&
+    workbook.departments.every((dept) => dept.layout === 'monthly-columns')
+  )
+}
+
 export function mergeDepartmentPeriod(
   existingPlan: BudgetDepartmentPlan | null,
   input: {

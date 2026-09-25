@@ -7,6 +7,7 @@ import {
   describeBudgetImportWorkbookRequirements,
   formatBudgetPeriodLabel,
   getBudgetImportExistingPeriodsToReplace,
+  isMonthScopedWorkbook,
   mergeDepartmentPeriods,
   parseBudgetWorkbook,
   prepareDepartmentPlanForImport,
@@ -35,6 +36,7 @@ export async function POST(req: NextRequest) {
   const periodValue = formData.get('period')
   const departmentValue = formData.get('department')
   const overwriteValue = formData.get('overwrite')
+  const modeValue = formData.get('mode')
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: 'No file uploaded' }, { status: 400 })
@@ -88,6 +90,19 @@ export async function POST(req: NextRequest) {
           expectedWorkbook: describeBudgetImportWorkbookRequirements(department),
         },
         { status: 400 },
+      )
+    }
+
+    // Merge mode ("update specific months") must only accept a month-scoped
+    // workbook. A line-item/annual file would impact every month and wipe the
+    // ones absent from the upload — refuse it before any write.
+    if (String(modeValue ?? '') === 'merge-months' && !isMonthScopedWorkbook(workbook)) {
+      return NextResponse.json(
+        {
+          error:
+            'This file has no month columns to merge. Upload a workbook with the month columns you want to update (Q4 needs Oct, Nov and Dec).',
+        },
+        { status: 422 },
       )
     }
 
