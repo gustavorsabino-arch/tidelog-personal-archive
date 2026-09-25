@@ -14,6 +14,7 @@ import {
   parseBudgetWorkbook,
   prepareDepartmentPlanForImport,
   mergeDepartmentPeriods,
+  isMonthScopedWorkbook,
 } from './import.ts'
 import type { BudgetDepartmentPlan } from './types.ts'
 
@@ -103,6 +104,39 @@ test('captures top-level monthly rows whose label sits in column 0', () => {
   assert.equal(dept?.lines.industryRelations, 60)
   assert.equal(dept?.lines.contingency, 15)
   assert.equal(dept?.unmappedLineItems.length, 0)
+})
+
+test('isMonthScopedWorkbook: true when every parsed department is monthly-columns', () => {
+  const workbook = XLSX.utils.book_new()
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['', '', '', 'Oct', 'Nov', 'Dec'],
+    ['', '', 'Cloud Hosting & Compute', 100, 150, 200],
+    ['', '', 'Department Tools', 25, 30, 45],
+  ])
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Engineering')
+  const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+  const parsed = parseBudgetWorkbook(buffer, 'Engineering', 'annual')
+
+  assert.deepEqual(parsed.departments[0]?.importedPeriods, ['10', '11', '12'])
+  assert.equal(isMonthScopedWorkbook(parsed), true)
+})
+
+test('isMonthScopedWorkbook: false for a line-item/annual workbook with no month columns', () => {
+  const workbook = XLSX.utils.book_new()
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['Line Item', 'Budget'],
+    ['Cloud Hosting & Compute', 480000],
+    ['Department Tools', 115000],
+  ])
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Engineering')
+  const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+  const parsed = parseBudgetWorkbook(buffer, 'Engineering', 'annual')
+
+  assert.equal(isMonthScopedWorkbook(parsed), false)
+})
+
+test('isMonthScopedWorkbook: false when no departments parsed', () => {
+  assert.equal(isMonthScopedWorkbook({ departments: [], departmentsMissing: [], invalidSheets: [] }), false)
 })
 
 test('parses multi-month sheets using the requested month column', () => {
