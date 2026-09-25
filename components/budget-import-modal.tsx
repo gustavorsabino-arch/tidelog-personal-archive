@@ -42,6 +42,9 @@ function toFileRows(files: File[]): FileRow[] {
 
 export function BudgetImportModal({ open, year: defaultYear, onClose, onImported }: BudgetImportModalProps) {
   const [year, setYear] = useState<number>(defaultYear)
+  // 'replace' = full-year batch (destructive per department). 'merge' = update
+  // only the months present in the uploaded workbook, preserving the rest.
+  const [mode, setMode] = useState<'replace' | 'merge'>('replace')
   const [rows, setRows] = useState<FileRow[]>([])
   const [dragOver, setDragOver] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -83,6 +86,11 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
 
   async function submit() {
     if (!readyToImport) return
+    if (mode === 'merge') return submitMerge()
+    return submitReplace()
+  }
+
+  async function submitReplace() {
     setSubmitting(true)
     setError(null)
     try {
@@ -106,6 +114,60 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
     }
   }
 
+  // Merge mode: one workbook, only its month columns are updated. Reuses the
+  // non-destructive /api/budget/import path (department 'All', period 'annual'
+  // so every month column present in the file is detected and merged).
+  async function submitMerge() {
+    const file = rows[0]?.file
+    if (!file) return
+    setSubmitting(true)
+    setError(null)
+
+    const post = (overwrite: boolean) => {
+      const body = new FormData()
+      body.set('file', file)
+      body.set('year', String(year))
+      body.set('department', 'All')
+      body.set('period', 'annual')
+      body.set('mode', 'merge-months')
+      if (overwrite) body.set('overwrite', 'true')
+      return apiFormFetch<{ departmentsProcessed?: string[]; importedPeriods?: string[] }>(
+        '/api/budget/import',
+        body,
+      )
+    }
+
+    try {
+      let res: { departmentsProcessed?: string[] }
+      try {
+        res = await post(false)
+      } catch (err) {
+        const e = err as { status?: number; payload?: { needsConfirmation?: boolean; message?: string; error?: string } }
+        if (e.status === 409 && e.payload?.needsConfirmation) {
+          const ok = window.confirm(
+            `${e.payload.message ?? 'Those months already have budget data.'}\n\nOverwrite just those months?`,
+          )
+          if (!ok) { setSubmitting(false); return }
+          res = await post(true)
+        } else if (e.status === 422) {
+          setError(e.payload?.error ?? 'This file has no month columns to merge.')
+          setSubmitting(false)
+          return
+        } else {
+          throw err
+        }
+      }
+      const departments = res.departmentsProcessed ?? []
+      await onImported({ ok: true, year, succeeded: departments.length, failed: 0, results: [] })
+      reset()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
     <div className="modal-overlay open" onClick={() => !submitting && onClose()}>
       <div
@@ -120,10 +182,39 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
         </div>
 
         <div className="modal-body" style={{ padding: 20 }}>
-          <p style={{ marginBottom: 16, color: 'var(--muted)', fontSize: '0.8rem' }}>
-            Drop one .xlsx per department. Department is inferred from the filename
-            (e.g. <code>Engineering.xlsx</code>). Re-uploading overwrites the year for that department.
-          </p>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <button
+              type="button"
+              className={mode === 'replace' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => { setMode('replace'); setError(null); setResult(null) }}
+              disabled={submitting}
+              style={{ flex: 1, fontSize: '0.78rem' }}
+            >
+              Full year (replace)
+            </button>
+            <button
+              type="button"
+              className={mode === 'merge' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => { setMode('merge'); setError(null); setResult(null) }}
+              disabled={submitting}
+              style={{ flex: 1, fontSize: '0.78rem' }}
+            >
+              Update specific months (merge)
+            </button>
+          </div>
+
+          {mode === 'replace' ? (
+            <p style={{ marginBottom: 16, color: 'var(--muted)', fontSize: '0.8rem' }}>
+              Drop one .xlsx per department. Department is inferred from the filename
+              (e.g. <code>Engineering.xlsx</code>). Re-uploading <strong>overwrites the whole year</strong> for that department.
+            </p>
+          ) : (
+            <p style={{ marginBottom: 16, color: 'var(--muted)', fontSize: '0.8rem' }}>
+              Drop <strong>one workbook</strong> containing only the month columns you want to update
+              (e.g. Q4 = Oct, Nov, Dec). Only those months are changed; the other months of the year are
+              <strong> kept</strong>, and the annual total is recomputed. Needs at least 3 month columns.
+            </p>
+          )}
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
             <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>Year</span>
@@ -171,8 +262,9 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
           {rows.length > 0 ? (
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginBottom: 6 }}>
-                {rows.length} file{rows.length === 1 ? '' : 's'} queued
-                {unmappedCount > 0 ? ` · ${unmappedCount} with unknown department` : ''}
+                {mode === 'merge'
+                  ? `Using workbook: ${rows[0]?.file.name}${rows.length > 1 ? ` (only the first of ${rows.length} is used in merge mode)` : ''}`
+                  : `${rows.length} file${rows.length === 1 ? '' : 's'} queued${unmappedCount > 0 ? ` · ${unmappedCount} with unknown department` : ''}`}
               </div>
               <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 200, overflowY: 'auto' }}>
                 {rows.map((row) => (
@@ -235,7 +327,11 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
             Close
           </button>
           <button type="button" className="btn-primary" onClick={submit} disabled={!readyToImport}>
-            {submitting ? 'Importing…' : `Import ${rows.length || ''} file${rows.length === 1 ? '' : 's'}`.trim()}
+            {submitting
+              ? (mode === 'merge' ? 'Updating…' : 'Importing…')
+              : mode === 'merge'
+                ? 'Update months'
+                : `Import ${rows.length || ''} file${rows.length === 1 ? '' : 's'}`.trim()}
           </button>
         </div>
       </div>
