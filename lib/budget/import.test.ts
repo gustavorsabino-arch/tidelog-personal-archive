@@ -459,8 +459,10 @@ test('Q4 month-scoped merge preserves Jan-Sep and clears the stale annual (recom
     importMeta: null,
   }
 
-  const impacted = { layout: 'monthly-columns' as const, importedPeriods: ['10', '11', '12'] }
-  const prepared = prepareDepartmentPlanForImport(existingPlan, impacted)
+  const prepared = prepareDepartmentPlanForImport(existingPlan, {
+    layout: 'monthly-columns',
+    importedPeriods: ['10', '11', '12'],
+  })
   const merged = mergeDepartmentPeriods(prepared, {
     year: 2026,
     department: 'Engineering',
