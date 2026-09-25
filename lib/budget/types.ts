@@ -377,6 +377,11 @@ export type BudgetReportRow = {
   actualKeys?: string[] | null
   tone?: BudgetReportRowTone
   cells: Record<BudgetReportColumnKey, BudgetReportCell>
+  // Net annual adjustment applied to this row's line item(s) this year (signed).
+  // 0/undefined when nothing was adjusted. `adjustmentByDepartment` attributes
+  // it per department for the All-Departments breakdown.
+  adjustmentUsd?: number
+  adjustmentByDepartment?: Array<{ department: string; amountUsd: number }>
 }
 
 export type BudgetPlanBreakdownEntry = {
