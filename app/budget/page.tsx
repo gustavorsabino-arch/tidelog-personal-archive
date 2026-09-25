@@ -11,6 +11,9 @@ import { Skeleton } from '@/components/skeleton'
 const BudgetImportModal = dynamic(
   () => import('@/components/budget-import-modal').then((m) => m.BudgetImportModal),
 )
+const BudgetAdjustModal = dynamic(
+  () => import('@/components/budget-adjust-modal').then((m) => m.BudgetAdjustModal),
+)
 const BudgetRecoveryModal = dynamic(
   () => import('@/components/budget-recovery-modal').then((m) => m.BudgetRecoveryModal),
 )
@@ -38,6 +41,7 @@ import { BudgetQbMappingPanel } from '@/components/budget-qb-mapping-panel'
 import { BudgetCoveragePanel } from '@/components/budget-coverage-panel'
 import { useSharedAccess } from '@/lib/access-context'
 import type { BudgetBootstrapResponse } from '@/lib/budget/bootstrap'
+import type { BudgetAdjustment } from '@/lib/budget/adjustments-db'
 import type {
   BudgetActualDrillState,
   BudgetCoverageState,
@@ -210,6 +214,7 @@ export default function BudgetPage() {
   })
   const [selectedHeadcountDepartment, setSelectedHeadcountDepartment] = useState<BudgetDepartment | null>(null)
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
+  const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false)
   const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false)
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false)
   const [isQbModalOpen, setIsQbModalOpen] = useState(false)
@@ -217,6 +222,7 @@ export default function BudgetPage() {
   const [lastActionMessage, setLastActionMessage] = useState<string | null>(null)
   const [qbNotice, setQbNotice] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
   const [budgetState, setBudgetState] = useState<BudgetState>(() => createEmptyBudgetState(2026))
+  const [adjustments, setAdjustments] = useState<BudgetAdjustment[]>([])
   const [mappingState, setMappingState] = useState<BudgetQbMappingState | null>(null)
   const [mappingLoading, setMappingLoading] = useState(false)
   const [mappingSaving, setMappingSaving] = useState(false)
@@ -336,6 +342,18 @@ export default function BudgetPage() {
     }
   }
 
+  async function loadAdjustments() {
+    try {
+      const res = await apiFetch<{ adjustments: BudgetAdjustment[] }>(`/api/budget/adjustments?year=${budgetYear}`)
+      setAdjustments(res.adjustments ?? [])
+    } catch (error) {
+      // Non-fatal: the budget page still works without adjustments (e.g. before
+      // the migration runs). Log and show the plan as-is.
+      console.error('[budget] loadAdjustments failed', error)
+      setAdjustments([])
+    }
+  }
+
   async function loadBudgetTeam(noCache = false) {
     setTeamLoading(true)
     try {
@@ -412,6 +430,7 @@ export default function BudgetPage() {
     }
 
     void loadBudgetBootstrap()
+    void loadAdjustments()
   }, [access, accessLoading, budgetYear, canViewBudget])
 
   async function loadQbStatus() {
@@ -583,15 +602,21 @@ export default function BudgetPage() {
     : (activeActualRequest ? actualsLoading : false)
   const overviewReport = useMemo(() => {
     if (overviewSelectedDepartment) {
-      const report = buildBudgetDepartmentReport(budgetState.plan, overviewSelectedDepartment, budgetView)
+      const report = buildBudgetDepartmentReport(budgetState.plan, overviewSelectedDepartment, budgetView, adjustments)
       return departmentActuals && departmentActuals.department === overviewSelectedDepartment
         ? applyBudgetDepartmentActuals(report, departmentActuals)
         : report
     }
 
-    const report = buildBudgetOverviewReport(budgetState.plan, BUDGET_DEPTS, budgetView)
+    const report = buildBudgetOverviewReport(budgetState.plan, BUDGET_DEPTS, budgetView, adjustments)
     return overviewActuals ? applyBudgetOverviewActuals(report, overviewActuals) : report
-  }, [budgetState.plan, budgetView, departmentActuals, overviewActuals, overviewSelectedDepartment])
+  }, [budgetState.plan, budgetView, departmentActuals, overviewActuals, overviewSelectedDepartment, adjustments])
+  const adjustLineOptions = useMemo(
+    () => overviewReport.rows
+      .filter((r) => r.kind === 'line' && !!r.budgetKeys && r.budgetKeys.length === 1 && r.key !== 'coreProductRevenue')
+      .map((r) => ({ key: r.budgetKeys![0], label: r.label })),
+    [overviewReport],
+  )
   const missingQboEntities = getMissingQboEntities(budgetView.entity, qbStatuses)
   const teamSourceLabel = budgetState.team.source === 'app-managed' ? 'App-managed team' : 'Placeholder team'
   const teamUpdatedLabel = budgetState.team.lastUpdatedAt
@@ -1429,6 +1454,11 @@ export default function BudgetPage() {
             </button>
           ) : null}
           {canImportPlan ? (
+            <button className="btn-secondary budget-import-trigger budget-admin-only" onClick={() => setIsAdjustModalOpen(true)}>
+              Adjust
+            </button>
+          ) : null}
+          {canImportPlan ? (
             <button className="btn-primary budget-import-trigger budget-admin-only" onClick={openImportModal}>
               Import v1 Workbook
             </button>
@@ -1891,6 +1921,23 @@ export default function BudgetPage() {
         </div>
       )}
 
+      <BudgetAdjustModal
+        open={isAdjustModalOpen && canImportPlan}
+        year={budgetYear}
+        departments={BUDGET_DEPTS}
+        lineItems={adjustLineOptions}
+        existing={adjustments}
+        onClose={() => setIsAdjustModalOpen(false)}
+        onSaved={async () => {
+          await loadAdjustments()
+          setLastActionMessage('Budget adjustment saved.')
+        }}
+        onReverse={async (id) => {
+          await apiPost(`/api/budget/adjustments/${id}/reverse`, {})
+          await loadAdjustments()
+          setLastActionMessage('Budget adjustment reversed.')
+        }}
+      />
       <BudgetImportModal
         open={isImportModalOpen && canImportPlan}
         year={budgetYear}

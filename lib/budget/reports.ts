@@ -3,6 +3,7 @@ import {
   applyBudgetDepartmentActuals as applyBudgetDepartmentActualsState,
   applyBudgetOverviewActuals as applyBudgetOverviewActualsState,
 } from './actuals.ts'
+import { coveredMonths, type AdjustmentRecord } from './adjustments.ts'
 import {
   getBudgetScopeEndMonth,
   getBudgetScopeMonthIndices,
@@ -461,14 +462,81 @@ function buildV1ParityRows(
   return rows
 }
 
+const ALL_MONTH_INDICES = Array.from({ length: 12 }, (_, i) => i + 1)
+
+// Per-line-item signed delta contributed by active adjustments over the given
+// month indices. A recurring adjustment counts once per covered month that
+// falls inside the scope (so a Q4 recurring shows 3× in a full-year YTD).
+function adjustmentDeltaByKey(
+  adjustments: AdjustmentRecord[],
+  monthIndices: number[],
+): Record<string, number> {
+  const monthKeys = new Set(monthIndices.map((m) => monthIndexToPeriodKey(m)))
+  const out: Record<string, number> = {}
+  for (const a of adjustments) {
+    const hits = coveredMonths(a).filter((mk) => monthKeys.has(mk)).length
+    if (hits > 0) out[a.lineItem] = (out[a.lineItem] ?? 0) + a.amount * hits
+  }
+  return out
+}
+
+function activeAdjustmentsForDepartments(
+  adjustments: AdjustmentRecord[],
+  departments: readonly string[],
+): AdjustmentRecord[] {
+  const allowed = new Set(departments)
+  return adjustments.filter((a) => a.status === 'active' && allowed.has(a.department))
+}
+
+function mergeDelta(target: BudgetLineAmounts, delta: Record<string, number>): void {
+  for (const [key, value] of Object.entries(delta)) {
+    target[key] = (target[key] ?? 0) + value
+  }
+}
+
+// Sets adjustmentUsd (annual net) + per-department breakdown on each single-key
+// line row. Mutates rows in place.
+function annotateRowsWithAdjustments(
+  rows: BudgetReportRow[],
+  scopedAdjustments: AdjustmentRecord[],
+): void {
+  const annualByKey = adjustmentDeltaByKey(scopedAdjustments, ALL_MONTH_INDICES)
+  const byKeyByDept: Record<string, Record<string, number>> = {}
+  for (const a of scopedAdjustments) {
+    const annual = a.amount * coveredMonths(a).length
+    if (annual === 0) continue
+    byKeyByDept[a.lineItem] ??= {}
+    byKeyByDept[a.lineItem][a.department] = (byKeyByDept[a.lineItem][a.department] ?? 0) + annual
+  }
+  for (const row of rows) {
+    if (row.kind !== 'line' || !row.budgetKeys || row.budgetKeys.length !== 1) continue
+    const key = row.budgetKeys[0]
+    const net = annualByKey[key]
+    if (!net) continue
+    row.adjustmentUsd = net
+    row.adjustmentByDepartment = Object.entries(byKeyByDept[key] ?? {}).map(
+      ([department, amountUsd]) => ({ department, amountUsd }),
+    )
+  }
+}
+
 export function buildBudgetOverviewReport(
   plan: BudgetPlanState,
   departments: readonly BudgetDepartment[],
   view: BudgetViewState,
+  adjustments: AdjustmentRecord[] = [],
 ): BudgetReportTableModel {
   const periodLines = getPlanLinesForMonths(plan, departments, getBudgetScopeMonthIndices(view))
   const ytdLines = getPlanLinesForMonths(plan, departments, getBudgetScopeYtdMonthIndices(view))
   const annualLines = getPlanAnnualLines(plan, departments)
+
+  const scoped = activeAdjustmentsForDepartments(adjustments, departments)
+  mergeDelta(periodLines, adjustmentDeltaByKey(scoped, getBudgetScopeMonthIndices(view)))
+  mergeDelta(ytdLines, adjustmentDeltaByKey(scoped, getBudgetScopeYtdMonthIndices(view)))
+  mergeDelta(annualLines, adjustmentDeltaByKey(scoped, ALL_MONTH_INDICES))
+
+  const rows = buildV1ParityRows(periodLines, ytdLines, annualLines)
+  annotateRowsWithAdjustments(rows, scoped)
 
   return {
     title: 'Spend by Category — All Departments',
@@ -479,7 +547,7 @@ export function buildBudgetOverviewReport(
     annualLabel: String(view.year),
     actualsStatus: 'placeholder',
     actualDrillOpenMode: 'positive-only',
-    rows: buildV1ParityRows(periodLines, ytdLines, annualLines),
+    rows,
   }
 }
 
@@ -487,11 +555,20 @@ export function buildBudgetDepartmentReport(
   plan: BudgetPlanState,
   department: BudgetDepartmentActualScope,
   view: BudgetViewState,
+  adjustments: AdjustmentRecord[] = [],
 ): BudgetReportTableModel {
   const periodLines = getDepartmentLinesForMonths(plan, department, getBudgetScopeMonthIndices(view))
   const ytdLines = getDepartmentLinesForMonths(plan, department, getBudgetScopeYtdMonthIndices(view))
   const annualLines = getDepartmentAnnualLines(plan, department)
   const endMonth = getBudgetScopeEndMonth(view)
+
+  const scoped = activeAdjustmentsForDepartments(adjustments, [String(department)])
+  mergeDelta(periodLines, adjustmentDeltaByKey(scoped, getBudgetScopeMonthIndices(view)))
+  mergeDelta(ytdLines, adjustmentDeltaByKey(scoped, getBudgetScopeYtdMonthIndices(view)))
+  mergeDelta(annualLines, adjustmentDeltaByKey(scoped, ALL_MONTH_INDICES))
+
+  const rows = buildV1ParityRows(periodLines, ytdLines, annualLines)
+  annotateRowsWithAdjustments(rows, scoped)
 
   return {
     title: String(department),
@@ -502,7 +579,7 @@ export function buildBudgetDepartmentReport(
     annualLabel: String(view.year),
     actualsStatus: 'placeholder',
     actualDrillOpenMode: 'non-zero',
-    rows: buildV1ParityRows(periodLines, ytdLines, annualLines),
+    rows,
   }
 }
 

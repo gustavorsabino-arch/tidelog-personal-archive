@@ -14,6 +14,19 @@ type BudgetReportTableProps = {
   onBudgetCellClick?: (row: BudgetReportRow, column: BudgetReportColumnKey) => void
   onActualCellClick?: (row: BudgetReportRow, column: BudgetReportColumnKey) => void
   onRevenueRowClick?: () => void
+  onAdjustmentClick?: (row: BudgetReportRow) => void
+}
+
+function formatAdjustmentCell(value: number | null | undefined): string {
+  if (!value) return '—'
+  return `${value > 0 ? '+' : '-'}${fmtUSD(Math.abs(value), 0)}`
+}
+
+function adjustmentBreakdownTitle(row: BudgetReportRow): string {
+  const parts = (row.adjustmentByDepartment ?? []).map(
+    (d) => `${d.department}: ${d.amountUsd > 0 ? '+' : '-'}${fmtUSD(Math.abs(d.amountUsd), 0)}`,
+  )
+  return parts.length > 0 ? `Adjustment by department — ${parts.join(' · ')}` : 'Adjustment'
 }
 
 function formatBudgetCell(value: number | null): string {
@@ -76,7 +89,7 @@ function VarianceLoadingCell() {
   )
 }
 
-export function BudgetReportTable({ report, loadingActuals, onBudgetCellClick, onActualCellClick, onRevenueRowClick }: BudgetReportTableProps) {
+export function BudgetReportTable({ report, loadingActuals, onBudgetCellClick, onActualCellClick, onRevenueRowClick, onAdjustmentClick }: BudgetReportTableProps) {
   return (
     <div className="section">
       <div className="section-header">
@@ -102,6 +115,8 @@ export function BudgetReportTable({ report, loadingActuals, onBudgetCellClick, o
               <th colSpan={3} className="budget-report-group-header">{report.ytdLabel}</th>
               <th className="budget-table-divider" rowSpan={2} />
               <th colSpan={3} className="budget-report-group-header">{report.annualLabel}</th>
+              <th className="budget-table-divider" rowSpan={2} />
+              <th className="num" rowSpan={2}>Adjustment</th>
             </tr>
             <tr>
               <th className="num">Budget</th>
@@ -123,7 +138,7 @@ export function BudgetReportTable({ report, loadingActuals, onBudgetCellClick, o
                     key={row.key}
                     className={`budget-report-category-row${row.tone === 'revenue' ? ' budget-report-category-row-revenue' : ''}`}
                   >
-                    <td colSpan={12} className="sticky-first"><span className="budget-report-category-label">{row.label}</span></td>
+                    <td colSpan={14} className="sticky-first"><span className="budget-report-category-label">{row.label}</span></td>
                   </tr>
                 )
               }
@@ -232,6 +247,21 @@ export function BudgetReportTable({ report, loadingActuals, onBudgetCellClick, o
                     {loadingActuals ? <VarianceLoadingCell /> : (
                       <span className={`budget-variance-chip budget-variance-${annualTone}`}>{formatVarianceCell(row.cells.annual.varianceUsd)}</span>
                     )}
+                  </td>
+                  <td className="budget-table-divider" />
+                  <td className="num">
+                    {row.adjustmentUsd
+                      ? (
+                        <span title={adjustmentBreakdownTitle(row)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                          <span aria-hidden="true" style={{ color: 'var(--accent)' }}>●</span>
+                          {renderCellButton(
+                            formatAdjustmentCell(row.adjustmentUsd),
+                            Boolean(onAdjustmentClick),
+                            onAdjustmentClick ? () => onAdjustmentClick(row) : undefined,
+                          )}
+                        </span>
+                      )
+                      : '—'}
                   </td>
                 </tr>
               )

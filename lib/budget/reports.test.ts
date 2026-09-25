@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { BUDGET_DEPTS } from '../constants.ts'
 import { getBudgetPlanState } from './source.ts'
 import { buildBudgetDepartmentReport, buildBudgetOverviewReport, buildBudgetPlanBreakdown, getBudgetDepartmentPlanCoverage } from './reports.ts'
+import type { AdjustmentRecord } from './adjustments.ts'
 import type { BudgetPlanState, BudgetViewState } from './types.ts'
 
 const MONTH_VIEW: BudgetViewState = {
@@ -236,4 +237,37 @@ test('computes plan coverage for the selected months', () => {
   const plan = getBudgetPlanState()
   const coverage = getBudgetDepartmentPlanCoverage(plan, ['Engineering'], [0, 1])
   assert.equal(coverage, 0)
+})
+
+test('overlays a December adjustment onto annual budget only (not January) and sets adjustmentUsd', () => {
+  const plan = getBudgetPlanState()
+  const adjustments: AdjustmentRecord[] = [{
+    department: 'Engineering', lineItem: 'bizTools', kind: 'one_time',
+    amount: 10000, startPeriod: '12', durationMonths: 1, status: 'active',
+  }]
+  const base = buildBudgetOverviewReport(plan, BUDGET_DEPTS, JAN_VIEW)
+  const withAdj = buildBudgetOverviewReport(plan, BUDGET_DEPTS, JAN_VIEW, adjustments)
+
+  const baseRow = base.rows.find((r) => r.key === 'bizTools')!
+  const row = withAdj.rows.find((r) => r.key === 'bizTools')!
+
+  assert.equal(row.cells.period.budgetUsd ?? 0, baseRow.cells.period.budgetUsd ?? 0)
+  assert.equal(row.cells.ytd.budgetUsd ?? 0, baseRow.cells.ytd.budgetUsd ?? 0)
+  assert.equal((row.cells.annual.budgetUsd ?? 0) - (baseRow.cells.annual.budgetUsd ?? 0), 10000)
+  assert.equal(row.adjustmentUsd, 10000)
+  assert.deepEqual(row.adjustmentByDepartment, [{ department: 'Engineering', amountUsd: 10000 }])
+})
+
+test('reversed adjustments do not affect the report', () => {
+  const plan = getBudgetPlanState()
+  const adjustments: AdjustmentRecord[] = [{
+    department: 'Engineering', lineItem: 'bizTools', kind: 'one_time',
+    amount: 10000, startPeriod: '12', durationMonths: 1, status: 'reversed',
+  }]
+  const base = buildBudgetOverviewReport(plan, BUDGET_DEPTS, JAN_VIEW)
+  const withAdj = buildBudgetOverviewReport(plan, BUDGET_DEPTS, JAN_VIEW, adjustments)
+  const baseRow = base.rows.find((r) => r.key === 'bizTools')!
+  const row = withAdj.rows.find((r) => r.key === 'bizTools')!
+  assert.equal(row.cells.annual.budgetUsd ?? 0, baseRow.cells.annual.budgetUsd ?? 0)
+  assert.equal(row.adjustmentUsd ?? 0, 0)
 })
