@@ -443,6 +443,51 @@ test('monthly workbook imports replace stale annual periods before merging', () 
   })
 })
 
+test('Q4 month-scoped merge preserves Jan-Sep and clears the stale annual (recomputed on save)', () => {
+  const existingPlan: BudgetDepartmentPlan = {
+    version: 1,
+    year: 2026,
+    department: 'Engineering',
+    periods: {
+      '01': { hosting: 100 }, '02': { hosting: 100 }, '03': { hosting: 100 },
+      '04': { hosting: 100 }, '05': { hosting: 100 }, '06': { hosting: 100 },
+      '07': { hosting: 100 }, '08': { hosting: 100 }, '09': { hosting: 100 },
+      '10': { hosting: 100 }, '11': { hosting: 100 }, '12': { hosting: 100 },
+      annual: { hosting: 1200 },
+    },
+    source: 'sheet-import' as const,
+    importMeta: null,
+  }
+
+  const impacted = { layout: 'monthly-columns' as const, importedPeriods: ['10', '11', '12'] }
+  const prepared = prepareDepartmentPlanForImport(existingPlan, impacted)
+  const merged = mergeDepartmentPeriods(prepared, {
+    year: 2026,
+    department: 'Engineering',
+    periods: {
+      '10': { hosting: 500 }, '11': { hosting: 500 }, '12': { hosting: 500 },
+    },
+    importMeta: {
+      lastImportedAt: '2026-09-25T00:00:00.000Z',
+      lastImportedBy: 'tester@orca.so',
+      sourceFileName: 'q4.xlsx',
+      templateVersion: 'budget-v1-sheet',
+    },
+  })
+
+  // Jan-Sep untouched.
+  for (const m of ['01', '02', '03', '04', '05', '06', '07', '08', '09']) {
+    assert.deepEqual(merged?.periods[m as '01'], { hosting: 100 })
+  }
+  // Q4 replaced with the new numbers.
+  assert.deepEqual(merged?.periods['10'], { hosting: 500 })
+  assert.deepEqual(merged?.periods['11'], { hosting: 500 })
+  assert.deepEqual(merged?.periods['12'], { hosting: 500 })
+  // Stale annual removed here; saveBudgetDepartmentPlan recomputes it as the
+  // sum of all twelve merged months (9*100 + 3*500 = 2400).
+  assert.equal(merged?.periods.annual, undefined)
+})
+
 test('annual workbook imports replace stale monthly periods before merging', () => {
   const existingPlan: BudgetDepartmentPlan = {
     version: 1,
