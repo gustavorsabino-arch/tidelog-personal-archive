@@ -215,6 +215,7 @@ export default function BudgetPage() {
   const [selectedHeadcountDepartment, setSelectedHeadcountDepartment] = useState<BudgetDepartment | null>(null)
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
   const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false)
+  const [adjustPrefill, setAdjustPrefill] = useState<{ lineItem?: string; department?: string }>({})
   const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false)
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false)
   const [isQbModalOpen, setIsQbModalOpen] = useState(false)
@@ -1454,7 +1455,7 @@ export default function BudgetPage() {
             </button>
           ) : null}
           {canImportPlan ? (
-            <button className="btn-secondary budget-import-trigger budget-admin-only" onClick={() => setIsAdjustModalOpen(true)}>
+            <button className="btn-secondary budget-import-trigger budget-admin-only" onClick={() => { setAdjustPrefill({}); setIsAdjustModalOpen(true) }}>
               Adjust
             </button>
           ) : null}
@@ -1618,6 +1619,13 @@ export default function BudgetPage() {
             onBudgetCellClick={openBudgetBreakdown}
             onActualCellClick={(row, column) => void openActualDrill(row, column, overviewReport)}
             onRevenueRowClick={() => void openRevenueMonthlyModal()}
+            onAdjustmentClick={canImportPlan ? (row) => {
+              setAdjustPrefill({
+                lineItem: row.budgetKeys?.[0],
+                department: overviewSelectedDepartment ? String(overviewSelectedDepartment) : undefined,
+              })
+              setIsAdjustModalOpen(true)
+            } : undefined}
           />
         )
       )}
@@ -1927,6 +1935,8 @@ export default function BudgetPage() {
         departments={BUDGET_DEPTS}
         lineItems={adjustLineOptions}
         existing={adjustments}
+        initialLineItem={adjustPrefill.lineItem}
+        initialDepartment={adjustPrefill.department}
         onClose={() => setIsAdjustModalOpen(false)}
         onSaved={async () => {
           await loadAdjustments()

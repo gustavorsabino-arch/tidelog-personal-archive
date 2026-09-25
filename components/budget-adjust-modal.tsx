@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { apiPost } from '@/lib/api'
 import { fmtUSD } from '@/lib/format'
@@ -35,12 +35,16 @@ type BudgetAdjustModalProps = {
   departments: readonly string[]
   lineItems: BudgetAdjustLineOption[]
   existing?: BudgetAdjustment[]
+  // Pre-fill when opened from a specific report row. Applied each time the modal
+  // opens; empty string when opened from the toolbar (no row context).
+  initialLineItem?: string
+  initialDepartment?: string
   onClose: () => void
   onSaved: () => Promise<void> | void
   onReverse?: (id: string) => Promise<void> | void
 }
 
-export function BudgetAdjustModal({ open, year, departments, lineItems, existing = [], onClose, onSaved, onReverse }: BudgetAdjustModalProps) {
+export function BudgetAdjustModal({ open, year, departments, lineItems, existing = [], initialLineItem, initialDepartment, onClose, onSaved, onReverse }: BudgetAdjustModalProps) {
   const [department, setDepartment] = useState('')
   const [lineItem, setLineItem] = useState('')
   const [amountText, setAmountText] = useState('')
@@ -50,6 +54,15 @@ export function BudgetAdjustModal({ open, year, departments, lineItems, existing
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Sync the pre-fill each time the modal opens (from a row → prefilled; from
+  // the toolbar → cleared).
+  useEffect(() => {
+    if (!open) return
+    setLineItem(initialLineItem ?? '')
+    setDepartment(initialDepartment ?? '')
+    setError(null)
+  }, [open, initialLineItem, initialDepartment])
 
   if (!open) return null
 
