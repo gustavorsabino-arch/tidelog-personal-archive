@@ -31,6 +31,19 @@ function stripXlsxExtension(name: string): string {
   return name.replace(/\.(xlsx|xls)$/i, '')
 }
 
+const MONTHS: Array<{ key: string; label: string }> = [
+  { key: '01', label: 'Jan' }, { key: '02', label: 'Feb' }, { key: '03', label: 'Mar' },
+  { key: '04', label: 'Apr' }, { key: '05', label: 'May' }, { key: '06', label: 'Jun' },
+  { key: '07', label: 'Jul' }, { key: '08', label: 'Aug' }, { key: '09', label: 'Sep' },
+  { key: '10', label: 'Oct' }, { key: '11', label: 'Nov' }, { key: '12', label: 'Dec' },
+]
+const QUARTERS: Array<{ label: string; months: string[] }> = [
+  { label: 'Q1', months: ['01', '02', '03'] },
+  { label: 'Q2', months: ['04', '05', '06'] },
+  { label: 'Q3', months: ['07', '08', '09'] },
+  { label: 'Q4', months: ['10', '11', '12'] },
+]
+
 type FileRow = { file: File; department: string | null }
 
 function toFileRows(files: File[]): FileRow[] {
@@ -45,6 +58,9 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
   // 'replace' = full-year batch (destructive per department). 'merge' = update
   // only the months present in the uploaded workbook, preserving the rest.
   const [mode, setMode] = useState<'replace' | 'merge'>('replace')
+  // Merge mode: the months the operator chose to apply. Empty = fall back to
+  // whatever month columns the uploaded file contains.
+  const [selectedMonths, setSelectedMonths] = useState<Set<string>>(() => new Set())
   const [rows, setRows] = useState<FileRow[]>([])
   const [dragOver, setDragOver] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -61,6 +77,46 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
     setRows([])
     setError(null)
     setResult(null)
+    setSelectedMonths(new Set())
+  }
+
+  function toggleMonth(key: string) {
+    setSelectedMonths((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function toggleQuarter(months: string[]) {
+    setSelectedMonths((prev) => {
+      const next = new Set(prev)
+      const allOn = months.every((m) => next.has(m))
+      for (const m of months) {
+        if (allOn) next.delete(m)
+        else next.add(m)
+      }
+      return next
+    })
+  }
+
+  async function downloadTemplate() {
+    try {
+      const res = await fetch('/api/budget/import/template')
+      if (!res.ok) { setError('Could not download the template.'); return }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'budget-import-template.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch {
+      setError('Could not download the template.')
+    }
   }
 
   function handleFiles(files: FileList | File[]) {
@@ -130,6 +186,8 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
       body.set('department', 'All')
       body.set('period', 'annual')
       body.set('mode', 'merge-months')
+      const months = Array.from(selectedMonths)
+      if (months.length > 0) body.set('months', months.join(','))
       if (overwrite) body.set('overwrite', 'true')
       return apiFormFetch<{ departmentsProcessed?: string[]; importedPeriods?: string[] }>(
         '/api/budget/import',
@@ -209,11 +267,42 @@ export function BudgetImportModal({ open, year: defaultYear, onClose, onImported
               (e.g. <code>Engineering.xlsx</code>). Re-uploading <strong>overwrites the whole year</strong> for that department.
             </p>
           ) : (
-            <p style={{ marginBottom: 16, color: 'var(--muted)', fontSize: '0.8rem' }}>
-              Drop <strong>one workbook</strong> containing only the month columns you want to update
-              (e.g. Q4 = Oct, Nov, Dec). Only those months are changed; the other months of the year are
-              <strong> kept</strong>, and the annual total is recomputed. Needs at least 3 month columns.
-            </p>
+            <>
+              <p style={{ marginBottom: 10, color: 'var(--muted)', fontSize: '0.8rem' }}>
+                Drop <strong>one workbook</strong>, tick the months to update below, and only those months
+                change — the rest of the year is <strong>kept</strong> and the annual total is recomputed.
+                Don&apos;t have the format? <button type="button" onClick={downloadTemplate} disabled={submitting}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0, textDecoration: 'underline', font: 'inherit' }}>
+                  Download the template
+                </button>, fill in the numbers, and upload it back.
+              </p>
+
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginBottom: 6 }}>
+                  Months to update {selectedMonths.size === 0 ? '(none picked → uses the columns in the file)' : `(${selectedMonths.size} selected)`}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                  {QUARTERS.map((q) => {
+                    const allOn = q.months.every((m) => selectedMonths.has(m))
+                    return (
+                      <button key={q.label} type="button" onClick={() => toggleQuarter(q.months)} disabled={submitting}
+                        className={allOn ? 'btn-primary' : 'btn-secondary'} style={{ fontSize: '0.72rem', padding: '3px 12px' }}>
+                        {q.label}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {MONTHS.map((m) => (
+                    <button key={m.key} type="button" onClick={() => toggleMonth(m.key)} disabled={submitting}
+                      className={selectedMonths.has(m.key) ? 'btn-primary' : 'btn-secondary'}
+                      style={{ fontSize: '0.7rem', padding: '3px 8px', minWidth: 40 }}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>

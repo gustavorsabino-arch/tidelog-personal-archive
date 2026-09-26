@@ -15,6 +15,7 @@ import {
   prepareDepartmentPlanForImport,
   mergeDepartmentPeriods,
   isMonthScopedWorkbook,
+  filterParsedWorkbookToMonths,
 } from './import.ts'
 import type { BudgetDepartmentPlan } from './types.ts'
 
@@ -530,4 +531,25 @@ test('annual workbook imports replace stale monthly periods before merging', () 
   assert.deepEqual(merged?.periods, {
     annual: { hosting: 3600 },
   })
+})
+
+test('filterParsedWorkbookToMonths keeps only selected months and reports missing ones', () => {
+  const workbook = XLSX.utils.book_new()
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['', '', '', 'Oct', 'Nov', 'Dec'],
+    ['', '', 'Cloud Hosting & Compute', 100, 150, 200],
+    ['', '', 'Department Tools', 10, 20, 30],
+  ])
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Engineering')
+  const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+  const parsed = parseBudgetWorkbook(buffer, 'Engineering', 'annual')
+
+  const kept = filterParsedWorkbookToMonths(parsed, ['10', '12'])
+  const dept = kept.workbook.departments[0]
+  assert.deepEqual(Object.keys(dept.periods).sort(), ['10', '12'])
+  assert.deepEqual([...dept.importedPeriods].sort(), ['10', '12'])
+  assert.deepEqual(kept.missingMonths, [])
+
+  const missing = filterParsedWorkbookToMonths(parsed, ['09', '10'])
+  assert.deepEqual(missing.missingMonths, ['09'])
 })

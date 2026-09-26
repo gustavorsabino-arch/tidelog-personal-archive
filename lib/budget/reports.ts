@@ -139,6 +139,17 @@ const INCENTIVE_COMP_SECTION: BudgetReportSectionSpec = {
   subtotalLabel: 'Total IC',
 }
 
+// Flat list of the expense line items (category + label + key), in report
+// order. Exported so the import-template generator produces a workbook whose
+// labels round-trip back through parseBudgetLineKey. Revenue is excluded (it's
+// not a budget line the operator fills in the template).
+export const BUDGET_TEMPLATE_LINE_SPECS: BudgetReportLineSpec[] = [
+  ...PRIMARY_EXPENSE_SECTIONS.flatMap((section) => section.lines),
+  ...DIRECT_EXPENSE_SECTIONS.flatMap((section) => section.lines),
+  ...INCENTIVE_COMP_SECTION.lines,
+  { category: 'Contingency', label: 'Contingency', key: CONTINGENCY_KEY },
+]
+
 const PRIMARY_EXPENSE_KEYS = PRIMARY_EXPENSE_SECTIONS.flatMap((section) => section.lines.map((line) => line.key))
 const DIRECT_EXPENSE_KEYS = DIRECT_EXPENSE_SECTIONS.flatMap((section) => section.lines.map((line) => line.key))
 const INCENTIVE_COMP_KEYS = INCENTIVE_COMP_SECTION.lines.map((line) => line.key)
