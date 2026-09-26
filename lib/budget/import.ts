@@ -771,6 +771,38 @@ export function isMonthScopedWorkbook(workbook: ParsedBudgetWorkbook): boolean {
   )
 }
 
+// Restrict a parsed workbook to an explicit set of months (the operator's
+// picker). Each department keeps only the selected months' periods; departments
+// left with nothing are dropped. `missingMonths` lists selected months that have
+// no column anywhere in the file, so the caller can reject with a clear message.
+export function filterParsedWorkbookToMonths(
+  workbook: ParsedBudgetWorkbook,
+  months: readonly BudgetMonthKey[],
+): { workbook: ParsedBudgetWorkbook; missingMonths: BudgetMonthKey[] } {
+  const monthSet = new Set<string>(months)
+  const present = new Set<string>()
+  for (const dept of workbook.departments) {
+    for (const key of Object.keys(dept.periods)) {
+      if (monthSet.has(key)) present.add(key)
+    }
+  }
+  const missingMonths = months.filter((m) => !present.has(m))
+  const departments = workbook.departments
+    .map((dept) => {
+      const periods: Partial<Record<BudgetPeriodKey, BudgetLineAmounts>> = {}
+      for (const [key, value] of Object.entries(dept.periods)) {
+        if (monthSet.has(key)) periods[key as BudgetPeriodKey] = value
+      }
+      return {
+        ...dept,
+        periods,
+        importedPeriods: dept.importedPeriods.filter((m) => monthSet.has(m)),
+      }
+    })
+    .filter((dept) => Object.keys(dept.periods).length > 0)
+  return { workbook: { ...workbook, departments }, missingMonths }
+}
+
 export function mergeDepartmentPeriod(
   existingPlan: BudgetDepartmentPlan | null,
   input: {

@@ -6,6 +6,7 @@ import { requireBudgetAccess } from '@/lib/budget/access-control'
 import {
   describeBudgetImportWorkbookRequirements,
   formatBudgetPeriodLabel,
+  filterParsedWorkbookToMonths,
   getBudgetImportExistingPeriodsToReplace,
   isMonthScopedWorkbook,
   mergeDepartmentPeriods,
@@ -17,7 +18,7 @@ import {
   loadBudgetDepartmentPlan,
   saveBudgetDepartmentPlan,
 } from '@/lib/budget/source'
-import type { BudgetDepartment, BudgetImportMeta } from '@/lib/budget/types'
+import type { BudgetDepartment, BudgetImportMeta, BudgetMonthKey } from '@/lib/budget/types'
 
 export const runtime = 'nodejs'
 
@@ -37,6 +38,13 @@ export async function POST(req: NextRequest) {
   const departmentValue = formData.get('department')
   const overwriteValue = formData.get('overwrite')
   const modeValue = formData.get('mode')
+  const monthsValue = formData.get('months')
+  // Explicit month picker (merge mode): only these months are applied, whatever
+  // columns the file happens to contain. Empty → fall back to the file's columns.
+  const selectedMonths = String(monthsValue ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s): s is BudgetMonthKey => /^(0[1-9]|1[0-2])$/.test(s))
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: 'No file uploaded' }, { status: 400 })
@@ -69,7 +77,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const workbook = parseBudgetWorkbook(await file.arrayBuffer(), department, period)
+    let workbook = parseBudgetWorkbook(await file.arrayBuffer(), department, period)
     if (workbook.invalidSheets.length > 0) {
       return NextResponse.json(
         {
@@ -104,6 +112,19 @@ export async function POST(req: NextRequest) {
         },
         { status: 422 },
       )
+    }
+
+    // Explicit month picker: apply only the chosen months, and require the file
+    // to actually contain a column for each one.
+    if (String(modeValue ?? '') === 'merge-months' && selectedMonths.length > 0) {
+      const { workbook: filtered, missingMonths } = filterParsedWorkbookToMonths(workbook, selectedMonths)
+      if (missingMonths.length > 0) {
+        return NextResponse.json(
+          { error: `The workbook has no column for the selected month(s): ${missingMonths.join(', ')}.` },
+          { status: 422 },
+        )
+      }
+      workbook = filtered
     }
 
     const existingDepartments: BudgetDepartment[] = []
