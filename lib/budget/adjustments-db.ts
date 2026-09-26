@@ -4,6 +4,7 @@
 import { and, desc, eq, inArray } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
+import { ensureBudgetAdjustmentTable } from '@/lib/db/budget-adjustment-schema'
 import { budgetAdjustment } from '@/lib/db/schema/budget'
 import type { AdjustmentRecord } from './adjustments.ts'
 import type { BudgetDepartment, BudgetMonthKey } from './types.ts'
@@ -58,6 +59,7 @@ export async function loadBudgetAdjustments(
   year: number,
   departments?: BudgetDepartment[],
 ): Promise<BudgetAdjustment[]> {
+  await ensureBudgetAdjustmentTable()
   const conditions = [eq(budgetAdjustment.year, year)]
   if (departments && departments.length > 0) {
     conditions.push(inArray(budgetAdjustment.department, departments))
@@ -71,6 +73,7 @@ export async function loadBudgetAdjustments(
 }
 
 export async function createBudgetAdjustment(input: CreateBudgetAdjustmentInput): Promise<{ id: string }> {
+  await ensureBudgetAdjustmentTable()
   const [row] = await db
     .insert(budgetAdjustment)
     .values({
@@ -89,6 +92,7 @@ export async function createBudgetAdjustment(input: CreateBudgetAdjustmentInput)
 }
 
 export async function reverseBudgetAdjustment(id: string, actor: string): Promise<void> {
+  await ensureBudgetAdjustmentTable()
   await db
     .update(budgetAdjustment)
     .set({ status: 'reversed', reversedBy: actor, reversedAt: new Date() })

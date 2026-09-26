@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { logAudit } from '@/lib/audit'
 import { requireBudgetAccess } from '@/lib/budget/access-control'
+import { budgetAdjustmentErrorResponse } from '@/lib/budget/adjustment-errors'
 import { reverseBudgetAdjustment } from '@/lib/budget/adjustments-db'
 
 export const runtime = 'nodejs'
@@ -17,7 +18,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'Adjustment id required' }, { status: 400 })
   }
 
-  await reverseBudgetAdjustment(id, accessResult.user.email)
+  try {
+    await reverseBudgetAdjustment(id, accessResult.user.email)
+  } catch (error) {
+    return budgetAdjustmentErrorResponse(error, 'reverse')
+  }
 
   await logAudit({
     userId: accessResult.user.id === 'dev-user' ? null : accessResult.user.id,

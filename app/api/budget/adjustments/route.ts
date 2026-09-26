@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { logAudit } from '@/lib/audit'
 import { BUDGET_DEPTS } from '@/lib/constants'
 import { getAllowedBudgetDepartmentsForUser, requireBudgetAccess } from '@/lib/budget/access-control'
+import { budgetAdjustmentErrorResponse } from '@/lib/budget/adjustment-errors'
 import { ALL_BUDGET_MONTHS } from '@/lib/budget/adjustments'
 import { createBudgetAdjustment, loadBudgetAdjustments } from '@/lib/budget/adjustments-db'
 import type { BudgetDepartment } from '@/lib/budget/types'
@@ -40,8 +41,12 @@ export async function GET(req: NextRequest) {
     departments = allowed
   }
 
-  const adjustments = await loadBudgetAdjustments(year, departments)
-  return NextResponse.json({ adjustments })
+  try {
+    const adjustments = await loadBudgetAdjustments(year, departments)
+    return NextResponse.json({ adjustments })
+  } catch (error) {
+    return budgetAdjustmentErrorResponse(error, 'load')
+  }
 }
 
 // POST /api/budget/adjustments  — create (admin only)
@@ -99,18 +104,7 @@ export async function POST(req: NextRequest) {
       createdBy: accessResult.user.email,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    // The most common failure right after deploy: the table hasn't been created
-    // yet because migrations don't run on build. Surface a clear, actionable
-    // message instead of an opaque 500.
-    if (/relation .*budget_adjustment.* does not exist|42P01/i.test(message)) {
-      return NextResponse.json(
-        { error: 'The budget_adjustment table is not set up yet. Run the database migration (bun run db:migrate).' },
-        { status: 503 },
-      )
-    }
-    console.error('[budget/adjustments] create failed', error)
-    return NextResponse.json({ error: `Failed to save adjustment: ${message}` }, { status: 500 })
+    return budgetAdjustmentErrorResponse(error, 'save')
   }
 
   await logAudit({
