@@ -112,3 +112,14 @@ test('plan: active members missing from the roster are proposed for deactivation
   assert.equal(deact?.memberId, 'm-gone')
   assert.equal(ops.filter((op) => op.type === 'deactivate').length, 1)
 })
+
+test('plan: matched IDs identify the exact retained rows, including terminated matches', () => {
+  const existing = [
+    member({ id: 'keep', email: 'x@orca.so', status: 'Terminated' }),
+    member({ id: 'duplicate', email: 'x@orca.so' }),
+    member({ id: 'old', email: 'old@orca.so', status: 'Terminated' }),
+  ]
+  const { matchedIds } = buildTeamImportPlan([row({ email: 'x@orca.so' })], existing, '09')
+  assert.deepEqual([...matchedIds], ['keep'])
+  assert.deepEqual(existing.filter((person) => !matchedIds.has(person.id)).map((person) => person.id), ['duplicate', 'old'])
+})

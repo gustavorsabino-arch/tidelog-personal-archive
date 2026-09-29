@@ -123,7 +123,7 @@ export function buildTeamImportPlan(
   fileRows: TeamMasterRow[],
   existing: BudgetTeamMember[],
   terminationMonth: BudgetMonthKey,
-): { ops: TeamImportOp[] } {
+): { ops: TeamImportOp[]; matchedIds: Set<string> } {
   const byEmail = new Map<string, BudgetTeamMember>()
   const byName = new Map<string, BudgetTeamMember>()
   for (const member of existing) {
@@ -162,5 +162,5 @@ export function buildTeamImportPlan(
     })
   }
 
-  return { ops }
+  return { ops, matchedIds }
 }

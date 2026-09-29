@@ -1,8 +1,9 @@
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
 import { budgetTeamMember } from '@/lib/db/schema/budget'
 import { BUDGET_DEPTS, ENTITIES } from '../constants.ts'
+import { buildTeamImportPlan, type TeamMasterRow } from './team-import.ts'
 import type {
   BudgetDepartment,
   BudgetMonthKey,
@@ -326,6 +327,40 @@ export async function loadBudgetTeamState(year: number, _noCache = false): Promi
 export async function createBudgetTeamMemberInDb(input: BudgetTeamMemberInput): Promise<string> {
   const [row] = await db.insert(budgetTeamMember).values(memberToRowValues(input)).returning({ id: budgetTeamMember.id })
   return row.id
+}
+
+/** Atomically reconcile the one-off MASTER roster, including inactive and duplicate old rows. */
+export async function replaceBudgetTeamRosterInDb(
+  roster: TeamMasterRow[],
+  terminationMonth: BudgetMonthKey,
+): Promise<{ added: number; updated: number; removed: number; unchanged: number }> {
+  return db.transaction(async (tx) => {
+    const rows = await tx.select().from(budgetTeamMember)
+    const { ops, matchedIds } = buildTeamImportPlan(roster, rows.map(rowToMember), terminationMonth)
+    const summary = { added: 0, updated: 0, removed: 0, unchanged: 0 }
+
+    for (const op of ops) {
+      if (op.type === 'deactivate') continue
+      const input = validateBudgetTeamMemberInput(op.input)
+      if (op.type === 'add') {
+        await tx.insert(budgetTeamMember).values(memberToRowValues(input))
+        summary.added++
+      } else {
+        await tx.update(budgetTeamMember)
+          .set({ ...memberToRowValues(input), updatedAt: new Date() })
+          .where(eq(budgetTeamMember.id, op.memberId))
+        summary.updated++
+      }
+    }
+
+    const extraIds = rows.filter((row) => !matchedIds.has(row.id)).map((row) => row.id)
+    if (extraIds.length) {
+      await tx.delete(budgetTeamMember).where(inArray(budgetTeamMember.id, extraIds))
+    }
+    summary.removed = extraIds.length
+    summary.unchanged = roster.length - summary.added - summary.updated
+    return summary
+  })
 }
 
 export async function updateBudgetTeamMemberInDb(

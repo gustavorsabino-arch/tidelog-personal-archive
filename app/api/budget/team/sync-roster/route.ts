@@ -2,22 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { logAudit } from '@/lib/audit'
 import { requireBudgetAccess } from '@/lib/budget/access-control'
-import { buildTeamImportPlan, type TeamMasterRow } from '@/lib/budget/team-import'
-import {
-  createBudgetTeamMemberInDb,
-  loadBudgetTeamState,
-  updateBudgetTeamMemberInDb,
-  validateBudgetTeamMemberInput,
-} from '@/lib/budget/team'
+import type { TeamMasterRow } from '@/lib/budget/team-import'
+import { replaceBudgetTeamRosterInDb } from '@/lib/budget/team'
 import type { BudgetMonthKey } from '@/lib/budget/types'
 
 export const runtime = 'nodejs'
 
 // ONE-OFF roster sync — Team Tracker MASTER (Sep 2026), first block (1-23).
-// Applies adds + field updates for the people below (salary = Stables, bonus
-// cleared). People already in the app but NOT in this list are never touched —
-// day-to-day changes go through Add Team Member / Edit. Idempotent: re-running
-// with nothing changed applies zero ops. Delete this route after the sync.
+// Replaces the DB roster with exactly these 23 people (salary = Stables, bonus
+// cleared). Day-to-day changes go through Add Team Member / Edit after this sync.
 const ROSTER: TeamMasterRow[] = [
   {
     "status": "Voluntary leave",
@@ -305,28 +298,13 @@ export async function POST(req: NextRequest) {
   const accessResult = await requireBudgetAccess(req, { requirement: 'manage-team' })
   if (!accessResult.ok) return accessResult.response
 
-  const team = await loadBudgetTeamState(new Date().getFullYear())
-  const { ops } = buildTeamImportPlan(ROSTER, team.members, currentMonthKey())
-
-  const summary = { added: 0, updated: 0, unchanged: ROSTER.length }
+  let summary: Awaited<ReturnType<typeof replaceBudgetTeamRosterInDb>>
   try {
-    for (const op of ops) {
-      if (op.type === 'deactivate') continue // never touch members not in the list
-      const input = validateBudgetTeamMemberInput(op.input)
-      if (op.type === 'add') {
-        await createBudgetTeamMemberInDb(input)
-        summary.added += 1
-      } else {
-        await updateBudgetTeamMemberInDb(op.memberId, input)
-        summary.updated += 1
-      }
-    }
+    summary = await replaceBudgetTeamRosterInDb(ROSTER, currentMonthKey())
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return NextResponse.json({ error: `Roster sync failed: ${message}` }, { status: 400 })
   }
-  summary.unchanged = ROSTER.length - summary.added - summary.updated
-
   await logAudit({
     userId: accessResult.user.id === 'dev-user' ? null : accessResult.user.id,
     action: 'budget.team.roster-synced',
