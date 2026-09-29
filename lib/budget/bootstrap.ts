@@ -10,3 +10,12 @@ export type BudgetBootstrapResponse = {
   qbStatusError: string | null
   allowedBudgetMonthIndices: number[] | null
 }
+
+// The bootstrap response intentionally contains an empty team. Its request can
+// finish after the separate roster request, so keep the roster already loaded.
+export function mergeBudgetPlanWithCurrentTeam(current: BudgetState, incoming: BudgetState): BudgetState {
+  return {
+    ...incoming,
+    team: current.team.year === incoming.team.year ? current.team : incoming.team,
+  }
+}

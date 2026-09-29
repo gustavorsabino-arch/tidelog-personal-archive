@@ -40,7 +40,7 @@ import { BudgetReportTable } from '@/components/budget-report-table'
 import { BudgetQbMappingPanel } from '@/components/budget-qb-mapping-panel'
 import { BudgetCoveragePanel } from '@/components/budget-coverage-panel'
 import { useSharedAccess } from '@/lib/access-context'
-import type { BudgetBootstrapResponse } from '@/lib/budget/bootstrap'
+import { mergeBudgetPlanWithCurrentTeam, type BudgetBootstrapResponse } from '@/lib/budget/bootstrap'
 import type { BudgetAdjustment } from '@/lib/budget/adjustments-db'
 import type {
   BudgetActualDrillState,
@@ -306,7 +306,7 @@ export default function BudgetPage() {
 
     try {
       const bootstrap = await apiFetch<BudgetBootstrapResponse>(`/api/budget/bootstrap?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
-      setBudgetState(bootstrap.state)
+      setBudgetState((current) => mergeBudgetPlanWithCurrentTeam(current, bootstrap.state))
       // Viewers receive `qbStatuses: null` — they don't see QB connection
       // details. Treat that the same as an empty array on the client.
       setQbStatuses(bootstrap.qbStatuses ?? [])
@@ -320,7 +320,7 @@ export default function BudgetPage() {
       }
     } catch (error) {
       setBudgetError(error instanceof Error ? error.message : 'Failed to load budget data.')
-      setBudgetState(createEmptyBudgetState(budgetYear))
+      setBudgetState((current) => mergeBudgetPlanWithCurrentTeam(current, createEmptyBudgetState(budgetYear)))
       setQbStatuses([])
       setAllowedBudgetMonthIndices(null)
     } finally {
@@ -336,10 +336,10 @@ export default function BudgetPage() {
       const state = await apiFetch<BudgetState>(`/api/budget/state?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
       // /api/budget/state returns plan only (team is lazy via /api/budget/team).
       // Preserve any team we've already loaded into client state.
-      setBudgetState((prev) => ({ ...state, team: prev.team }))
+      setBudgetState((current) => mergeBudgetPlanWithCurrentTeam(current, state))
     } catch (error) {
       setBudgetError(error instanceof Error ? error.message : 'Failed to load budget data.')
-      setBudgetState(createEmptyBudgetState(budgetYear))
+      setBudgetState((current) => mergeBudgetPlanWithCurrentTeam(current, createEmptyBudgetState(budgetYear)))
     } finally {
       setLoading(false)
     }
@@ -1697,7 +1697,7 @@ export default function BudgetPage() {
               </span>
             </div>
           ) : null}
-          {(loading || teamLoading) ? (
+          {(loading || teamLoading || (!teamLoaded && !teamLoadError)) ? (
             <div className="cards-grid">
               {[0, 1, 2, 3].map((i) => (
                 <div key={i} className="card">
@@ -1839,7 +1839,7 @@ export default function BudgetPage() {
             </div>
           ) : null}
 
-          {(loading || teamLoading) ? (
+          {(loading || teamLoading || (!teamLoaded && !teamLoadError)) ? (
             <div className="cards-grid budget-team-summary-grid" style={{ marginBottom: 18 }}>
               {[0, 1, 2, 3, 4].map((i) => (
                 <div key={i} className="card">
@@ -1924,7 +1924,7 @@ export default function BudgetPage() {
                     <td colSpan={canManageTeam ? 9 : 8}>
                       <div className="empty budget-empty-inline">
                         <div className="empty-icon">∅</div>
-                        <div>No team members match the current filters.</div>
+                        <div>{!teamLoaded && !teamLoadError ? 'Loading team members…' : teamLoadError && !teamLoaded ? 'Team roster could not be loaded. Use Retry above.' : 'No team members match the current filters.'}</div>
                       </div>
                     </td>
                   </tr>
