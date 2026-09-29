@@ -1867,7 +1867,7 @@ export default function BudgetPage() {
                   setTeamImporting(true)
                   setTeamImportMessage(null)
                   try {
-                    const payload = JSON.parse(teamImportJson)
+                    const payload = { gzipBase64: teamImportJson.trim() }
                     const result = await apiPost<{ created: number; updated: number; total: number }>('/api/budget/team/import', payload)
                     await loadBudgetTeam(true)
                     setTeamImportMessage(`Imported ${result.created} new and updated ${result.updated} existing members. ${result.total} total records.`)

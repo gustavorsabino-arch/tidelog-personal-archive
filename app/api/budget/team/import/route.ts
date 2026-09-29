@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { eq } from 'drizzle-orm'
+import { gunzipSync } from 'node:zlib'
 
 import { logAudit } from '@/lib/audit'
 import { requireBudgetAccess } from '@/lib/budget/access-control'
@@ -25,7 +26,13 @@ export async function POST(req: NextRequest) {
       }
       return parseMasterRosterWorkbook(new Uint8Array(await file.arrayBuffer()))
     })().catch((error) => error)
-    : (await req.json().catch(() => null))?.members
+    : await (async () => {
+      const body = await req.json().catch(() => null)
+      if (typeof body?.gzipBase64 === 'string') {
+        return JSON.parse(gunzipSync(Buffer.from(body.gzipBase64, 'base64')).toString('utf8')).members
+      }
+      return body?.members
+    })().catch((error) => error)
   if (candidates instanceof Error) return NextResponse.json({ error: candidates.message }, { status: 400 })
   if (!Array.isArray(candidates) || candidates.length < 1 || candidates.length > 100) {
     return NextResponse.json({ error: 'Supply 1–100 team members.' }, { status: 400 })
