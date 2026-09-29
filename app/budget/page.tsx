@@ -14,6 +14,9 @@ const BudgetImportModal = dynamic(
 const BudgetAdjustModal = dynamic(
   () => import('@/components/budget-adjust-modal').then((m) => m.BudgetAdjustModal),
 )
+const BudgetTeamImportModal = dynamic(
+  () => import('@/components/budget-team-import-modal').then((m) => m.BudgetTeamImportModal),
+)
 const BudgetRecoveryModal = dynamic(
   () => import('@/components/budget-recovery-modal').then((m) => m.BudgetRecoveryModal),
 )
@@ -218,6 +221,9 @@ export default function BudgetPage() {
   const [adjustPrefill, setAdjustPrefill] = useState<{ lineItem?: string; department?: string }>({})
   const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false)
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false)
+  const [isTeamImportOpen, setIsTeamImportOpen] = useState(false)
+  const [teamLoadError, setTeamLoadError] = useState<string | null>(null)
+  const teamLoadAttemptsRef = useRef(0)
   const [isQbModalOpen, setIsQbModalOpen] = useState(false)
   const [editingMember, setEditingMember] = useState<BudgetTeamMember | null>(null)
   const [lastActionMessage, setLastActionMessage] = useState<string | null>(null)
@@ -357,12 +363,20 @@ export default function BudgetPage() {
 
   async function loadBudgetTeam(noCache = false) {
     setTeamLoading(true)
+    if (noCache) teamLoadAttemptsRef.current = 0 // manual Retry resets the budget of attempts
     try {
       const team = await apiFetch<BudgetTeamState>(`/api/budget/team?year=${budgetYear}${noCache ? '&fresh=1' : ''}`)
       setBudgetState((prev) => ({ ...prev, team }))
       setTeamLoaded(true)
+      setTeamLoadError(null)
+      teamLoadAttemptsRef.current = 0
     } catch (error) {
+      // Keep whatever roster we already have (never blank it) and surface the
+      // failure instead of silently showing an empty table. The intermittent
+      // RDS connect timeouts made this look like "sometimes there's no data".
       console.error('[budget] loadBudgetTeam failed', error)
+      teamLoadAttemptsRef.current += 1
+      setTeamLoadError(error instanceof Error ? error.message : 'request failed')
     } finally {
       setTeamLoading(false)
     }
@@ -473,6 +487,9 @@ export default function BudgetPage() {
     const needsTeam = activeTab === 'headcount' || activeTab === 'team' || access?.role === 'admin'
     if (!needsTeam) return
     if (teamLoaded || teamLoading) return
+    // Bounded auto-retry: two attempts, then stop hammering a flaky DB — the
+    // Team tab shows a "couldn't load / Retry" bar for a manual re-attempt.
+    if (teamLoadAttemptsRef.current >= 2) return
     void loadBudgetTeam()
   }, [activeTab, canViewBudget, teamLoaded, teamLoading, access?.role])
 
@@ -1713,13 +1730,11 @@ export default function BudgetPage() {
                     <th className="num">Headcount</th>
                     <th className="num">Salary Budget</th>
                     <th className="num">Salary Actual</th>
-                    <th className="num">Bonus Budget</th>
-                    <th className="num">Bonus Actual</th>
                     <th className="num">Comp Var.</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleHeadcountByDepartment.map(({ dept, count, salaryUsd, salaryActualUsd, bonusUsd, bonusActualUsd, compVarianceUsd }) => (
+                  {visibleHeadcountByDepartment.map(({ dept, count, salaryUsd, salaryActualUsd, compVarianceUsd }) => (
                     <tr key={dept}>
                       <td className="label">
                         <button type="button" className="card-clickable budget-admin-only" onClick={() => setSelectedHeadcountDepartment(dept)}>
@@ -1730,8 +1745,6 @@ export default function BudgetPage() {
                       <td className="num">{count}</td>
                       <td className="num">{fmtUSD(salaryUsd, 0)}</td>
                       <td className="num">{salaryActualUsd !== 0 ? fmtUSD(salaryActualUsd, 0) : '—'}</td>
-                      <td className="num">{fmtUSD(bonusUsd, 0)}</td>
-                      <td className="num">{bonusActualUsd !== 0 ? fmtUSD(bonusActualUsd, 0) : '—'}</td>
                       <td className={`num ${getBudgetVarianceTone(compVarianceUsd)}`}>{formatBudgetVariance(compVarianceUsd)}</td>
                     </tr>
                   ))}
@@ -1778,10 +1791,25 @@ export default function BudgetPage() {
                 Add Team Member
               </button>
             )}
+            {canManageTeam && (
+              <button className="btn-secondary" onClick={() => setIsTeamImportOpen(true)}>
+                Import team (xlsx)
+              </button>
+            )}
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)', marginLeft: 'auto' }}>
               {visibleTeam.length} members
             </span>
           </div>
+
+          {teamLoadError && !teamLoading ? (
+            <div className="status-bar" style={{ marginBottom: 12 }}>
+              <span className="status-dot warn" />
+              <span className="status-text">Couldn&apos;t load the team roster ({teamLoadError}).</span>
+              <button className="btn-secondary" style={{ marginLeft: 8, fontSize: '0.72rem', padding: '2px 10px' }} onClick={() => void loadBudgetTeam(true)}>
+                Retry
+              </button>
+            </div>
+          ) : null}
 
           {(loading || teamLoading) ? (
             <div className="cards-grid budget-team-summary-grid" style={{ marginBottom: 18 }}>
@@ -1801,16 +1829,8 @@ export default function BudgetPage() {
               <div className="card-sub">{teamSummary.terminatedMembers} terminated · {teamSummary.totalMembers} total records</div>
             </div>
             <div className="card">
-              <div className="card-label">Salary Budget</div>
+              <div className="card-label">Salary Budget (Stables)</div>
               <div className="card-value">{fmtUSD(teamSummary.totalSalaryUsd, 0)}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">Bonus Budget</div>
-              <div className="card-value">{fmtUSD(teamSummary.totalBonusUsd, 0)}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">Total Comp</div>
-              <div className="card-value">{fmtUSD(teamSummary.totalCompUsd, 0)}</div>
               <div className="card-sub">Current roster assumptions</div>
             </div>
             <div className="card">
@@ -1832,9 +1852,7 @@ export default function BudgetPage() {
                   <th className="sortable" onClick={() => toggleTeamSort('location')}>Location{sortIndicator('location')}</th>
                   <th className="sortable" onClick={() => toggleTeamSort('status')}>Status{sortIndicator('status')}</th>
                   <th>Termination Month</th>
-                  <th className="num sortable" onClick={() => toggleTeamSort('salary')}>Salary{sortIndicator('salary')}</th>
-                  <th className="num sortable" onClick={() => toggleTeamSort('bonus')}>Bonus{sortIndicator('bonus')}</th>
-                  <th className="num sortable" onClick={() => toggleTeamSort('totalComp')}>Total Comp{sortIndicator('totalComp')}</th>
+                  <th className="num sortable" onClick={() => toggleTeamSort('salary')}>Salary (Stables){sortIndicator('salary')}</th>
                   {canManageTeam && <th className="num">Actions</th>}
                 </tr>
               </thead>
@@ -1850,8 +1868,6 @@ export default function BudgetPage() {
                       <td><span className={`status-badge ${m.status}`}>{m.status}</span></td>
                       <td style={{ color: 'var(--muted)' }}>{m.terminationMonth || '—'}</td>
                       <td className="num">{fmtUSD(m.salary, 0)}</td>
-                      <td className="num">{m.bonus ? fmtUSD(m.bonus, 0) : '—'}</td>
-                      <td className="num">{fmtUSD((m.salary || 0) + (m.bonus || 0), 0)}</td>
                       {canManageTeam && (
                         <td className="num">
                           <button
@@ -1872,14 +1888,12 @@ export default function BudgetPage() {
                         TOTAL ({visibleTeam.length} shown)
                       </td>
                       <td className="num">{fmtUSD(visibleTeamTotals.salaryUsd, 0)}</td>
-                      <td className="num">{fmtUSD(visibleTeamTotals.bonusUsd, 0)}</td>
-                      <td className="num">{fmtUSD(visibleTeamTotals.totalCompUsd, 0)}</td>
                       {canManageTeam ? <td aria-hidden="true" /> : null}
                     </tr>,
                   )
                 ) : (
                   <tr>
-                    <td colSpan={canManageTeam ? 11 : 10}>
+                    <td colSpan={canManageTeam ? 9 : 8}>
                       <div className="empty budget-empty-inline">
                         <div className="empty-icon">∅</div>
                         <div>No team members match the current filters.</div>
@@ -1969,6 +1983,16 @@ export default function BudgetPage() {
         onRecovered={async (message) => {
           await loadBudgetState(true)
           setLastActionMessage(message)
+        }}
+      />
+      <BudgetTeamImportModal
+        open={isTeamImportOpen && canManageTeam}
+        onClose={() => setIsTeamImportOpen(false)}
+        onImported={async (summary) => {
+          await loadBudgetTeam(true)
+          setLastActionMessage(
+            `Team import applied: ${summary.added} added, ${summary.updated} updated, ${summary.deactivated} marked as left.`,
+          )
         }}
       />
       <BudgetTeamMemberModal
