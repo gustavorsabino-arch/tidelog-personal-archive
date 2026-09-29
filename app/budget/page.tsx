@@ -256,6 +256,7 @@ export default function BudgetPage() {
   const [teamLoading, setTeamLoading] = useState(false)
   const [teamImporting, setTeamImporting] = useState(false)
   const [teamImportMessage, setTeamImportMessage] = useState<string | null>(null)
+  const [teamImportJson, setTeamImportJson] = useState('')
   const [teamLoaded, setTeamLoaded] = useState(false)
   const [budgetError, setBudgetError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1857,6 +1858,27 @@ export default function BudgetPage() {
                     event.target.value = ''
                   }} />
               </label>
+            )}
+            {canManageTeam && (
+              <details>
+                <summary>Paste import data</summary>
+                <textarea aria-label="Roster import JSON" value={teamImportJson} onChange={(event) => setTeamImportJson(event.target.value)} rows={4} cols={48} />
+                <button className="btn-secondary" disabled={teamImporting} onClick={async () => {
+                  setTeamImporting(true)
+                  setTeamImportMessage(null)
+                  try {
+                    const payload = JSON.parse(teamImportJson)
+                    const result = await apiPost<{ created: number; updated: number; total: number }>('/api/budget/team/import', payload)
+                    await loadBudgetTeam(true)
+                    setTeamImportMessage(`Imported ${result.created} new and updated ${result.updated} existing members. ${result.total} total records.`)
+                    setTeamImportJson('')
+                  } catch (error) {
+                    setTeamImportMessage(error instanceof Error ? error.message : 'Team import failed.')
+                  } finally {
+                    setTeamImporting(false)
+                  }
+                }}>Apply roster</button>
+              </details>
             )}
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)', marginLeft: 'auto' }}>
               {visibleTeam.length} members
