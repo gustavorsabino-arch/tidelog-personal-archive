@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Valid memberId required.' }, { status: 400 })
       }
 
-      await setBudgetTeamMemberStatusInDb(memberId, 'inactive')
+      await setBudgetTeamMemberStatusInDb(memberId, 'inactive', body?.terminationDate)
       const team = await loadBudgetTeamState(year, true)
       await logAudit({
         userId: user.id === 'dev-user' ? null : user.id,

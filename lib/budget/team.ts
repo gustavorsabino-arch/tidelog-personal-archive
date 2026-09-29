@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
-import { budgetTeamMember } from '@/lib/db/schema/budget'
+import { budgetTeamEmploymentDates, budgetTeamMember } from '@/lib/db/schema/budget'
 import { BUDGET_DEPTS, ENTITIES } from '../constants.ts'
 import { toDbEntity, toDisplayEntity } from '../entity.ts'
 import type {
@@ -70,6 +70,31 @@ function normalizeTerminationMonth(value: unknown): BudgetMonthKey | null {
   return null
 }
 
+function normalizeIsoDate(value: unknown): string | null {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const date = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : null
+}
+
+// The production database is not migrated as part of a Git deploy. Apply the
+// additive columns before roster reads and writes; concurrent calls are safe.
+let datesSchemaReady: Promise<void> | null = null
+export function ensureBudgetTeamDatesSchema(): Promise<void> {
+  if (!datesSchemaReady) {
+    datesSchemaReady = (async () => {
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS app.budget_team_employment_dates (
+        member_id uuid PRIMARY KEY,
+        start_date date,
+        termination_date date
+      )`)
+    })().catch((error) => {
+      datesSchemaReady = null
+      throw error
+    })
+  }
+  return datesSchemaReady
+}
+
 function normalizeEntity(value: unknown): string {
   const normalized = normalizeString(value)
   return normalized || ENTITIES[0]
@@ -78,7 +103,7 @@ function normalizeEntity(value: unknown): string {
 function normalizeTeamMember(member: Partial<BudgetTeamMember>, fallbackId: string): BudgetTeamMember {
   const status = normalizeStatus(member.status)
   const terminationMonth = status === 'Terminated'
-    ? normalizeTerminationMonth(member.terminationMonth)
+    ? (normalizeIsoDate(member.terminationDate)?.slice(5, 7) as BudgetMonthKey | undefined) ?? normalizeTerminationMonth(member.terminationMonth)
     : null
 
   return {
@@ -95,10 +120,14 @@ function normalizeTeamMember(member: Partial<BudgetTeamMember>, fallbackId: stri
     location: normalizeString(member.location),
     ft: normalizeString(member.ft),
     terminationMonth,
+    startDate: normalizeIsoDate(member.startDate),
+    terminationDate: normalizeIsoDate(member.terminationDate),
   }
 }
 
-function rowToMember(row: BudgetTeamMemberRow): BudgetTeamMember {
+type EmploymentDatesRow = typeof budgetTeamEmploymentDates.$inferSelect
+
+function rowToMember(row: BudgetTeamMemberRow, dates?: EmploymentDatesRow): BudgetTeamMember {
   const status: BudgetTeamMember['status'] = row.status === 'inactive' ? 'Terminated' : 'Current'
   return {
     id: row.id,
@@ -113,11 +142,13 @@ function rowToMember(row: BudgetTeamMemberRow): BudgetTeamMember {
     classification: row.classification ?? '',
     location: row.location ?? '',
     ft: row.ft ? 'FT' : 'PT',
-    terminationMonth: null,
+    terminationMonth: dates?.terminationDate ? dates.terminationDate.slice(5, 7) as BudgetMonthKey : null,
+    startDate: dates?.startDate ?? null,
+    terminationDate: dates?.terminationDate ?? null,
   }
 }
 
-function memberToRowValues(
+export function memberToRowValuesForImport(
   input: BudgetTeamMemberInput,
 ): Omit<BudgetTeamMemberRow, 'id' | 'createdAt' | 'updatedAt'> {
   const dbStatus: BudgetTeamMemberRow['status'] = input.status === 'Terminated' ? 'inactive' : 'active'
@@ -203,15 +234,20 @@ export function validateBudgetTeamMemberInput(input: unknown): BudgetTeamMemberI
   const email = normalizeString(candidate.email).toLowerCase()
   const status = normalizeStatus(candidate.status)
   const terminationMonth = status === 'Terminated'
-    ? normalizeTerminationMonth(candidate.terminationMonth)
+    ? (normalizeIsoDate(candidate.terminationDate)?.slice(5, 7) as BudgetMonthKey | undefined) ?? normalizeTerminationMonth(candidate.terminationMonth)
     : null
 
   if (!name) throw new Error('Name is required.')
   if (!role) throw new Error('Role is required.')
   if (!email) throw new Error('Email is required.')
-  if (status === 'Terminated' && !terminationMonth) {
-    throw new Error('Termination month is required for terminated team members.')
+  const startDate = normalizeIsoDate(candidate.startDate)
+  const terminationDate = normalizeIsoDate(candidate.terminationDate)
+  if (candidate.startDate && !startDate) throw new Error('Valid start date is required (YYYY-MM-DD).')
+  if (candidate.terminationDate && !terminationDate) throw new Error('Valid termination date is required (YYYY-MM-DD).')
+  if (status === 'Terminated' && !terminationDate) {
+    throw new Error('Termination date is required for terminated team members.')
   }
+  if (startDate && terminationDate && terminationDate < startDate) throw new Error('Termination date cannot precede start date.')
 
   return {
     name,
@@ -226,6 +262,8 @@ export function validateBudgetTeamMemberInput(input: unknown): BudgetTeamMemberI
     location: normalizeString(candidate.location),
     ft: normalizeString(candidate.ft),
     terminationMonth,
+    startDate,
+    terminationDate,
   }
 }
 
@@ -306,8 +344,13 @@ export function restoreBudgetTeamMember(
 }
 
 export async function loadBudgetTeamState(year: number, _noCache = false): Promise<BudgetTeamState> {
-  const rows = await db.select().from(budgetTeamMember)
-  const members = rows.map(rowToMember).sort((a, b) => a.name.localeCompare(b.name))
+  await ensureBudgetTeamDatesSchema()
+  const [rows, dates] = await Promise.all([
+    db.select().from(budgetTeamMember),
+    db.select().from(budgetTeamEmploymentDates),
+  ])
+  const datesById = new Map(dates.map((row) => [row.memberId, row]))
+  const members = rows.map((row) => rowToMember(row, datesById.get(row.id))).sort((a, b) => a.name.localeCompare(b.name))
   const updatedAtIso = rows
     .map((row) => (row.updatedAt instanceof Date ? row.updatedAt.toISOString() : null))
     .filter((value): value is string => typeof value === 'string')
@@ -325,28 +368,40 @@ export async function loadBudgetTeamState(year: number, _noCache = false): Promi
 }
 
 export async function createBudgetTeamMemberInDb(input: BudgetTeamMemberInput): Promise<string> {
-  const [row] = await db.insert(budgetTeamMember).values(memberToRowValues(input)).returning({ id: budgetTeamMember.id })
-  return row.id
+  await ensureBudgetTeamDatesSchema()
+  return db.transaction(async (tx) => {
+    const [row] = await tx.insert(budgetTeamMember).values(memberToRowValuesForImport(input)).returning({ id: budgetTeamMember.id })
+    await tx.insert(budgetTeamEmploymentDates).values({ memberId: row.id, startDate: input.startDate || null, terminationDate: input.terminationDate || null })
+    return row.id
+  })
 }
 
 export async function updateBudgetTeamMemberInDb(
   memberId: string,
   input: BudgetTeamMemberInput,
 ): Promise<void> {
+  await ensureBudgetTeamDatesSchema()
   const result = await db
     .update(budgetTeamMember)
-    .set({ ...memberToRowValues(input), updatedAt: new Date() })
+    .set({ ...memberToRowValuesForImport(input), updatedAt: new Date() })
     .where(eq(budgetTeamMember.id, memberId))
     .returning({ id: budgetTeamMember.id })
   if (result.length === 0) {
     throw new Error('Team member not found.')
   }
+  await db.insert(budgetTeamEmploymentDates)
+    .values({ memberId, startDate: input.startDate || null, terminationDate: input.terminationDate || null })
+    .onConflictDoUpdate({ target: budgetTeamEmploymentDates.memberId, set: { startDate: input.startDate || null, terminationDate: input.terminationDate || null } })
 }
 
 export async function setBudgetTeamMemberStatusInDb(
   memberId: string,
   status: 'active' | 'inactive',
+  terminationDate?: string | null,
 ): Promise<void> {
+  await ensureBudgetTeamDatesSchema()
+  const lastDay = normalizeIsoDate(terminationDate)
+  if (status === 'inactive' && !lastDay) throw new Error('Valid last day is required.')
   const result = await db
     .update(budgetTeamMember)
     .set({ status, updatedAt: new Date() })
@@ -355,4 +410,7 @@ export async function setBudgetTeamMemberStatusInDb(
   if (result.length === 0) {
     throw new Error('Team member not found.')
   }
+  await db.insert(budgetTeamEmploymentDates)
+    .values({ memberId, terminationDate: status === 'inactive' ? lastDay : null })
+    .onConflictDoUpdate({ target: budgetTeamEmploymentDates.memberId, set: { terminationDate: status === 'inactive' ? lastDay : null } })
 }

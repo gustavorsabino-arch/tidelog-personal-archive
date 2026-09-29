@@ -1,4 +1,4 @@
-import { pgSchema, text, uuid, boolean, numeric, integer, timestamp, primaryKey } from 'drizzle-orm/pg-core'
+import { pgSchema, text, uuid, boolean, numeric, integer, timestamp, primaryKey, date } from 'drizzle-orm/pg-core'
 import { entity } from './reference'
 
 const app = pgSchema('app')
@@ -18,6 +18,12 @@ export const budgetTeamMember = app.table('budget_team_member', {
   status: text('status', { enum: ['active', 'inactive', 'pending'] }).notNull().default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const budgetTeamEmploymentDates = app.table('budget_team_employment_dates', {
+  memberId: uuid('member_id').primaryKey(),
+  startDate: date('start_date'),
+  terminationDate: date('termination_date'),
 })
 
 export const budgetLine = app.table(

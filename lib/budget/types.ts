@@ -66,6 +66,8 @@ export type BudgetTeamMember = {
   ft: string
   status: BudgetTeamMemberStatus
   terminationMonth: BudgetMonthKey | null
+  startDate?: string | null // YYYY-MM-DD, inclusive
+  terminationDate?: string | null // YYYY-MM-DD, inclusive
 }
 
 export type BudgetTeamMemberInput = Omit<BudgetTeamMember, 'id'>
@@ -103,6 +105,7 @@ export type BudgetHeadcountByDepartment = {
   count: number
   terminatedCount: number
   salaryUsd: number
+  monthlySalaryBudgetUsd: number
   bonusUsd: number
   totalCompUsd: number
   salaryActualUsd: number

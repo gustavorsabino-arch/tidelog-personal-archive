@@ -93,18 +93,51 @@ function buildHeadcountActualMap(
   )
 }
 
+function weekdaysInclusive(start: Date, end: Date): number {
+  let days = 0
+  for (let time = start.getTime(); time <= end.getTime(); time += 86_400_000) {
+    const day = new Date(time).getUTCDay()
+    if (day !== 0 && day !== 6) days++
+  }
+  return days
+}
+
+export function getMemberMonthlySalaryBudget(member: BudgetTeamMember, year: number, month: number): number {
+  const first = new Date(Date.UTC(year, month - 1, 1))
+  const last = new Date(Date.UTC(year, month, 0))
+  const start = member.startDate ? new Date(`${member.startDate}T00:00:00Z`) : first
+  const legacyEnd = member.status === 'Terminated' && member.terminationMonth
+    ? new Date(Date.UTC(year, Number(member.terminationMonth), 0)) : last
+  const end = member.terminationDate ? new Date(`${member.terminationDate}T00:00:00Z`) : legacyEnd
+  if (start > last || end < first || start > end) return 0
+  const worked = weekdaysInclusive(start > first ? start : first, end < last ? end : last)
+  return (member.salary || 0) / 12 * worked / weekdaysInclusive(first, last)
+}
+
+export function isMemberInMonth(member: BudgetTeamMember, year: number, month: number): boolean {
+  return getMemberMonthlySalaryBudget({ ...member, salary: 12 }, year, month) > 0
+}
+
 export function getHeadcountByDepartment(
   members: BudgetTeamMember[],
   actuals: readonly BudgetHeadcountActualEntry[] | null = null,
+  scope?: { year: number; month: number; entity?: string },
 ): BudgetHeadcountByDepartment[] {
   const actualByDepartment = buildHeadcountActualMap(actuals)
 
   return BUDGET_DEPTS.map((dept) => {
-    const deptMembers = members.filter((member) => member.dept === dept)
-    const activeMembers = deptMembers.filter((member) => member.status !== 'Terminated')
-    const salaryUsd = activeMembers.reduce((sum, member) => sum + (member.salary || 0), 0)
+    const deptMembers = members.filter((member) => member.dept === dept && (!scope?.entity || member.entity === scope.entity))
+    const activeMembers = scope
+      ? deptMembers.filter((member) => isMemberInMonth(member, scope.year, scope.month))
+      : deptMembers.filter((member) => member.status !== 'Terminated')
+    const salaryUsd = scope
+      ? deptMembers.reduce((sum, member) => sum + Array.from({ length: 12 }, (_, index) => getMemberMonthlySalaryBudget(member, scope.year, index + 1)).reduce((a, b) => a + b, 0), 0)
+      : activeMembers.reduce((sum, member) => sum + (member.salary || 0), 0)
+    const monthlySalaryBudgetUsd = scope
+      ? deptMembers.reduce((sum, member) => sum + getMemberMonthlySalaryBudget(member, scope.year, scope.month), 0)
+      : salaryUsd / 12
     const bonusUsd = activeMembers.reduce((sum, member) => sum + (member.bonus || 0), 0)
-    const totalCompUsd = activeMembers.reduce((sum, member) => sum + (member.salary || 0) + (member.bonus || 0), 0)
+    const totalCompUsd = salaryUsd + bonusUsd
     const actualEntry = actualByDepartment[dept]
     const totalActualUsd = actualEntry?.totalActualUsd ?? ((actualEntry?.salaryActualUsd ?? 0) + (actualEntry?.bonusActualUsd ?? 0))
 
@@ -113,12 +146,13 @@ export function getHeadcountByDepartment(
       count: activeMembers.length,
       terminatedCount: deptMembers.length - activeMembers.length,
       salaryUsd,
+      monthlySalaryBudgetUsd,
       bonusUsd,
       totalCompUsd,
       salaryActualUsd: actualEntry?.salaryActualUsd ?? 0,
       bonusActualUsd: actualEntry?.bonusActualUsd ?? 0,
       totalActualUsd,
-      compVarianceUsd: actuals !== null ? (actualEntry?.salaryActualUsd ?? 0) - salaryUsd / 12 : null,
+      compVarianceUsd: actuals !== null ? (actualEntry?.salaryActualUsd ?? 0) - monthlySalaryBudgetUsd : null,
     }
   })
 }
@@ -132,7 +166,7 @@ export function getBudgetHeadcountSummary(rows: readonly BudgetHeadcountByDepart
     totalBonusActualUsd: summary.totalBonusActualUsd + row.bonusActualUsd,
     totalCompBudgetUsd: summary.totalCompBudgetUsd + row.totalCompUsd,
     totalCompActualUsd: summary.totalCompActualUsd + row.totalActualUsd,
-    monthlyPayrollBudgetUsd: summary.monthlyPayrollBudgetUsd + row.salaryUsd / 12,
+    monthlyPayrollBudgetUsd: summary.monthlyPayrollBudgetUsd + row.monthlySalaryBudgetUsd,
   }), {
     activeHeadcount: 0,
     totalSalaryBudgetUsd: 0,

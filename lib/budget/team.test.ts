@@ -123,6 +123,6 @@ test('validates required team member fields', () => {
       role: 'Engineer',
       status: 'Terminated',
     }),
-    /Termination month is required/,
+    /Termination date is required/,
   )
 })

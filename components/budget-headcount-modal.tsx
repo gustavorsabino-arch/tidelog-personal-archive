@@ -4,11 +4,13 @@ import { useEffect, useMemo } from 'react'
 
 import { getBudgetDepartmentLabel } from '@/lib/budget/departments'
 import { fmtUSD } from '@/lib/format'
+import { getMemberMonthlySalaryBudget } from '@/lib/budget/selectors'
 import type { BudgetDepartment, BudgetTeamMember } from '@/lib/budget/types'
 
 type BudgetHeadcountModalProps = {
   open: boolean
   year: number
+  month: number
   department: BudgetDepartment | null
   members: readonly BudgetTeamMember[]
   onClose: () => void
@@ -17,6 +19,7 @@ type BudgetHeadcountModalProps = {
 export function BudgetHeadcountModal({
   open,
   year,
+  month,
   department,
   members,
   onClose,
@@ -33,16 +36,12 @@ export function BudgetHeadcountModal({
   }, [onClose, open])
 
   const summary = useMemo(() => {
-    const totalSalaryUsd = members.reduce((sum, member) => sum + (member.salary || 0), 0)
-    const totalBonusUsd = members.reduce((sum, member) => sum + (member.bonus || 0), 0)
-
+    const totalSalaryUsd = members.reduce((sum, member) => sum + getMemberMonthlySalaryBudget(member, year, month), 0)
     return {
       activeMembers: members.length,
       totalSalaryUsd,
-      totalBonusUsd,
-      totalCompUsd: totalSalaryUsd + totalBonusUsd,
     }
-  }, [members])
+  }, [members, year, month])
 
   if (!open || !department) return null
   const departmentLabel = getBudgetDepartmentLabel(department)
@@ -54,7 +53,7 @@ export function BudgetHeadcountModal({
           <div>
             <div className="modal-title">{departmentLabel} Headcount</div>
             <div className="modal-sub">
-              Active roster assumptions for {year}, sorted from the canonical team tracker.
+              Salary budget for {String(month).padStart(2, '0')}/{year}, including leavers who worked during the month.
             </div>
           </div>
           <button className="modal-close" onClick={onClose} aria-label="Close headcount modal">×</button>
@@ -63,21 +62,13 @@ export function BudgetHeadcountModal({
         <div className="modal-body" style={{ padding: 20 }}>
           <div className="cards-grid" style={{ marginBottom: 18 }}>
             <div className="card">
-              <div className="card-label">Active Members</div>
+              <div className="card-label">Members in Month</div>
               <div className="card-value">{summary.activeMembers}</div>
-              <div className="card-sub">Current members in {departmentLabel}</div>
+              <div className="card-sub">Working days in {departmentLabel}</div>
             </div>
             <div className="card">
-              <div className="card-label">Salary</div>
+              <div className="card-label">Salary Budget Monthly</div>
               <div className="card-value">{fmtUSD(summary.totalSalaryUsd, 0)}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">Bonus</div>
-              <div className="card-value">{fmtUSD(summary.totalBonusUsd, 0)}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">Total Comp</div>
-              <div className="card-value">{fmtUSD(summary.totalCompUsd, 0)}</div>
             </div>
           </div>
 
@@ -88,9 +79,8 @@ export function BudgetHeadcountModal({
                   <th>Name</th>
                   <th>Status</th>
                   <th>Classification</th>
-                  <th className="num">Salary</th>
-                  <th className="num">Bonus</th>
-                  <th className="num">Total Comp</th>
+                  <th>Last Day</th>
+                  <th className="num">Salary Budget Monthly</th>
                 </tr>
               </thead>
               <tbody>
@@ -104,16 +94,15 @@ export function BudgetHeadcountModal({
                     </td>
                     <td><span className={`status-badge ${member.status}`}>{member.status}</span></td>
                     <td><span className="dept-badge">{member.classification || '—'}</span></td>
-                    <td className="num">{fmtUSD(member.salary, 0)}</td>
-                    <td className="num">{member.bonus ? fmtUSD(member.bonus, 0) : '—'}</td>
-                    <td className="num">{fmtUSD((member.salary || 0) + (member.bonus || 0), 0)}</td>
+                    <td>{member.terminationDate ?? '—'}</td>
+                    <td className="num">{fmtUSD(getMemberMonthlySalaryBudget(member, year, month), 0)}</td>
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={6}>
+                    <td colSpan={5}>
                       <div className="empty budget-empty-inline">
                         <div className="empty-icon">∅</div>
-                        <div>No active team members are currently assigned to {departmentLabel}.</div>
+                        <div>No team members worked in {departmentLabel} this month.</div>
                       </div>
                     </td>
                   </tr>

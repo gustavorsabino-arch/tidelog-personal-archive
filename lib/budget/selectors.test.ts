@@ -11,6 +11,7 @@ import {
   getDepartmentLineItems,
   getDepartmentTotals,
   getHeadcountByDepartment,
+  getMemberMonthlySalaryBudget,
   sortBudgetTeam,
 } from './selectors.ts'
 import type { BudgetPlanState, BudgetTeamMember } from './types.ts'
@@ -30,6 +31,8 @@ function makeMember(overrides: Partial<BudgetTeamMember> = {}): BudgetTeamMember
     location: overrides.location ?? 'Remote',
     ft: overrides.ft ?? 'FT',
     terminationMonth: overrides.terminationMonth ?? null,
+    startDate: overrides.startDate ?? null,
+    terminationDate: overrides.terminationDate ?? null,
   }
 }
 
@@ -55,6 +58,24 @@ test('computes department totals from the annual lines in a plan', () => {
   assert.ok(engineering)
   assert.equal(engineering.total, 780000)
   assert.equal(getBudgetSummary(plan, []).annualBudgetUsd, 780000)
+})
+
+test('prorates the final month by inclusive weekdays and excludes later months', () => {
+  const leaver = makeMember({ salary: 264000, status: 'Terminated', startDate: '2025-01-01', terminationDate: '2026-06-23', terminationMonth: '06' })
+  assert.equal(getMemberMonthlySalaryBudget(leaver, 2026, 5), 22000)
+  assert.equal(getMemberMonthlySalaryBudget(leaver, 2026, 6), 17000) // 17 of 22 weekdays
+  assert.equal(getMemberMonthlySalaryBudget(leaver, 2026, 7), 0)
+})
+
+test('headcount budget uses month and entity while yearly reflects 2026 exposure', () => {
+  const leaver = makeMember({ salary: 264000, status: 'Terminated', startDate: '2025-01-01', terminationDate: '2026-06-23', terminationMonth: '06', entity: 'Opco' })
+  const other = makeMember({ salary: 120000, entity: 'Juku' })
+  const june = getHeadcountByDepartment([leaver, other], [{ dept: 'Engineering', salaryActualUsd: 18000, bonusActualUsd: 0, totalActualUsd: 18000 }], { year: 2026, month: 6, entity: 'Opco' })
+  const engineering = june.find((row) => row.dept === 'Engineering')!
+  assert.equal(engineering.count, 1)
+  assert.equal(engineering.monthlySalaryBudgetUsd, 17000)
+  assert.equal(engineering.salaryUsd, 5 * 22000 + 17000)
+  assert.equal(engineering.compVarianceUsd, 1000)
 })
 
 test('uses annual lines when present and keeps catalog labels in selectors', () => {

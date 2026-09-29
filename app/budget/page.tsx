@@ -79,6 +79,7 @@ import {
   getBudgetHeadcountSummary,
   getBudgetTeamSummary,
   getHeadcountByDepartment,
+  isMemberInMonth,
   sortBudgetTeam,
   type BudgetTeamSortKey,
 } from '@/lib/budget/selectors'
@@ -253,6 +254,8 @@ export default function BudgetPage() {
   const [qbStatuses, setQbStatuses] = useState<QboConnectionStatus[]>([])
   const [qbStatusLoading, setQbStatusLoading] = useState(false)
   const [teamLoading, setTeamLoading] = useState(false)
+  const [teamImporting, setTeamImporting] = useState(false)
+  const [teamImportMessage, setTeamImportMessage] = useState<string | null>(null)
   const [teamLoaded, setTeamLoaded] = useState(false)
   const [budgetError, setBudgetError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -375,6 +378,24 @@ export default function BudgetPage() {
       setTeamLoadError(error instanceof Error ? error.message : 'request failed')
     } finally {
       setTeamLoading(false)
+    }
+  }
+
+  async function importTeamMaster(file: File) {
+    setTeamImporting(true)
+    setTeamImportMessage(null)
+    try {
+      const form = new FormData()
+      form.set('file', file)
+      const response = await fetch('/api/budget/team/import', { method: 'POST', body: form })
+      const result = await response.json() as { error?: string; created?: number; updated?: number; total?: number }
+      if (!response.ok) throw new Error(result.error || 'Team import failed.')
+      await loadBudgetTeam(true)
+      setTeamImportMessage(`Imported ${result.created} new and updated ${result.updated} existing members. ${result.total} total records.`)
+    } catch (error) {
+      setTeamImportMessage(error instanceof Error ? error.message : 'Team import failed.')
+    } finally {
+      setTeamImporting(false)
     }
   }
 
@@ -523,8 +544,12 @@ export default function BudgetPage() {
   const headcountActuals = headcountActualsCache[headcountActualsCacheKey] ?? null
 
   const headcountByDepartment = useMemo(() => {
-    return getHeadcountByDepartment(budgetState.team.members, headcountActuals?.departments ?? null)
-  }, [budgetState.team.members, headcountActuals])
+    return getHeadcountByDepartment(budgetState.team.members, headcountActuals?.departments ?? null, {
+      year: headcountMonthView.year,
+      month: headcountMonthView.month,
+      entity: headcountMonthView.entity === 'All' ? undefined : headcountMonthView.entity,
+    })
+  }, [budgetState.team.members, headcountActuals, headcountMonthView])
 
   const allowedDepartments = useMemo<readonly BudgetDepartment[]>(() => {
     if (access?.role === 'admin' || access?.permissions?.budgetDepartments === null) return BUDGET_DEPTS
@@ -652,12 +677,14 @@ export default function BudgetPage() {
     if (!selectedHeadcountDepartment) return []
     return sortBudgetTeam(
       budgetState.team.members.filter((member) => (
-        member.dept === selectedHeadcountDepartment && member.status !== 'Terminated'
+        member.dept === selectedHeadcountDepartment
+          && (headcountMonthView.entity === 'All' || member.entity === headcountMonthView.entity)
+          && isMemberInMonth(member, headcountMonthView.year, headcountMonthView.month)
       )),
       'name',
       'asc',
     )
-  }, [budgetState.team.members, selectedHeadcountDepartment])
+  }, [budgetState.team.members, selectedHeadcountDepartment, headcountMonthView])
   const headcountScopeLabel = useMemo(
     () => `${headcountMonthView.entity === 'All' ? 'All Entities' : headcountMonthView.entity} · ${getBudgetScopePeriodLabel(headcountMonthView)}`,
     [headcountMonthView],
@@ -668,10 +695,6 @@ export default function BudgetPage() {
       { entity: teamEntityFilter || undefined },
     )
   }, [allowedDepartments, budgetState.team.members, teamEntityFilter])
-  const headcountTerminatedVisible = useMemo(
-    () => visibleHeadcountByDepartment.reduce((sum, entry) => sum + entry.terminatedCount, 0),
-    [visibleHeadcountByDepartment],
-  )
   const headcountSalaryProgressPct = useMemo(() => {
     if (headcountSummary.monthlyPayrollBudgetUsd <= 0 || headcountSummary.totalSalaryActualUsd <= 0) return 0
     return Math.min((headcountSummary.totalSalaryActualUsd / headcountSummary.monthlyPayrollBudgetUsd) * 100, 100)
@@ -1712,12 +1735,12 @@ export default function BudgetPage() {
             <div className="card">
               <div className="card-label">Active Headcount</div>
               <div className="card-value blue">{headcountSummary.activeHeadcount}</div>
-              <div className="card-sub">{headcountTerminatedVisible} terminated kept in audit trail</div>
+              <div className="card-sub">Members with working days in {headcountScopeLabel}</div>
             </div>
             <div className="card">
               <div className="card-label">Salary Budget Yearly</div>
               <div className="card-value">{fmtUSD(headcountSummary.totalSalaryBudgetUsd, 0)}</div>
-              <div className="card-sub">From Team Tracker</div>
+              <div className="card-sub">2026 salary exposure from Team Tracker</div>
               {headcountActuals ? (
                 <div className="card-bar">
                   <div className="card-bar-fill" style={{ width: `${headcountSalaryProgressPct}%` }} />
@@ -1736,13 +1759,13 @@ export default function BudgetPage() {
             <div className="card">
               <div className="card-label">Salary Budget Monthly</div>
               <div className="card-value green">{fmtUSD(headcountSummary.monthlyPayrollBudgetUsd, 0)}</div>
-              <div className="card-sub">Salary budget divided across 12 months</div>
+              <div className="card-sub">Working days in {headcountScopeLabel}</div>
             </div>
           </div>
           )}
           <div className="section-header budget-section-header">
             <span className="section-title">Headcount by Department</span>
-            <span className="budget-section-note">Active roster only. Click a department row to inspect current team members.</span>
+            <span className="budget-section-note">Members with working days in the selected month. Click a department to inspect them.</span>
           </div>
           <div className="section" style={{ marginTop: 18 }}>
             <div className="section-header">
@@ -1762,7 +1785,7 @@ export default function BudgetPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleHeadcountByDepartment.map(({ dept, count, salaryUsd, salaryActualUsd, compVarianceUsd }) => (
+                  {visibleHeadcountByDepartment.map(({ dept, count, salaryUsd, monthlySalaryBudgetUsd, salaryActualUsd, compVarianceUsd }) => (
                     <tr key={dept}>
                       <td className="label">
                         <button type="button" className="card-clickable budget-admin-only" onClick={() => setSelectedHeadcountDepartment(dept)}>
@@ -1772,7 +1795,7 @@ export default function BudgetPage() {
                       </td>
                       <td className="num">{count}</td>
                       <td className="num">{fmtUSD(salaryUsd, 0)}</td>
-                      <td className="num">{fmtUSD(salaryUsd / 12, 0)}</td>
+                      <td className="num">{fmtUSD(monthlySalaryBudgetUsd, 0)}</td>
                       <td className="num">{headcountActuals ? (
                         <button type="button" className="budget-table-cell-button" onClick={() => void openHeadcountSalaryDrill(dept)}>
                           {fmtUSD(salaryActualUsd, 0)}
@@ -1824,6 +1847,17 @@ export default function BudgetPage() {
                 Add Team Member
               </button>
             )}
+            {canManageTeam && (
+              <label className="btn-secondary" style={{ cursor: teamImporting ? 'wait' : 'pointer' }}>
+                {teamImporting ? 'Importing…' : 'Import 2026 master'}
+                <input type="file" accept=".xlsx" disabled={teamImporting} style={{ display: 'none' }}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    if (file) void importTeamMaster(file)
+                    event.target.value = ''
+                  }} />
+              </label>
+            )}
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)', marginLeft: 'auto' }}>
               {visibleTeam.length} members
             </span>
@@ -1838,6 +1872,7 @@ export default function BudgetPage() {
               </button>
             </div>
           ) : null}
+          {teamImportMessage && <div className="status-bar" style={{ marginBottom: 12 }}>{teamImportMessage}</div>}
 
           {(loading || teamLoading || (!teamLoaded && !teamLoadError)) ? (
             <div className="cards-grid budget-team-summary-grid" style={{ marginBottom: 18 }}>
@@ -1880,6 +1915,7 @@ export default function BudgetPage() {
                   <th className="sortable" onClick={() => toggleTeamSort('location')}>Location{sortIndicator('location')}</th>
                   <th className="sortable" onClick={() => toggleTeamSort('status')}>Status{sortIndicator('status')}</th>
                   <th>Termination Month</th>
+                  <th>Last Day</th>
                   <th className="num sortable" onClick={() => toggleTeamSort('salary')}>Salary (Stables){sortIndicator('salary')}</th>
                   {canManageTeam && <th className="num">Actions</th>}
                 </tr>
@@ -1895,6 +1931,7 @@ export default function BudgetPage() {
                       <td style={{ color: 'var(--muted)' }}>{m.location || '—'}</td>
                       <td><span className={`status-badge ${m.status}`}>{m.status}</span></td>
                       <td style={{ color: 'var(--muted)' }}>{m.terminationMonth || '—'}</td>
+                      <td style={{ color: 'var(--muted)' }}>{m.terminationDate || '—'}</td>
                       <td className="num">{fmtUSD(m.salary, 0)}</td>
                       {canManageTeam && (
                         <td className="num">
@@ -2052,6 +2089,7 @@ export default function BudgetPage() {
       <BudgetHeadcountModal
         open={selectedHeadcountDepartment !== null}
         year={budgetYear}
+        month={headcountMonthView.month}
         department={selectedHeadcountDepartment}
         members={headcountModalMembers}
         onClose={() => setSelectedHeadcountDepartment(null)}

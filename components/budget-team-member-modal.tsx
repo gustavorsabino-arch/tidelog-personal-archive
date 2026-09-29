@@ -24,26 +24,6 @@ type BudgetTeamMemberModalProps = {
 
 type TeamFormState = BudgetTeamMemberInput
 
-const TERMINATION_MONTH_OPTIONS: Array<{ value: BudgetMonthKey; label: string }> = [
-  { value: '01', label: 'January' },
-  { value: '02', label: 'February' },
-  { value: '03', label: 'March' },
-  { value: '04', label: 'April' },
-  { value: '05', label: 'May' },
-  { value: '06', label: 'June' },
-  { value: '07', label: 'July' },
-  { value: '08', label: 'August' },
-  { value: '09', label: 'September' },
-  { value: '10', label: 'October' },
-  { value: '11', label: 'November' },
-  { value: '12', label: 'December' },
-]
-
-function getDefaultTerminationMonth(): BudgetMonthKey {
-  const month = new Date().getMonth() + 1
-  return String(month).padStart(2, '0') as BudgetMonthKey
-}
-
 function buildInitialState(
   member: BudgetTeamMember | null,
   defaultDepartment?: BudgetDepartment | '',
@@ -66,6 +46,8 @@ function buildInitialState(
     location: '',
     ft: 'FT',
     terminationMonth: null,
+    startDate: null,
+    terminationDate: null,
   }
 }
 
@@ -135,6 +117,10 @@ export function BudgetTeamMemberModal({
 
   async function terminateMember() {
     if (!member) return
+    if (!form.terminationDate) {
+      setError('Enter the last day of work before terminating this member.')
+      return
+    }
     if (!confirmTerminate) {
       setConfirmTerminate(true)
       return
@@ -148,7 +134,8 @@ export function BudgetTeamMemberModal({
         action: 'terminate-member',
         year,
         memberId: member.id,
-        terminationMonth: form.terminationMonth ?? getDefaultTerminationMonth(),
+        terminationMonth: form.terminationDate.slice(5, 7),
+        terminationDate: form.terminationDate,
       })
       await onSaved(result)
       onClose()
@@ -189,7 +176,7 @@ export function BudgetTeamMemberModal({
           <div>
             <div className="modal-title">{title}</div>
             <div className="modal-sub">
-              Update the canonical budget team file for {year}. Git history remains the audit trail.
+              Update the team roster and employment dates for {year}.
             </div>
           </div>
           <button className="modal-close" onClick={() => !submitting && onClose()} aria-label="Close team modal">×</button>
@@ -255,10 +242,7 @@ export function BudgetTeamMemberModal({
                   setForm((current) => ({
                     ...current,
                     status: nextStatus,
-                    terminationMonth:
-                      nextStatus === 'Terminated'
-                        ? (current.terminationMonth ?? getDefaultTerminationMonth())
-                        : null,
+                    terminationMonth: nextStatus === 'Terminated' ? current.terminationMonth : null,
                   }))
                 }}
               >
@@ -267,21 +251,21 @@ export function BudgetTeamMemberModal({
               </select>
             </label>
 
-            {form.status === 'Terminated' ? (
-              <label className="budget-import-field">
-                <span className="card-label budget-import-field-label">Termination Month</span>
-                <select
-                  className="tt-fsel"
-                  value={form.terminationMonth ?? ''}
-                  onChange={(event) => updateField('terminationMonth', event.target.value as BudgetMonthKey)}
-                >
-                  <option value="" disabled>Select month</option>
-                  {TERMINATION_MONTH_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
+            <label className="budget-import-field">
+              <span className="card-label budget-import-field-label">Start Date</span>
+              <input className="tt-search" type="date" value={form.startDate ?? ''}
+                onChange={(event) => updateField('startDate', event.target.value || null)} />
+            </label>
+
+            <label className="budget-import-field">
+              <span className="card-label budget-import-field-label">Last Day</span>
+              <input className="tt-search" type="date" value={form.terminationDate ?? ''}
+                onChange={(event) => setForm((current) => ({
+                  ...current, terminationDate: event.target.value || null,
+                  terminationMonth: event.target.value ? event.target.value.slice(5, 7) as BudgetMonthKey : null,
+                }))} />
+            </label>
+
 
             <label className="budget-import-field">
               <span className="card-label budget-import-field-label">Classification</span>
