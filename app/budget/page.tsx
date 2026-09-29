@@ -1792,17 +1792,17 @@ export default function BudgetPage() {
               <button
                 className="btn-secondary"
                 disabled={rosterSyncBusy}
-                title="One-time: applies the Sep 2026 MASTER roster (adds + updates; salary = Stables). People not in that list are untouched."
+                title="One-time: replaces the entire team roster with the 23 numbered MASTER rows; salary = Stables."
                 onClick={async () => {
                   setRosterSyncBusy(true)
                   try {
-                    const res = await apiPost<{ added: number; updated: number; unchanged: number }>(
+                    const res = await apiPost<{ added: number; removed: number }>(
                       '/api/budget/team/sync-roster',
                       {},
                     )
                     await loadBudgetTeam(true)
                     setLastActionMessage(
-                      `Roster synced: ${res.added} added, ${res.updated} updated, ${res.unchanged} already up to date.`,
+                      `Roster replaced: ${res.removed} old records removed, ${res.added} MASTER records added.`,
                     )
                   } catch (err) {
                     setTeamLoadError(err instanceof Error ? err.message : 'Roster sync failed.')

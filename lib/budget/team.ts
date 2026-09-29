@@ -1,10 +1,10 @@
-import { eq, inArray } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
 import { budgetTeamMember } from '@/lib/db/schema/budget'
 import { BUDGET_DEPTS, ENTITIES } from '../constants.ts'
 import { toDbEntity, toDisplayEntity } from '../entity.ts'
-import { buildTeamImportPlan, type TeamMasterRow } from './team-import.ts'
+import { mapMasterRowToInput, type TeamMasterRow } from './team-import.ts'
 import type {
   BudgetDepartment,
   BudgetMonthKey,
@@ -330,37 +330,22 @@ export async function createBudgetTeamMemberInDb(input: BudgetTeamMemberInput): 
   return row.id
 }
 
-/** Atomically reconcile the one-off MASTER roster, including inactive and duplicate old rows. */
+/** Atomically replace every old row with the 23 numbered MASTER rows. */
 export async function replaceBudgetTeamRosterInDb(
   roster: TeamMasterRow[],
   terminationMonth: BudgetMonthKey,
 ): Promise<{ added: number; updated: number; removed: number; unchanged: number }> {
+  if (roster.length !== 23) throw new Error('Expected exactly 23 MASTER roster rows.')
+  const inputs = roster.map((row) => validateBudgetTeamMemberInput(mapMasterRowToInput(row, terminationMonth)))
+  if (new Set(inputs.map((input) => input.email)).size !== inputs.length) {
+    throw new Error('MASTER roster contains duplicate emails.')
+  }
+
   return db.transaction(async (tx) => {
     const rows = await tx.select().from(budgetTeamMember)
-    const { ops, matchedIds } = buildTeamImportPlan(roster, rows.map(rowToMember), terminationMonth)
-    const summary = { added: 0, updated: 0, removed: 0, unchanged: 0 }
-
-    for (const op of ops) {
-      if (op.type === 'deactivate') continue
-      const input = validateBudgetTeamMemberInput(op.input)
-      if (op.type === 'add') {
-        await tx.insert(budgetTeamMember).values(memberToRowValues(input))
-        summary.added++
-      } else {
-        await tx.update(budgetTeamMember)
-          .set({ ...memberToRowValues(input), updatedAt: new Date() })
-          .where(eq(budgetTeamMember.id, op.memberId))
-        summary.updated++
-      }
-    }
-
-    const extraIds = rows.filter((row) => !matchedIds.has(row.id)).map((row) => row.id)
-    if (extraIds.length) {
-      await tx.delete(budgetTeamMember).where(inArray(budgetTeamMember.id, extraIds))
-    }
-    summary.removed = extraIds.length
-    summary.unchanged = roster.length - summary.added - summary.updated
-    return summary
+    await tx.delete(budgetTeamMember)
+    await tx.insert(budgetTeamMember).values(inputs.map(memberToRowValues))
+    return { added: inputs.length, updated: 0, removed: rows.length, unchanged: 0 }
   })
 }
 
