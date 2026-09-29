@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { eq } from 'drizzle-orm'
-import { gunzipSync } from 'node:zlib'
 
 import { logAudit } from '@/lib/audit'
 import { requireBudgetAccess } from '@/lib/budget/access-control'
@@ -17,21 +16,16 @@ export async function POST(req: NextRequest) {
   if (!access.ok) return access.response
 
   const contentType = req.headers.get('content-type') ?? ''
-  const candidates = contentType.includes('multipart/form-data')
-    ? await (async () => {
+  if (!contentType.includes('multipart/form-data')) {
+    return NextResponse.json({ error: 'Upload a .xlsx workbook.' }, { status: 415 })
+  }
+  const candidates = await (async () => {
       const form = await req.formData()
       const file = form.get('file')
       if (!(file instanceof File) || !file.name.toLowerCase().endsWith('.xlsx') || file.size > 8_000_000) {
         throw new Error('Upload the 2026 master .xlsx file (8 MB maximum).')
       }
       return parseMasterRosterWorkbook(new Uint8Array(await file.arrayBuffer()))
-    })().catch((error) => error)
-    : await (async () => {
-      const body = await req.json().catch(() => null)
-      if (typeof body?.gzipBase64 === 'string') {
-        return JSON.parse(gunzipSync(Buffer.from(body.gzipBase64, 'base64')).toString('utf8')).members
-      }
-      return body?.members
     })().catch((error) => error)
   if (candidates instanceof Error) return NextResponse.json({ error: candidates.message }, { status: 400 })
   if (!Array.isArray(candidates) || candidates.length < 1 || candidates.length > 100) {

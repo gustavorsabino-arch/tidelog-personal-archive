@@ -254,9 +254,6 @@ export default function BudgetPage() {
   const [qbStatuses, setQbStatuses] = useState<QboConnectionStatus[]>([])
   const [qbStatusLoading, setQbStatusLoading] = useState(false)
   const [teamLoading, setTeamLoading] = useState(false)
-  const [teamImporting, setTeamImporting] = useState(false)
-  const [teamImportMessage, setTeamImportMessage] = useState<string | null>(null)
-  const [teamImportJson, setTeamImportJson] = useState('')
   const [teamLoaded, setTeamLoaded] = useState(false)
   const [budgetError, setBudgetError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -379,24 +376,6 @@ export default function BudgetPage() {
       setTeamLoadError(error instanceof Error ? error.message : 'request failed')
     } finally {
       setTeamLoading(false)
-    }
-  }
-
-  async function importTeamMaster(file: File) {
-    setTeamImporting(true)
-    setTeamImportMessage(null)
-    try {
-      const form = new FormData()
-      form.set('file', file)
-      const response = await fetch('/api/budget/team/import', { method: 'POST', body: form })
-      const result = await response.json() as { error?: string; created?: number; updated?: number; total?: number }
-      if (!response.ok) throw new Error(result.error || 'Team import failed.')
-      await loadBudgetTeam(true)
-      setTeamImportMessage(`Imported ${result.created} new and updated ${result.updated} existing members. ${result.total} total records.`)
-    } catch (error) {
-      setTeamImportMessage(error instanceof Error ? error.message : 'Team import failed.')
-    } finally {
-      setTeamImporting(false)
     }
   }
 
@@ -547,7 +526,7 @@ export default function BudgetPage() {
   const headcountByDepartment = useMemo(() => {
     return getHeadcountByDepartment(budgetState.team.members, headcountActuals?.departments ?? null, {
       year: headcountMonthView.year,
-      month: headcountMonthView.month,
+      month: headcountMonthView.month + 1,
       entity: headcountMonthView.entity === 'All' ? undefined : headcountMonthView.entity,
     })
   }, [budgetState.team.members, headcountActuals, headcountMonthView])
@@ -680,7 +659,7 @@ export default function BudgetPage() {
       budgetState.team.members.filter((member) => (
         member.dept === selectedHeadcountDepartment
           && (headcountMonthView.entity === 'All' || member.entity === headcountMonthView.entity)
-          && isMemberInMonth(member, headcountMonthView.year, headcountMonthView.month)
+          && isMemberInMonth(member, headcountMonthView.year, headcountMonthView.month + 1)
       )),
       'name',
       'asc',
@@ -1848,38 +1827,6 @@ export default function BudgetPage() {
                 Add Team Member
               </button>
             )}
-            {canManageTeam && (
-              <label className="btn-secondary" style={{ cursor: teamImporting ? 'wait' : 'pointer' }}>
-                {teamImporting ? 'Importing…' : 'Import 2026 master'}
-                <input type="file" accept=".xlsx" disabled={teamImporting} style={{ display: 'none' }}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0]
-                    if (file) void importTeamMaster(file)
-                    event.target.value = ''
-                  }} />
-              </label>
-            )}
-            {canManageTeam && (
-              <details>
-                <summary>Paste import data</summary>
-                <textarea aria-label="Roster import JSON" value={teamImportJson} onChange={(event) => setTeamImportJson(event.target.value)} rows={4} cols={48} />
-                <button className="btn-secondary" disabled={teamImporting} onClick={async () => {
-                  setTeamImporting(true)
-                  setTeamImportMessage(null)
-                  try {
-                    const payload = { gzipBase64: teamImportJson.trim() }
-                    const result = await apiPost<{ created: number; updated: number; total: number }>('/api/budget/team/import', payload)
-                    await loadBudgetTeam(true)
-                    setTeamImportMessage(`Imported ${result.created} new and updated ${result.updated} existing members. ${result.total} total records.`)
-                    setTeamImportJson('')
-                  } catch (error) {
-                    setTeamImportMessage(error instanceof Error ? error.message : 'Team import failed.')
-                  } finally {
-                    setTeamImporting(false)
-                  }
-                }}>Apply roster</button>
-              </details>
-            )}
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)', marginLeft: 'auto' }}>
               {visibleTeam.length} members
             </span>
@@ -1894,7 +1841,6 @@ export default function BudgetPage() {
               </button>
             </div>
           ) : null}
-          {teamImportMessage && <div className="status-bar" style={{ marginBottom: 12 }}>{teamImportMessage}</div>}
 
           {(loading || teamLoading || (!teamLoaded && !teamLoadError)) ? (
             <div className="cards-grid budget-team-summary-grid" style={{ marginBottom: 18 }}>
@@ -2111,7 +2057,7 @@ export default function BudgetPage() {
       <BudgetHeadcountModal
         open={selectedHeadcountDepartment !== null}
         year={budgetYear}
-        month={headcountMonthView.month}
+        month={headcountMonthView.month + 1}
         department={selectedHeadcountDepartment}
         members={headcountModalMembers}
         onClose={() => setSelectedHeadcountDepartment(null)}
