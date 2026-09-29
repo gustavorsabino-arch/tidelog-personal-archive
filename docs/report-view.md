@@ -1,6 +1,6 @@
 # Report view
 
-The new `/report` view has three tabs: MoM Comparison, YTD Trend and Presentation. `/presentation` redirects here. Access follows the existing `qb:read` permission. The figures come from `/api/report/financials`, which reads cached monthly QuickBooks P&L reports; no live QB calls occur when opening the view.
+The `/report` view has five tabs: MoM Comparison, YTD Trend, Balance Sheet, P&L and Presentation. `/presentation` redirects here. The Balance Sheet and P&L tabs reuse their existing screens and API endpoints; their previous `/accounting` and `/pnl` routes remain available for old deep links. Access follows the existing `qb:read` permission. Report figures come from `/api/report/financials`, which reads cached monthly QuickBooks P&L reports; no live QB calls occur when opening MoM or YTD.
 
 ## Accounting definitions
 
@@ -12,7 +12,7 @@ The new `/report` view has three tabs: MoM Comparison, YTD Trend and Presentatio
 - **Unclassified:** any new account without an explicit mapping or a code-less line, such as Opco's March 2026 “Services” income. It stays in revenue/expenses and appears in the audit warning.
 - **YTD comparison:** January through the chosen month versus the same cutoff in the previous year. The variance appears only when both periods contain all required months and entities.
 
-MoM amounts in the entity cards, summary cards and subgroup matrix open a QuickBooks account breakdown. Variances let the reader switch between the two compared months. YTD Trend shows the selected metric in its chart, cards and monthly table, with a separate value for each available entity. Clicking a monthly or YTD value opens the same account breakdown; clicking a numbered account opens the existing live-first QuickBooks GL transaction modal. The modal keeps P&L account signs and shows any subtotal difference explicitly. YTD charts use curved lines and subtle area fills, while the table supplies exact monthly values. Missing entity-months appear as dashes.
+MoM amounts in the entity cards, summary cards and subgroup matrix open a QuickBooks account breakdown. The subgroup name is plain text; only amounts open a detail. Historically active subgroups remain visible at zero in months without a balance. Variances let the reader switch between the two compared months. YTD Trend shows the selected metric in its chart, cards and monthly table, with a separate value for each available entity. Clicking a monthly or YTD value opens the same account breakdown; clicking a numbered account opens the existing live-first QuickBooks GL transaction modal. The modal keeps P&L account signs and shows any subtotal difference explicitly. YTD charts use curved lines and subtle area fills, while the table supplies exact monthly values. Missing entity-months appear as dashes.
 
 ## Slides
 

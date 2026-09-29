@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
@@ -11,9 +10,11 @@ import { accountInTrendMetric, trendAccountContribution, trendMetricAmount, tren
 import { getFinancialMonth, getYtdSummary, type FinancialMonth, type PresentationFinancials } from '@/lib/presentation/financials'
 import type { QboEntity } from '@/lib/qb/config'
 import { GlDrillModal } from '@/components/gl-drill-modal'
+import { PnlPageClient } from '@/components/pnl-page-client'
+import BalanceSheetPageClient from '@/components/balance-sheet-page-client'
 
 type Entity = QboEntity | 'All'
-type View = 'mom' | 'ytd' | 'slides'
+type View = 'mom' | 'ytd' | 'balanceSheet' | 'pnl' | 'slides'
 type Metric = TrendMetric
 type GroupKey = `${PnlKind}|${PnlGroup}`
 type SlideId = 'cover' | 'mom' | 'revenue' | 'net' | 'ytd' | 'revenue-mix' | 'operating' | 'compensation' | 'technology' | 'professional' | 'other-costs' | 'below-line' | 'bridge'
@@ -97,33 +98,25 @@ function EntityComparison({ data, year, monthA, monthB, onOpen }: { data: Presen
   })}</div>
 }
 
-function SubgroupMatrix({ data, year, monthA, monthB, compact = false, onOpen }: { data: PresentationFinancials; year: number; monthA: number; monthB: number; compact?: boolean; onOpen: OpenDetail }) {
+function SubgroupMatrix({ data, monthA, monthB, onOpen }: { data: PresentationFinancials; monthA: number; monthB: number; onOpen: OpenDetail }) {
   const a = getFinancialMonth(data, 'All', monthA), b = getFinancialMonth(data, 'All', monthB)
-  const keys = groupKeys([a, b])
-  const [selected, setSelected] = useState<GroupKey | null>(null)
-  const selectedAccounts = selected ? ENTITIES.flatMap((entity) => {
-    const month = getFinancialMonth(data, entity, monthB)
-    return (month?.inventory.accounts ?? []).filter((account) => `${account.kind}|${account.group}` === selected && account.amount !== 0).map((account) => ({ entity, account }))
-  }) : []
-  return <>
-    <div className="report-table-scroll"><table className="report-table"><thead><tr><th>QB section / subgroup</th>{ENTITIES.map((entity) => <th key={entity}>{entity}</th>)}<th>Reported total</th><th>MoM change</th></tr></thead><tbody>
+  // Keep historically active P&L subgroups visible even when both selected
+  // months have a zero balance (for example 641xx Company offsite in Aug/Sep).
+  const keys = groupKeys(data.months.filter((row) => row.entity === 'All' && row.month <= Math.max(monthA, monthB)))
+  return <div className="report-table-scroll"><table className="report-table"><thead><tr><th>QB section / subgroup</th>{ENTITIES.map((entity) => <th key={entity}>{entity}</th>)}<th>Reported total</th><th>MoM change</th></tr></thead><tbody>
       {keys.map((key, index) => {
         const [kind, group] = key.split('|') as [PnlKind, PnlGroup]
         const prev = keys[index - 1]?.split('|')[0]
         const amount = b ? groupAmount(b, key) : null
         const change = a && b && a.presentEntities.join(',') === b.presentEntities.join(',') ? groupAmount(b, key) - groupAmount(a, key) : null
-        return <tr key={key} className={selected === key ? 'selected' : ''}>
-          <td>{kind !== prev && <span className="report-kind">{KIND_NAMES[kind]}</span>}<button className="report-row-button" onClick={() => setSelected(selected === key ? null : key)} aria-expanded={selected === key}>{PNL_GROUPS[group]}</button></td>
+        return <tr key={key}>
+          <td>{kind !== prev && <span className="report-kind">{KIND_NAMES[kind]}</span>}{PNL_GROUPS[group]}</td>
           {ENTITIES.map((entity) => <td key={entity}><AmountButton value={getFinancialMonth(data, entity, monthB) ? groupAmount(getFinancialMonth(data, entity, monthB), key) : null} label={`${entity} ${PNL_GROUPS[group]} · ${MONTHS[monthB - 1]}`} onClick={() => onOpen({ entity, month: monthB, metric: `group:${key}` })} /></td>)}
           <td className="report-strong"><AmountButton value={amount} label={`Reported ${PNL_GROUPS[group]} · ${MONTHS[monthB - 1]}`} onClick={() => onOpen({ entity: 'All', month: monthB, metric: `group:${key}` })} /></td><td><AmountButton value={change} label={`${PNL_GROUPS[group]} MoM change`} onClick={() => onOpen({ entity: 'All', month: monthB, metric: `group:${key}`, compareMonth: monthA })} /></td>
         </tr>
       })}
       {!keys.length && <tr><td colSpan={7}>No cached P&L for the selected months.</td></tr>}
     </tbody></table></div>
-    {selected && !compact && <div className="report-detail"><h3>{PNL_GROUPS[selected.split('|')[1] as PnlGroup]} · {MONTHS[monthB - 1]} {year}</h3>
-      {selectedAccounts.length ? <ul>{selectedAccounts.map(({ entity, account }, i) => <li key={`${entity}-${account.glCode}-${i}`}><span>{entity} · {account.glCode ?? 'No code'} · {account.label}</span><strong>{exact(account.amount)}</strong><Link href={`/pnl?entity=${entity}&mode=month&year=${year}&month=${monthB}`}>Open P&amp;L</Link></li>)}</ul> : <p>No posted amount in the selected month.</p>}
-    </div>}
-  </>
 }
 
 function Trend({ data, entity, month, metric, compact = false }: { data: PresentationFinancials; entity: Entity; month: number; metric: Metric; compact?: boolean }) {
@@ -169,7 +162,7 @@ function YtdTrend({ data, entity, month, metric, onOpen }: { data: PresentationF
   return <>
     <Trend data={data} entity={entity} month={month} metric={metric} />
     <div className="report-stats report-trend-stats"><Stat label={`YTD ${metricLabel(metric)}`} value={total} onClick={() => onOpen({ entity, month, metric, rangeStart: 1 })} /><Stat label="Latest month" value={latest} onClick={() => onOpen({ entity, month, metric })} /><Stat label="Previous month" value={previous} onClick={() => onOpen({ entity, month: month - 1, metric })} /><Stat label="MoM change" value={latest != null && previous != null ? latest - previous : null} onClick={() => onOpen({ entity, month, metric, compareMonth: month - 1 })} /></div>
-    <div className="report-table-scroll"><table className="report-table"><thead><tr><th>Month</th>{scopes.map((scope) => <th key={scope}><span className="report-entity-key" style={{ background: scope === 'All' ? '#c79a30' : ENTITY_COLORS[scope] }} />{scopeName(scope)} · {metricLabel(metric)}</th>)}</tr></thead><tbody>{rows.map(({ month: selectedMonth }) => <tr key={selectedMonth}><td>{MONTHS[selectedMonth - 1]}</td>{scopes.map((scope) => { const value = metricAmount(getFinancialMonth(data, scope, selectedMonth), metric); return <td key={scope}><AmountButton value={value} label={`${scopeName(scope)} · ${metricLabel(metric)} · ${MONTHS[selectedMonth - 1]} ${data.year}`} onClick={() => onOpen({ entity: scope, month: selectedMonth, metric })} /></td> })}</tr>)}</tbody></table></div>
+    <div className="report-table-scroll"><table className="report-table"><thead><tr><th>Month</th>{scopes.map((scope) => <th key={scope}><span className="report-entity-key" style={{ background: scope === 'All' ? '#c79a30' : ENTITY_COLORS[scope] }} />{scopeName(scope)}</th>)}</tr></thead><tbody>{rows.map(({ month: selectedMonth }) => <tr key={selectedMonth}><td>{MONTHS[selectedMonth - 1]}</td>{scopes.map((scope) => { const value = metricAmount(getFinancialMonth(data, scope, selectedMonth), metric); return <td key={scope}><AmountButton value={value} label={`${scopeName(scope)} · ${metricLabel(metric)} · ${MONTHS[selectedMonth - 1]} ${data.year}`} onClick={() => onOpen({ entity: scope, month: selectedMonth, metric })} /></td> })}</tr>)}</tbody></table></div>
     <p className="report-footnote">Click a value for the QuickBooks account breakdown, then an account for its journal entries. A dash means that entity has no cached P&amp;L for that month. Reported group includes available entities only.</p>
   </>
 }
@@ -286,7 +279,7 @@ export function ReportClient({ initialYear, years }: { initialYear: number; year
   const [detail, setDetail] = useState<ReportDetail | null>(null)
   const [slideIndex, setSlideIndex] = useState(0)
   const [notes, setNotes] = useState<Record<string, string>>({})
-  const { data, error, isLoading } = useSWR<PresentationFinancials>(`/api/report/financials?year=${year}`, apiFetch)
+  const { data, error, isLoading } = useSWR<PresentationFinancials>(view === 'balanceSheet' || view === 'pnl' ? null : `/api/report/financials?year=${year}`, apiFetch)
   const { data: prior, error: priorError } = useSWR<PresentationFinancials>(view === 'slides' ? `/api/report/financials?year=${year - 1}` : null, apiFetch)
   const available = useMemo(() => [...new Set((data?.months ?? []).filter((row) => row.entity === 'All').map((row) => row.month))].sort((a, b) => a - b), [data])
 
@@ -326,19 +319,21 @@ export function ReportClient({ initialYear, years }: { initialYear: number; year
 
   return <main className="report-page">
     <div className="page-header"><div><div className="page-title">Report</div><div className="page-sub">QuickBooks P&amp;L · management categories · C-level presentation</div></div></div>
-    <div className="report-toolbar"><div className="report-tabs" role="tablist" aria-label="Report views">{([['mom', 'MoM Comparison'], ['ytd', 'YTD Trend'], ['slides', 'Presentation']] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={view === id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}</div>
-      <label>Year <select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
+    <div className="report-toolbar"><div className="report-tabs" role="tablist" aria-label="Report views">{([['mom', 'MoM Comparison'], ['ytd', 'YTD Trend'], ['balanceSheet', 'Balance Sheet'], ['pnl', 'P&L'], ['slides', 'Presentation']] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={view === id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}</div>
+      {view !== 'balanceSheet' && view !== 'pnl' && <><label>Year <select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
       {view !== 'slides' && <label>Entity <select value={entity} onChange={(event) => setEntity(event.target.value as Entity)}><option value="All">Reported group</option>{ENTITIES.map((name) => <option key={name}>{name}</option>)}</select></label>}
       {view === 'mom' && <label>Compare <select value={monthA} onChange={(event) => setMonthA(Number(event.target.value))}>{MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select></label>}
-      <label>{view === 'ytd' ? 'Through' : 'Month'} <select value={monthB} onChange={(event) => setMonthB(Number(event.target.value))}>{MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select></label>
+      <label>{view === 'ytd' ? 'Through' : 'Month'} <select value={monthB} onChange={(event) => setMonthB(Number(event.target.value))}>{MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select></label></>}
     </div>
+    {view === 'balanceSheet' && <BalanceSheetPageClient embedded />}
+    {view === 'pnl' && <PnlPageClient initialEntity={entity} initialMode="ytd" initialYear={year} initialMonth={monthB} initialData={null} availableYears={years} embedded />}
     {isLoading && !data && <div className="report-empty">Loading cached QuickBooks P&amp;Ls…</div>}
     {error && <div className="report-warning" role="alert">Could not load P&amp;L data: {error instanceof Error ? error.message : String(error)}</div>}
     {data && <>
       {view === 'mom' && <section className="report-panel"><div className="report-section-head"><div><span>MONTHLY COMPARISON</span><h2>{MONTHS[monthA - 1]} vs {MONTHS[monthB - 1]} {year}</h2></div><p>QB values as reported · signed credits and losses</p></div><Coverage data={data} year={year} month={monthB} />
         <EntityComparison data={data} year={year} monthA={monthA} monthB={monthB} onOpen={setDetail} />
         <div className="report-stats"><Stat label="Revenue" value={totalRevenue(current)} onClick={() => setDetail({ entity, month: monthB, metric: 'revenue' })} detail={comparable ? `MoM ${money(totalRevenue(current)! - totalRevenue(earlier)!)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'revenue', compareMonth: monthA }) : undefined} /><Stat label="Expenses" value={totalExpense(current)} onClick={() => setDetail({ entity, month: monthB, metric: 'expense' })} detail={comparable ? `MoM ${money(totalExpense(current)! - totalExpense(earlier)!)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'expense', compareMonth: monthA }) : undefined} /><Stat label="Net income" value={current?.totals.netIncome ?? null} onClick={() => setDetail({ entity, month: monthB, metric: 'netIncome' })} detail={comparable ? `MoM ${money(current!.totals.netIncome - earlier!.totals.netIncome)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'netIncome', compareMonth: monthA }) : undefined} /><Stat label="Reconciliation residual" value={current ? Math.abs(current.inventory.netIncomeResidual) + current.inventory.sectionResiduals.reduce((sum, item) => sum + Math.abs(item.amount), 0) : null} detail={current?.inventory.unclassified.length ? `${current.inventory.unclassified.length} unclassified line(s)` : 'QB section and net bridge'} /></div>
-        <h3 className="report-subhead">Full P&amp;L by management subgroup</h3><SubgroupMatrix data={data} year={year} monthA={monthA} monthB={monthB} onOpen={setDetail} /><p className="report-footnote">Click a value for QB accounts and journal entries. Intercompany remains in reported totals. A MoM change is shown only when the same entities are present in both months.</p>
+        <h3 className="report-subhead">Full P&amp;L by management subgroup</h3><SubgroupMatrix data={data} monthA={monthA} monthB={monthB} onOpen={setDetail} /><p className="report-footnote">Click a value for QB accounts and journal entries. Intercompany remains in reported totals. A MoM change is shown only when the same entities are present in both months.</p>
       </section>}
       {view === 'ytd' && <section className="report-panel"><div className="report-section-head"><div><span>MONTHLY TREND / YEAR TO DATE</span><h2>{scopeName(entity)} · Jan–{MONTHS[monthB - 1]} {year}</h2></div></div>
         <div className="report-metric-picker"><label>Metric <select value={metric} onChange={(event) => setMetric(event.target.value as Metric)}><option value="netIncome">Net income</option><option value="revenue">Revenue (including other income)</option><option value="expense">Expenses (including other expenses)</option>{choices.map((key) => { const [kind, group] = key.split('|') as [PnlKind, PnlGroup]; return <option key={key} value={`group:${key}`}>{KIND_NAMES[kind]} · {PNL_GROUPS[group]}</option> })}</select></label></div>

@@ -22,6 +22,7 @@ type Props = {
   initialMonth: number
   initialData: PnlData | null
   availableYears: number[]
+  embedded?: boolean
 }
 
 const ENTITY_TABS: EntityChoice[] = ['All', ...ENTITIES]
@@ -118,7 +119,7 @@ function PnlRow({
   )
 }
 
-function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth, availableYears }: Omit<Props, 'initialData'>) {
+function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth, availableYears, embedded = false }: Omit<Props, 'initialData'>) {
   const router = useRouter()
   const [entity, setEntity] = useState<EntityChoice>(initialEntity)
   const [mode, setMode] = useState<PnlMode>(initialMode)
@@ -131,6 +132,7 @@ function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth, a
   // Sync state to URL via router.replace — silent update, no history entry,
   // so the back button still goes to wherever the user was before /pnl.
   function syncUrl(next: { entity: EntityChoice; mode: PnlMode; year: number; month: number }) {
+    if (embedded) return
     const params = new URLSearchParams()
     params.set('entity', next.entity)
     params.set('mode', next.mode)
@@ -202,10 +204,10 @@ function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth, a
 
   return (
     <div>
-      <div className="page-header">
+      {!embedded && <div className="page-header">
         <div className="page-title">P&amp;L</div>
         <div className="page-sub">Profit &amp; loss reports from QuickBooks</div>
-      </div>
+      </div>}
 
       <div className="controls-bar">
         <div className="entity-tabs">
@@ -351,6 +353,7 @@ export function PnlPageClient(props: Props) {
         initialYear={props.initialYear}
         initialMonth={props.initialMonth}
         availableYears={props.availableYears}
+        embedded={props.embedded}
       />
     </SWRConfig>
   )

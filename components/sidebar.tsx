@@ -12,8 +12,6 @@ const NAV_ITEMS = [
   { href: '/gain-loss', label: 'Gain / Loss', color: '#D4A017', section: 'Views', pageKey: 'gain-loss' },
   { href: '/unrealized', label: 'Unrealized', color: '#9945ff', section: 'Views', pageKey: 'unrealized' },
   { href: '/orca-ledger', label: 'ORCA Ledger', color: '#00A8A8', section: 'Views', pageKey: 'orca-ledger' },
-  { href: '/accounting', label: 'Balance Sheet', color: '#D4A017', section: 'Views', pageKey: 'accounting' },
-  { href: '/pnl', label: 'P&L', color: '#06D6A0', section: 'Views', pageKey: 'pnl' },
   { href: '/report', label: 'Report', color: '#D4A017', section: 'Views', pageKey: 'presentation' },
   { href: '/budget', label: 'Budget', color: '#D4A017', section: 'Views', pageKey: 'budget' },
   { href: '/approvals', label: 'Approvals', color: '#E4572E', section: 'Views', pageKey: 'approvals' },
