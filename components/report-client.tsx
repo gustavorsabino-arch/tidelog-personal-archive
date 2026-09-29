@@ -119,6 +119,43 @@ function SubgroupMatrix({ data, monthA, monthB, onOpen }: { data: PresentationFi
     </tbody></table></div>
 }
 
+function EntityMoMOverview({ data, entity, monthA, monthB, onOpen }: { data: PresentationFinancials; entity: QboEntity; monthA: number; monthB: number; onOpen: OpenDetail }) {
+  const a = getFinancialMonth(data, entity, monthA), b = getFinancialMonth(data, entity, monthB)
+  const metrics: Array<{ metric: Metric; label: string }> = [
+    { metric: 'revenue', label: 'Revenue' },
+    { metric: 'expense', label: 'Expenses' },
+    { metric: 'netIncome', label: 'Net income' },
+  ]
+  const residual = b ? Math.abs(b.inventory.netIncomeResidual) + b.inventory.sectionResiduals.reduce((sum, item) => sum + Math.abs(item.amount), 0) : null
+  return <>
+    <div className="report-mom-entity-head" style={{ borderLeftColor: ENTITY_COLORS[entity] }}><div><strong>{entity}</strong><span>QuickBooks reported P&amp;L · {MONTHS[monthA - 1]} to {MONTHS[monthB - 1]} {data.year}</span></div><span>{a && b ? 'Both periods available' : `${!a ? MONTHS[monthA - 1] : MONTHS[monthB - 1]} P&L missing`}</span></div>
+    <div className="report-mom-metrics">{metrics.map(({ metric, label }) => {
+      const previous = metricAmount(a, metric), current = metricAmount(b, metric)
+      return <article className="report-mom-metric" key={metric}><span>{label}</span><div><small>{MONTHS[monthA - 1]}</small><AmountButton value={previous} label={`${entity} ${label} · ${MONTHS[monthA - 1]}`} onClick={() => onOpen({ entity, month: monthA, metric })} /></div><div><small>{MONTHS[monthB - 1]}</small><AmountButton value={current} label={`${entity} ${label} · ${MONTHS[monthB - 1]}`} onClick={() => onOpen({ entity, month: monthB, metric })} /></div><div className="report-mom-variance"><small>MoM change</small><AmountButton value={previous != null && current != null ? current - previous : null} label={`${entity} ${label} MoM change`} onClick={() => onOpen({ entity, month: monthB, metric, compareMonth: monthA })} /></div></article>
+    })}</div>
+    <p className="report-footnote">{MONTHS[monthB - 1]} reconciliation residual: {money(residual)}{b?.inventory.unclassified.length ? ` · ${b.inventory.unclassified.length} unclassified QB account(s)` : ''}. Positive expense change means higher reported expense.</p>
+  </>
+}
+
+function EntitySubgroupMatrix({ data, entity, monthA, monthB, onOpen }: { data: PresentationFinancials; entity: QboEntity; monthA: number; monthB: number; onOpen: OpenDetail }) {
+  const a = getFinancialMonth(data, entity, monthA), b = getFinancialMonth(data, entity, monthB)
+  const keys = groupKeys(data.months.filter((row) => row.entity === entity && row.month <= Math.max(monthA, monthB)))
+  const valueCell = (metric: Metric, row: FinancialMonth | null, month: number) => <AmountButton value={metricAmount(row, metric)} label={`${entity} ${metricLabel(metric)} · ${MONTHS[month - 1]}`} onClick={() => onOpen({ entity, month, metric })} />
+  return <div className="report-table-scroll"><table className="report-table report-mom-entity-table"><thead><tr><th>QB section / subgroup</th><th>{entity} · {MONTHS[monthA - 1]} {data.year}</th><th>{entity} · {MONTHS[monthB - 1]} {data.year}</th><th>MoM change</th></tr></thead><tbody>
+    {keys.map((key, index) => {
+      const [kind, group] = key.split('|') as [PnlKind, PnlGroup]
+      const metric: Metric = `group:${key}`
+      const previous = a ? groupAmount(a, key) : null, current = b ? groupAmount(b, key) : null
+      return <tr key={key}><td>{kind !== keys[index - 1]?.split('|')[0] && <span className="report-kind">{KIND_NAMES[kind]}</span>}{PNL_GROUPS[group]}</td><td><AmountButton value={previous} label={`${entity} ${PNL_GROUPS[group]} · ${MONTHS[monthA - 1]}`} onClick={() => onOpen({ entity, month: monthA, metric })} /></td><td className="report-strong"><AmountButton value={current} label={`${entity} ${PNL_GROUPS[group]} · ${MONTHS[monthB - 1]}`} onClick={() => onOpen({ entity, month: monthB, metric })} /></td><td><AmountButton value={previous != null && current != null ? current - previous : null} label={`${entity} ${PNL_GROUPS[group]} MoM change`} onClick={() => onOpen({ entity, month: monthB, metric, compareMonth: monthA })} /></td></tr>
+    })}
+    {(['revenue', 'expense', 'netIncome'] as Metric[]).map((metric) => {
+      const previous = metricAmount(a, metric), current = metricAmount(b, metric)
+      return <tr key={metric} className="report-mom-total"><td>Total {metricLabel(metric).toLowerCase()}</td><td>{valueCell(metric, a, monthA)}</td><td className="report-strong">{valueCell(metric, b, monthB)}</td><td><AmountButton value={previous != null && current != null ? current - previous : null} label={`${entity} ${metricLabel(metric)} MoM change`} onClick={() => onOpen({ entity, month: monthB, metric, compareMonth: monthA })} /></td></tr>
+    })}
+    {!keys.length && <tr><td colSpan={4}>No cached P&amp;L subgroups for this entity and year.</td></tr>}
+  </tbody></table></div>
+}
+
 function Trend({ data, entity, month, metric, compact = false }: { data: PresentationFinancials; entity: Entity; month: number; metric: Metric; compact?: boolean }) {
   const scopes: Entity[] = entity === 'All' ? ['All', ...ENTITIES] : [entity]
   const series = scopes.map((scope) => ({ scope, values: Array.from({ length: month }, (_, index) => metricAmount(getFinancialMonth(data, scope, index + 1), metric)) }))
@@ -330,10 +367,15 @@ export function ReportClient({ initialYear, years }: { initialYear: number; year
     {isLoading && !data && <div className="report-empty">Loading cached QuickBooks P&amp;Ls…</div>}
     {error && <div className="report-warning" role="alert">Could not load P&amp;L data: {error instanceof Error ? error.message : String(error)}</div>}
     {data && <>
-      {view === 'mom' && <section className="report-panel"><div className="report-section-head"><div><span>MONTHLY COMPARISON</span><h2>{MONTHS[monthA - 1]} vs {MONTHS[monthB - 1]} {year}</h2></div><p>QB values as reported · signed credits and losses</p></div><Coverage data={data} year={year} month={monthB} />
-        <EntityComparison data={data} year={year} monthA={monthA} monthB={monthB} onOpen={setDetail} />
-        <div className="report-stats"><Stat label="Revenue" value={totalRevenue(current)} onClick={() => setDetail({ entity, month: monthB, metric: 'revenue' })} detail={comparable ? `MoM ${money(totalRevenue(current)! - totalRevenue(earlier)!)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'revenue', compareMonth: monthA }) : undefined} /><Stat label="Expenses" value={totalExpense(current)} onClick={() => setDetail({ entity, month: monthB, metric: 'expense' })} detail={comparable ? `MoM ${money(totalExpense(current)! - totalExpense(earlier)!)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'expense', compareMonth: monthA }) : undefined} /><Stat label="Net income" value={current?.totals.netIncome ?? null} onClick={() => setDetail({ entity, month: monthB, metric: 'netIncome' })} detail={comparable ? `MoM ${money(current!.totals.netIncome - earlier!.totals.netIncome)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'netIncome', compareMonth: monthA }) : undefined} /><Stat label="Reconciliation residual" value={current ? Math.abs(current.inventory.netIncomeResidual) + current.inventory.sectionResiduals.reduce((sum, item) => sum + Math.abs(item.amount), 0) : null} detail={current?.inventory.unclassified.length ? `${current.inventory.unclassified.length} unclassified line(s)` : 'QB section and net bridge'} /></div>
-        <h3 className="report-subhead">Full P&amp;L by management subgroup</h3><SubgroupMatrix data={data} monthA={monthA} monthB={monthB} onOpen={setDetail} /><p className="report-footnote">Click a value for QB accounts and journal entries. Intercompany remains in reported totals. A MoM change is shown only when the same entities are present in both months.</p>
+      {view === 'mom' && <section className="report-panel"><div className="report-section-head"><div><span>MONTHLY COMPARISON</span><h2>{entity === 'All' ? '' : `${entity} · `}{MONTHS[monthA - 1]} vs {MONTHS[monthB - 1]} {year}</h2></div><p>QB values as reported · signed credits and losses</p></div><Coverage data={data} year={year} month={monthB} entity={entity} />
+        {entity === 'All' ? <>
+          <EntityComparison data={data} year={year} monthA={monthA} monthB={monthB} onOpen={setDetail} />
+          <div className="report-stats"><Stat label="Revenue" value={totalRevenue(current)} onClick={() => setDetail({ entity, month: monthB, metric: 'revenue' })} detail={comparable ? `MoM ${money(totalRevenue(current)! - totalRevenue(earlier)!)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'revenue', compareMonth: monthA }) : undefined} /><Stat label="Expenses" value={totalExpense(current)} onClick={() => setDetail({ entity, month: monthB, metric: 'expense' })} detail={comparable ? `MoM ${money(totalExpense(current)! - totalExpense(earlier)!)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'expense', compareMonth: monthA }) : undefined} /><Stat label="Net income" value={current?.totals.netIncome ?? null} onClick={() => setDetail({ entity, month: monthB, metric: 'netIncome' })} detail={comparable ? `MoM ${money(current!.totals.netIncome - earlier!.totals.netIncome)}` : 'Comparison unavailable'} onDetailClick={comparable ? () => setDetail({ entity, month: monthB, metric: 'netIncome', compareMonth: monthA }) : undefined} /><Stat label="Reconciliation residual" value={current ? Math.abs(current.inventory.netIncomeResidual) + current.inventory.sectionResiduals.reduce((sum, item) => sum + Math.abs(item.amount), 0) : null} detail={current?.inventory.unclassified.length ? `${current.inventory.unclassified.length} unclassified line(s)` : 'QB section and net bridge'} /></div>
+          <h3 className="report-subhead">Full P&amp;L by management subgroup</h3><SubgroupMatrix data={data} monthA={monthA} monthB={monthB} onOpen={setDetail} /><p className="report-footnote">Click a value for QB accounts and journal entries. Intercompany remains in reported totals. A MoM change is shown only when the same entities are present in both months.</p>
+        </> : <>
+          <EntityMoMOverview data={data} entity={entity} monthA={monthA} monthB={monthB} onOpen={setDetail} />
+          <h3 className="report-subhead">{entity} · P&amp;L by management subgroup</h3><EntitySubgroupMatrix data={data} entity={entity} monthA={monthA} monthB={monthB} onOpen={setDetail} /><p className="report-footnote">The two columns use this entity only. Click a value to inspect its QB accounts and entries; MoM change is current minus compare month. Intercompany remains in the reported P&amp;L.</p>
+        </>}
       </section>}
       {view === 'ytd' && <section className="report-panel"><div className="report-section-head"><div><span>MONTHLY TREND / YEAR TO DATE</span><h2>{scopeName(entity)} · Jan–{MONTHS[monthB - 1]} {year}</h2></div></div>
         <div className="report-metric-picker"><label>Metric <select value={metric} onChange={(event) => setMetric(event.target.value as Metric)}><option value="netIncome">Net income</option><option value="revenue">Revenue (including other income)</option><option value="expense">Expenses (including other expenses)</option>{choices.map((key) => { const [kind, group] = key.split('|') as [PnlKind, PnlGroup]; return <option key={key} value={`group:${key}`}>{KIND_NAMES[kind]} · {PNL_GROUPS[group]}</option> })}</select></label></div>
