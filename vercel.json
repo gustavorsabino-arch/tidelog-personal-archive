@@ -1,7 +1,18 @@
 {
   "crons": [
-    { "path": "/api/cron/fetch-balances",     "schedule": "0 8 * * *"      },
-    { "path": "/api/cron/fetch-transactions", "schedule": "30 8,20 * * *"  },
-    { "path": "/api/cron/fetch-qb-reports",   "schedule": "0 * * * *"      }
-  ]
+    {
+      "path": "/api/cron/fetch-balances",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/fetch-transactions",
+      "schedule": "30 8,20 * * *"
+    },
+    {
+      "path": "/api/cron/fetch-qb-reports",
+      "schedule": "0 * * * *"
+    }
+  ],
+  "installCommand": "bun install",
+  "buildCommand": "bun run build"
 }
