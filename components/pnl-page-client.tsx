@@ -264,7 +264,7 @@ function PnlPageInner({ initialEntity, initialMode, initialYear, initialMonth, a
         </div>
         <div className="card">
           <div className="card-label">Total Expenses</div>
-          <div className="card-value red">{fmtUSD(Math.abs(totals?.expense ?? 0) + Math.abs(totals?.otherExpense ?? 0))}</div>
+          <div className="card-value red">{fmtUSD((totals?.expense ?? 0) + (totals?.otherExpense ?? 0))}</div>
         </div>
         <div className="card">
           <div className="card-label">Net Income</div>

@@ -100,14 +100,14 @@ export function parsePnlReport(report: QboProfitAndLossReport): PnlTree {
   const otherExpense = namedSections.filter((s) => s.sectionKind === 'other-expense').reduce((a, s) => a + s.total, 0)
 
   // QB emits a final unnamed section whose Summary is Net Income. Fall back to
-  // (revenue + otherIncome) - (|expense| + |otherExpense|) if absent.
+  // signed income minus signed expenses if absent.
   const trailingUnnamed = allSections.filter((s) => s.title === '')
   const qbNetIncome = trailingUnnamed.length > 0
     ? trailingUnnamed[trailingUnnamed.length - 1].total
     : 0
-  const netIncome = qbNetIncome !== 0
+  const netIncome = trailingUnnamed.length > 0
     ? qbNetIncome
-    : revenue + otherIncome - Math.abs(expense) - Math.abs(otherExpense)
+    : revenue + otherIncome - expense - otherExpense
 
   return {
     sections: namedSections,
