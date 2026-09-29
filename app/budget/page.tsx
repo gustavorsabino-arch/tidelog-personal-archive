@@ -14,9 +14,6 @@ const BudgetImportModal = dynamic(
 const BudgetAdjustModal = dynamic(
   () => import('@/components/budget-adjust-modal').then((m) => m.BudgetAdjustModal),
 )
-const BudgetTeamImportModal = dynamic(
-  () => import('@/components/budget-team-import-modal').then((m) => m.BudgetTeamImportModal),
-)
 const BudgetRecoveryModal = dynamic(
   () => import('@/components/budget-recovery-modal').then((m) => m.BudgetRecoveryModal),
 )
@@ -221,7 +218,7 @@ export default function BudgetPage() {
   const [adjustPrefill, setAdjustPrefill] = useState<{ lineItem?: string; department?: string }>({})
   const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false)
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false)
-  const [isTeamImportOpen, setIsTeamImportOpen] = useState(false)
+  const [rosterSyncBusy, setRosterSyncBusy] = useState(false)
   const [teamLoadError, setTeamLoadError] = useState<string | null>(null)
   const teamLoadAttemptsRef = useRef(0)
   const [isQbModalOpen, setIsQbModalOpen] = useState(false)
@@ -1792,8 +1789,29 @@ export default function BudgetPage() {
               </button>
             )}
             {canManageTeam && (
-              <button className="btn-secondary" onClick={() => setIsTeamImportOpen(true)}>
-                Import team (xlsx)
+              <button
+                className="btn-secondary"
+                disabled={rosterSyncBusy}
+                title="One-time: applies the Sep 2026 MASTER roster (adds + updates; salary = Stables). People not in that list are untouched."
+                onClick={async () => {
+                  setRosterSyncBusy(true)
+                  try {
+                    const res = await apiPost<{ added: number; updated: number; unchanged: number }>(
+                      '/api/budget/team/sync-roster',
+                      {},
+                    )
+                    await loadBudgetTeam(true)
+                    setLastActionMessage(
+                      `Roster synced: ${res.added} added, ${res.updated} updated, ${res.unchanged} already up to date.`,
+                    )
+                  } catch (err) {
+                    setTeamLoadError(err instanceof Error ? err.message : 'Roster sync failed.')
+                  } finally {
+                    setRosterSyncBusy(false)
+                  }
+                }}
+              >
+                {rosterSyncBusy ? 'Syncing…' : 'Sync roster (one-time)'}
               </button>
             )}
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)', marginLeft: 'auto' }}>
@@ -1983,16 +2001,6 @@ export default function BudgetPage() {
         onRecovered={async (message) => {
           await loadBudgetState(true)
           setLastActionMessage(message)
-        }}
-      />
-      <BudgetTeamImportModal
-        open={isTeamImportOpen && canManageTeam}
-        onClose={() => setIsTeamImportOpen(false)}
-        onImported={async (summary) => {
-          await loadBudgetTeam(true)
-          setLastActionMessage(
-            `Team import applied: ${summary.added} added, ${summary.updated} updated, ${summary.deactivated} marked as left.`,
-          )
         }}
       />
       <BudgetTeamMemberModal
