@@ -1,8 +1,8 @@
 import { test, expect, beforeAll } from 'bun:test'
-import { SignJWT, generateKeyPair, exportJWK, type KeyLike } from 'jose'
+import { SignJWT, generateKeyPair, exportJWK } from 'jose'
 import { verifyCfJwt } from './cf-access'
 
-let privateKey: KeyLike
+let privateKey: CryptoKey
 let publicJwk: any
 const AUD = 'test-aud-123'
 const ISSUER = 'https://test.cloudflareaccess.com'
@@ -88,3 +88,4 @@ test('verifyCfJwt rejects empty email claim', async () => {
     verifyCfJwt(emptyEmailToken, { aud: AUD, issuer: ISSUER, jwks: fakeJwks })
   ).rejects.toThrow(/email/)
 })
+
