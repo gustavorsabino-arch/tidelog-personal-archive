@@ -4,7 +4,6 @@ import { db } from '@/lib/db'
 import { budgetTeamMember } from '@/lib/db/schema/budget'
 import { BUDGET_DEPTS, ENTITIES } from '../constants.ts'
 import { toDbEntity, toDisplayEntity } from '../entity.ts'
-import { mapMasterRowToInput, type TeamMasterRow } from './team-import.ts'
 import type {
   BudgetDepartment,
   BudgetMonthKey,
@@ -328,25 +327,6 @@ export async function loadBudgetTeamState(year: number, _noCache = false): Promi
 export async function createBudgetTeamMemberInDb(input: BudgetTeamMemberInput): Promise<string> {
   const [row] = await db.insert(budgetTeamMember).values(memberToRowValues(input)).returning({ id: budgetTeamMember.id })
   return row.id
-}
-
-/** Atomically replace every old row with the 23 numbered MASTER rows. */
-export async function replaceBudgetTeamRosterInDb(
-  roster: TeamMasterRow[],
-  terminationMonth: BudgetMonthKey,
-): Promise<{ added: number; updated: number; removed: number; unchanged: number }> {
-  if (roster.length !== 23) throw new Error('Expected exactly 23 MASTER roster rows.')
-  const inputs = roster.map((row) => validateBudgetTeamMemberInput(mapMasterRowToInput(row, terminationMonth)))
-  if (new Set(inputs.map((input) => input.email)).size !== inputs.length) {
-    throw new Error('MASTER roster contains duplicate emails.')
-  }
-
-  return db.transaction(async (tx) => {
-    const rows = await tx.select().from(budgetTeamMember)
-    await tx.delete(budgetTeamMember)
-    await tx.insert(budgetTeamMember).values(inputs.map(memberToRowValues))
-    return { added: inputs.length, updated: 0, removed: rows.length, unchanged: 0 }
-  })
 }
 
 export async function updateBudgetTeamMemberInDb(

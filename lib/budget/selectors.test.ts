@@ -159,6 +159,7 @@ test('supports entity-scoped team summaries and headcount actual overlays', () =
   assert.equal(opcoSummary.monthlyPayrollUsd, opcoSummary.totalSalaryUsd / 12)
   assert.equal(headcount.find((entry) => entry.dept === 'Engineering')?.salaryActualUsd, 1000)
   const engineeringEntry = headcount.find((entry) => entry.dept === 'Engineering')
-  assert.equal(engineeringEntry?.compVarianceUsd, 1200 - (engineeringEntry?.totalCompUsd ?? 0))
+  assert.equal(engineeringEntry?.compVarianceUsd, 1000 - (engineeringEntry?.salaryUsd ?? 0) / 12)
+  assert.equal(headcount.find((entry) => entry.dept !== 'Engineering')?.compVarianceUsd, 0)
   assert.equal(headcountSummary.totalCompActualUsd >= headcountSummary.totalSalaryActualUsd, true)
 })

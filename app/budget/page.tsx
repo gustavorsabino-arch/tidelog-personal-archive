@@ -218,7 +218,6 @@ export default function BudgetPage() {
   const [adjustPrefill, setAdjustPrefill] = useState<{ lineItem?: string; department?: string }>({})
   const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false)
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false)
-  const [rosterSyncBusy, setRosterSyncBusy] = useState(false)
   const [teamLoadError, setTeamLoadError] = useState<string | null>(null)
   const teamLoadAttemptsRef = useRef(0)
   const [isQbModalOpen, setIsQbModalOpen] = useState(false)
@@ -518,8 +517,10 @@ export default function BudgetPage() {
   }, [filteredTeam, teamSort.direction, teamSort.key])
 
   const overviewActualsCacheKey = useMemo(() => getBudgetViewCacheKey(budgetView), [budgetView])
+  const headcountMonthView = useMemo(() => ({ ...budgetView, mode: 'month' as const }), [budgetView])
+  const headcountActualsCacheKey = useMemo(() => getBudgetViewCacheKey(headcountMonthView), [headcountMonthView])
   const overviewActuals = overviewActualsCache[overviewActualsCacheKey] ?? null
-  const headcountActuals = headcountActualsCache[overviewActualsCacheKey] ?? null
+  const headcountActuals = headcountActualsCache[headcountActualsCacheKey] ?? null
 
   const headcountByDepartment = useMemo(() => {
     return getHeadcountByDepartment(budgetState.team.members, headcountActuals?.departments ?? null)
@@ -596,13 +597,14 @@ export default function BudgetPage() {
     activeDepartment: activeDept,
     activeTab,
     departmentCacheKey: departmentActualsCacheKey,
-    headcountCacheKey: overviewActualsCacheKey,
+    headcountCacheKey: headcountActualsCacheKey,
     overviewCacheKey: overviewActualsCacheKey,
     overviewDepartment: overviewSelectedDepartment,
   }), [
     activeDept,
     activeTab,
     departmentActualsCacheKey,
+    headcountActualsCacheKey,
     overviewActualsCacheKey,
     overviewSelectedDepartment,
   ])
@@ -657,8 +659,8 @@ export default function BudgetPage() {
     )
   }, [budgetState.team.members, selectedHeadcountDepartment])
   const headcountScopeLabel = useMemo(
-    () => `${budgetView.entity === 'All' ? 'All Entities' : budgetView.entity} · ${budgetView.mode === 'ytd' ? getBudgetScopeYtdLabel(budgetView) : getBudgetScopePeriodLabel(budgetView)}`,
-    [budgetView],
+    () => `${headcountMonthView.entity === 'All' ? 'All Entities' : headcountMonthView.entity} · ${getBudgetScopePeriodLabel(headcountMonthView)}`,
+    [headcountMonthView],
   )
   const teamSummary = useMemo(() => {
     return getBudgetTeamSummary(
@@ -671,9 +673,9 @@ export default function BudgetPage() {
     [visibleHeadcountByDepartment],
   )
   const headcountSalaryProgressPct = useMemo(() => {
-    if (headcountSummary.totalSalaryBudgetUsd <= 0 || headcountSummary.totalSalaryActualUsd <= 0) return 0
-    return Math.min((headcountSummary.totalSalaryActualUsd / headcountSummary.totalSalaryBudgetUsd) * 100, 100)
-  }, [headcountSummary.totalSalaryActualUsd, headcountSummary.totalSalaryBudgetUsd])
+    if (headcountSummary.monthlyPayrollBudgetUsd <= 0 || headcountSummary.totalSalaryActualUsd <= 0) return 0
+    return Math.min((headcountSummary.totalSalaryActualUsd / headcountSummary.monthlyPayrollBudgetUsd) * 100, 100)
+  }, [headcountSummary.totalSalaryActualUsd, headcountSummary.monthlyPayrollBudgetUsd])
   const teamSummaryScopeLabel = teamEntityFilter || 'All Entities'
   const visibleTeamTotals = useMemo(() => ({
     salaryUsd: visibleTeam.reduce((sum, member) => sum + (member.salary || 0), 0),
@@ -753,6 +755,34 @@ export default function BudgetPage() {
     try {
       const drill = await apiFetch<BudgetActualDrillState>(`/api/budget/actuals/drill?${params.toString()}`)
       setActualDrill(drill)
+    } catch (error) {
+      setActualDrillError(error instanceof Error ? error.message : 'Failed to load QuickBooks GL detail.')
+    } finally {
+      setActualDrillLoading(false)
+    }
+  }
+
+  async function openHeadcountSalaryDrill(department: BudgetDepartment) {
+    const params = new URLSearchParams({
+      year: String(headcountMonthView.year),
+      entity: headcountMonthView.entity,
+      mode: 'month',
+      month: String(headcountMonthView.month),
+      rangeStart: String(headcountMonthView.rangeStart),
+      rangeEnd: String(headcountMonthView.rangeEnd),
+      column: 'period',
+      keys: 'salary',
+      department,
+    })
+
+    setActualDrillTitle(getBudgetActualDrillTitle(`${getBudgetDepartmentLabel(department)} Salary Actual`, headcountMonthView, 'period', ['salary']))
+    setActualDrillOpen(true)
+    setActualDrillLoading(true)
+    setActualDrillError(null)
+    setActualDrill(null)
+
+    try {
+      setActualDrill(await apiFetch<BudgetActualDrillState>(`/api/budget/actuals/drill?${params.toString()}`))
     } catch (error) {
       setActualDrillError(error instanceof Error ? error.message : 'Failed to load QuickBooks GL detail.')
     } finally {
@@ -857,7 +887,7 @@ export default function BudgetPage() {
   }
 
   async function fetchHeadcountActuals(trigger: 'auto' | 'manual' = 'manual') {
-    const cacheKey = overviewActualsCacheKey
+    const cacheKey = headcountActualsCacheKey
     setHeadcountActualsLoading(true)
     setHeadcountActualsError(null)
     if (trigger === 'manual') {
@@ -868,7 +898,7 @@ export default function BudgetPage() {
       const params = new URLSearchParams({
         year: String(budgetView.year),
         entity: budgetView.entity,
-        mode: budgetView.mode,
+        mode: 'month',
         month: String(budgetView.month),
         rangeStart: String(budgetView.rangeStart),
         rangeEnd: String(budgetView.rangeEnd),
@@ -1650,7 +1680,7 @@ export default function BudgetPage() {
           <div className="status-bar budget-plan-status">
             <span className="status-dot ok" />
             <span className="status-text">
-              Salary and bonus budgets are driven by the Team Tracker roster for {budgetYear}. {headcountActuals ? `QB actuals reflect ${headcountScopeLabel}.` : `Fetch QB compensation actuals for ${headcountScopeLabel} to compare against budget.`}
+              Salary budgets are driven by the Team Tracker roster for {budgetYear}. {headcountActuals ? `QB actuals reflect ${headcountScopeLabel}.` : `Fetch QB salary actuals for ${headcountScopeLabel} to compare against the monthly budget.`}
             </span>
           </div>
           {headcountActualsError ? (
@@ -1685,7 +1715,7 @@ export default function BudgetPage() {
               <div className="card-sub">{headcountTerminatedVisible} terminated kept in audit trail</div>
             </div>
             <div className="card">
-              <div className="card-label">Total Salary Budget</div>
+              <div className="card-label">Salary Budget Yearly</div>
               <div className="card-value">{fmtUSD(headcountSummary.totalSalaryBudgetUsd, 0)}</div>
               <div className="card-sub">From Team Tracker</div>
               {headcountActuals ? (
@@ -1695,16 +1725,16 @@ export default function BudgetPage() {
               ) : null}
             </div>
             <div className="card">
-              <div className="card-label">Salary Actuals</div>
+              <div className="card-label">Salary Actual · {headcountScopeLabel}</div>
               <div className="card-value">{headcountActuals ? fmtUSD(headcountSummary.totalSalaryActualUsd, 0) : '—'}</div>
               <div className="card-sub">
-                {headcountActuals && headcountSummary.totalSalaryBudgetUsd > 0
-                  ? `${((headcountSummary.totalSalaryActualUsd / headcountSummary.totalSalaryBudgetUsd) * 100).toFixed(1)}% of salary budget`
+                {headcountActuals && headcountSummary.monthlyPayrollBudgetUsd > 0
+                  ? `${((headcountSummary.totalSalaryActualUsd / headcountSummary.monthlyPayrollBudgetUsd) * 100).toFixed(1)}% of monthly salary budget`
                   : 'Awaiting QuickBooks actuals'}
               </div>
             </div>
             <div className="card">
-              <div className="card-label">Avg Monthly Burn</div>
+              <div className="card-label">Salary Budget Monthly</div>
               <div className="card-value green">{fmtUSD(headcountSummary.monthlyPayrollBudgetUsd, 0)}</div>
               <div className="card-sub">Salary budget divided across 12 months</div>
             </div>
@@ -1717,7 +1747,7 @@ export default function BudgetPage() {
           <div className="section" style={{ marginTop: 18 }}>
             <div className="section-header">
               <span className="section-title">Compensation by Department</span>
-              <span className="budget-section-note">Budget is roster-driven. Actuals come from mapped QuickBooks salary and bonus accounts.</span>
+              <span className="budget-section-note">Monthly salary actuals for {headcountScopeLabel}. Click a value for QuickBooks detail.</span>
             </div>
             <div className="table-wrap">
               <table>
@@ -1725,7 +1755,8 @@ export default function BudgetPage() {
                   <tr>
                     <th>Department</th>
                     <th className="num">Headcount</th>
-                    <th className="num">Salary Budget</th>
+                    <th className="num">Salary Budget Yearly</th>
+                    <th className="num">Salary Budget Monthly</th>
                     <th className="num">Salary Actual</th>
                     <th className="num">Comp Var.</th>
                   </tr>
@@ -1741,7 +1772,12 @@ export default function BudgetPage() {
                       </td>
                       <td className="num">{count}</td>
                       <td className="num">{fmtUSD(salaryUsd, 0)}</td>
-                      <td className="num">{salaryActualUsd !== 0 ? fmtUSD(salaryActualUsd, 0) : '—'}</td>
+                      <td className="num">{fmtUSD(salaryUsd / 12, 0)}</td>
+                      <td className="num">{headcountActuals ? (
+                        <button type="button" className="budget-table-cell-button" onClick={() => void openHeadcountSalaryDrill(dept)}>
+                          {fmtUSD(salaryActualUsd, 0)}
+                        </button>
+                      ) : '—'}</td>
                       <td className={`num ${getBudgetVarianceTone(compVarianceUsd)}`}>{formatBudgetVariance(compVarianceUsd)}</td>
                     </tr>
                   ))}
@@ -1786,32 +1822,6 @@ export default function BudgetPage() {
                 }}
               >
                 Add Team Member
-              </button>
-            )}
-            {canManageTeam && (
-              <button
-                className="btn-secondary"
-                disabled={rosterSyncBusy}
-                title="One-time: replaces the entire team roster with the 23 numbered MASTER rows; salary = Stables."
-                onClick={async () => {
-                  setRosterSyncBusy(true)
-                  try {
-                    const res = await apiPost<{ added: number; removed: number }>(
-                      '/api/budget/team/sync-roster',
-                      {},
-                    )
-                    await loadBudgetTeam(true)
-                    setLastActionMessage(
-                      `Roster replaced: ${res.removed} old records removed, ${res.added} MASTER records added.`,
-                    )
-                  } catch (err) {
-                    setTeamLoadError(err instanceof Error ? err.message : 'Roster sync failed.')
-                  } finally {
-                    setRosterSyncBusy(false)
-                  }
-                }}
-              >
-                {rosterSyncBusy ? 'Syncing…' : 'Sync roster (one-time)'}
               </button>
             )}
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--muted)', marginLeft: 'auto' }}>

@@ -118,7 +118,7 @@ export function getHeadcountByDepartment(
       salaryActualUsd: actualEntry?.salaryActualUsd ?? 0,
       bonusActualUsd: actualEntry?.bonusActualUsd ?? 0,
       totalActualUsd,
-      compVarianceUsd: totalActualUsd > 0 ? totalActualUsd - totalCompUsd : null,
+      compVarianceUsd: actuals !== null ? (actualEntry?.salaryActualUsd ?? 0) - salaryUsd / 12 : null,
     }
   })
 }
