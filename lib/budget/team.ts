@@ -3,6 +3,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { budgetTeamMember } from '@/lib/db/schema/budget'
 import { BUDGET_DEPTS, ENTITIES } from '../constants.ts'
+import { toDbEntity, toDisplayEntity } from '../entity.ts'
 import { buildTeamImportPlan, type TeamMasterRow } from './team-import.ts'
 import type {
   BudgetDepartment,
@@ -109,7 +110,7 @@ function rowToMember(row: BudgetTeamMemberRow): BudgetTeamMember {
     salary: row.salary ? Number(row.salary) : 0,
     bonus: row.bonus ? Number(row.bonus) : 0,
     status,
-    entity: row.entityId ?? ENTITIES[0],
+    entity: toDisplayEntity(row.entityId) || ENTITIES[0],
     classification: row.classification ?? '',
     location: row.location ?? '',
     ft: row.ft ? 'FT' : 'PT',
@@ -124,7 +125,7 @@ function memberToRowValues(
   return {
     name: input.name,
     email: input.email || null,
-    entityId: input.entity || null,
+    entityId: input.entity ? toDbEntity(input.entity) : null,
     classification: input.classification || null,
     department: input.dept,
     role: input.role || null,
