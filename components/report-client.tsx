@@ -288,11 +288,42 @@ function EntityStackedTrend({ data, month, metric, onOpen }: { data: Presentatio
   const high = Math.max(1, ...extrema.map((item) => item.positive)), low = Math.min(0, ...extrema.map((item) => item.negative))
   const width = 1140, height = 440, left = 90, right = 26, top = 38, bottom = 56
   const y = (value: number) => top + (high - value) * (height - top - bottom) / (high - low)
-  const plotWidth = width - left - right, slot = plotWidth / month, barWidth = Math.min(slot * .6, 80)
+  const plotWidth = width - left - right, slot = plotWidth / Math.max(month - 1, 1)
+  const x = (index: number) => left + slot * index
+  const curve = (points: Array<{ x: number; y: number }>) => {
+    if (!points.length) return ''
+    return `M ${points[0].x} ${points[0].y}` + points.slice(1).map((point, index) => {
+      const previous = points[index], before = points[index - 1] ?? previous, after = points[index + 2] ?? point
+      const dx = (point.x - previous.x) / 6
+      return ` C ${previous.x + dx} ${previous.y + (point.y - before.y) / 6}, ${point.x - dx} ${point.y - (after.y - previous.y) / 6}, ${point.x} ${point.y}`
+    }).join('')
+  }
+  const layers = ENTITIES.map((entity, entityIndex) => {
+    const values = series.map(({ values }) => values[entityIndex] ?? 0)
+    // Positive and negative balances use separate stacks around the zero line.
+    const positiveBase = series.map(({ values }) => values.slice(0, entityIndex).reduce<number>((sum, value) => sum + Math.max(value ?? 0, 0), 0))
+    const negativeBase = series.map(({ values }) => values.slice(0, entityIndex).reduce<number>((sum, value) => sum + Math.min(value ?? 0, 0), 0))
+    const areas = ([1, -1] as const).map((sign) => {
+      const base = sign === 1 ? positiveBase : negativeBase
+      const upper = values.map((value, index) => base[index] + (Math.sign(value) === sign ? value : 0))
+      const topPoints = upper.map((value, index) => ({ x: x(index), y: y(value) }))
+      const bottomPoints = base.map((value, index) => ({ x: x(index), y: y(value) })).reverse()
+      return `${curve(topPoints)} L ${bottomPoints[0].x} ${bottomPoints[0].y} ${curve(bottomPoints).replace(/^M [^C]+/, '')} Z`
+    })
+    return { entity, values, positiveBase, negativeBase, areas }
+  })
   return <div className="report-stacked-trend"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metricLabel(metric)} by entity, Jan–${MONTHS[month - 1]} ${data.year}`}>
-    {[low, low + (high - low) / 4, low + (high - low) / 2, low + (high - low) * .75, high].map((value, i) => <g key={i}><line x1={left} x2={width - right} y1={y(value)} y2={y(value)} stroke="#dbe4ee" strokeDasharray="4 5" /><text x={left - 12} y={y(value) + 4} textAnchor="end" fill="#728297" fontSize="12">{chartMoney(value)}</text></g>)}
-    {series.map(({ month: selected, values }, index) => { let positive = 0, negative = 0; const x = left + slot * index + (slot - barWidth) / 2; const total = metricAmount(getFinancialMonth(data, 'All', selected), metric); return <g key={selected}><text x={x + barWidth / 2} y={Math.max(18, y(extrema[index].positive) - 8)} textAnchor="middle" fill="#23344b" fontWeight="700" fontSize="12">{total == null ? '—' : chartMoney(total)}</text>{values.map((value, entityIndex) => { if (value == null || value === 0) return null; const start = value > 0 ? positive : negative; if (value > 0) positive += value; else negative += value; const end = start + value; const upper = Math.min(y(start), y(end)), segmentHeight = Math.max(1, Math.abs(y(start) - y(end))); const entity = ENTITIES[entityIndex]; return <g key={entity} role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className={onOpen ? 'report-svg-action' : undefined} onClick={() => onOpen?.({ entity, month: selected, metric })} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen?.({ entity, month: selected, metric }) } }}><rect x={x} y={upper} width={barWidth} height={segmentHeight} fill={ENTITY_COLORS[entity]} /><title>{entity} · {MONTHS[selected - 1]}: {money(value)}. Click for QB details.</title>{segmentHeight > 27 && barWidth > 46 && <text x={x + barWidth / 2} y={upper + segmentHeight / 2 + 4} textAnchor="middle" fill="#10243a" fontSize="11" fontWeight="700" pointerEvents="none">{chartMoney(value)}</text>}</g> })}<text x={x + barWidth / 2} y={height - 18} textAnchor="middle" fill="#52637c" fontSize="13">{MONTHS[selected - 1]}</text></g> })}
-  </svg><div className="report-legend">{ENTITIES.map((entity) => <span key={entity}><i style={{ background: ENTITY_COLORS[entity] }} />{entity}</span>)}</div><p className="report-slide-note">Stacked entity values sum to the reported group; negative balances extend below zero. Click a segment for accounts and entries.</p></div>
+    {[low, low + (high - low) / 4, low + (high - low) / 2, low + (high - low) * .75, high].map((value, index) => <g key={index}><line x1={left} x2={width - right} y1={y(value)} y2={y(value)} stroke="#dbe4ee" strokeDasharray="4 5" /><text x={left - 12} y={y(value) + 4} textAnchor="end" fill="#728297" fontSize="12">{chartMoney(value)}</text></g>)}
+    {layers.map(({ entity, areas }) => <g key={entity}>{areas.map((area, index) => <path key={index} d={area} fill={ENTITY_COLORS[entity]} fillOpacity=".78" stroke={ENTITY_COLORS[entity]} strokeWidth="1.2" />)}</g>)}
+    {series.map(({ month: selected, values }, index) => { const total = metricAmount(getFinancialMonth(data, 'All', selected), metric); return <g key={selected}><g role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className="report-area-hit" onClick={() => onOpen?.({ entity: 'All', month: selected, metric })} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen?.({ entity: 'All', month: selected, metric }) } }}><rect x={x(index) - 43} y={Math.max(12, y(extrema[index].positive) - 31)} width="86" height="23" fill="transparent" /><text x={x(index)} y={Math.max(27, y(extrema[index].positive) - 13)} textAnchor="middle" fill="#243449" fontWeight="800" fontSize="12">{total == null ? '—' : chartMoney(total)}</text><title>Reported group · {MONTHS[selected - 1]}: {money(total)}. Click for QB details.</title></g>{values.map((value, entityIndex) => {
+      if (value == null || value === 0) return null
+      const { entity, positiveBase, negativeBase } = layers[entityIndex]
+      const base = value > 0 ? positiveBase[index] : negativeBase[index]
+      const center = (y(base) + y(base + value)) / 2
+      const tall = Math.abs(y(base) - y(base + value)) > 28
+      return <g key={entity} role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className="report-area-hit" onClick={() => onOpen?.({ entity, month: selected, metric })} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen?.({ entity, month: selected, metric }) } }}><circle cx={x(index)} cy={center} r={tall ? 22 : 9} fill="transparent" /><circle cx={x(index)} cy={center} r="3" fill="#fff" stroke={ENTITY_COLORS[entity]} strokeWidth="1.5" />{tall && <text x={x(index)} y={center - 8} textAnchor="middle" fontSize="10" fontWeight="700" fill="#122a3a" pointerEvents="none">{chartMoney(value)}</text>}<title>{entity} · {MONTHS[selected - 1]}: {money(value)}. Click for QB details.</title></g>
+    })}<text x={x(index)} y={height - 18} textAnchor="middle" fill="#52637c" fontSize="13">{MONTHS[selected - 1]}</text></g> })}
+  </svg><div className="report-legend">{ENTITIES.map((entity) => <span key={entity}><i style={{ background: ENTITY_COLORS[entity] }} />{entity}</span>)}</div><p className="report-slide-note">Monthly stacked areas by entity; negative balances extend below zero. Click a total or entity value for QB accounts and entries.</p></div>
 }
 
 function ThreeMonthSlide({ data, prior, month, groups, title, onOpen }: { data: PresentationFinancials; prior?: PresentationFinancials; month: number; groups: readonly PnlGroup[]; title: string; onOpen?: OpenDetail }) {
