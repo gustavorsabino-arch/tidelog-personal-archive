@@ -782,3 +782,5 @@ tr:hover .qb-row-actions,
 .report-compare-inline{display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap;margin-top:3px;font:9px var(--mono);color:#68808d}
 .report-compare-inline .report-value-button{font-size:9px;color:#436b7c;font-weight:500}
 .report-slide-matrix th:last-child{min-width:142px}.report-slide-matrix td:last-child{min-width:142px}
+@media(min-width:751px){.report-matrix-layout{grid-template-columns:minmax(0,1fr) 210px}.report-slide-matrix th:first-child,.report-slide-matrix td:first-child{min-width:185px}.report-slide-matrix th:not(:first-child){min-width:100px}.report-slide-matrix th:last-child,.report-slide-matrix td:last-child{min-width:155px}}
+@media(min-width:751px){.report-expense-layout{grid-template-columns:minmax(0,1fr) 430px}.report-pivot .report-table th:first-child,.report-pivot .report-table td:first-child{min-width:145px;max-width:155px}.report-pivot .report-table th:not(:first-child){min-width:82px}}
