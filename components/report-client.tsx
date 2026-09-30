@@ -276,10 +276,10 @@ function ComparisonSlide({ data, prior, month, mode, onOpen, note, onNote, edita
         return !!a && !!b && a.presentEntities.join(',') === b.presentEntities.join(',')
       })
     : (() => { const a = getFinancialMonth(data, 'All', month), b = getFinancialMonth(previous, 'All', previousMonth); return !!a && !!b && a.presentEntities.join(',') === b.presentEntities.join(',') })())
-  return <><div className="report-slide-intro"><strong>{isYtd ? `Year to date · Jan–${MONTHS[month - 1]}` : `${MONTHS[month - 1]} by entity`}</strong><span>Opco · Foundation · Juku · Zagreus · USD as reported</span></div><div className="report-matrix-layout"><div className="report-table-scroll"><table className="report-table report-slide-matrix"><thead><tr><th>QB section / management subgroup</th>{ENTITIES.map((entity) => <th key={entity}>{entity}<small>{period(data, month)}</small></th>)}<th>Reported group<small>{period(data, month)}</small></th><th>Reported group<small>{period(previous, previousMonth)}</small></th><th>Change</th></tr></thead><tbody>{lines.map((line, index) => {
+  return <><div className="report-slide-intro"><strong>{isYtd ? `Year to date · Jan–${MONTHS[month - 1]}` : `${MONTHS[month - 1]} by entity`}</strong><span>Opco · Foundation · Juku · Zagreus · USD as reported</span></div><div className="report-matrix-layout"><div className="report-table-scroll"><table className="report-table report-slide-matrix"><thead><tr><th>QB section / management subgroup</th>{ENTITIES.map((entity) => <th key={entity}>{entity}<small>{period(data, month)}</small></th>)}<th>Reported group<small>{period(data, month)} vs {period(previous, previousMonth)}</small></th></tr></thead><tbody>{lines.map((line, index) => {
     const current = sumMetric(data, 'All', month, line.metric, isYtd), previousValue = sumMetric(previous, 'All', previousMonth, line.metric, isYtd)
-    return <tr key={line.key} className={!line.kind ? 'report-matrix-total' : ''}><td>{line.kind && line.kind !== lines[index - 1]?.kind && <span className="report-kind">{KIND_NAMES[line.kind]}</span>}{line.label}</td>{ENTITIES.map((entity) => <td key={entity}>{cell(entity, data, month, line.metric)}</td>)}<td className="report-strong">{cell('All', data, month, line.metric)}</td><td>{cell('All', previous, previousMonth, line.metric)}</td><td>{comparable && current != null && previousValue != null ? <AmountButton value={current - previousValue} label={`${line.label} change · ${period(data, month)} vs ${period(previous, previousMonth)}`} onClick={() => onOpen?.({ entity: 'All', month, metric: line.metric, rangeStart: isYtd ? 1 : undefined, compareMonth: isYtd ? undefined : previousMonth, compareYear: previous !== data ? previousYear : undefined, year: currentYear })} /> : '—'}</td></tr>
-  })}{!rows.length && <tr><td colSpan={8}>No cached P&amp;L groups for this period.</td></tr>}</tbody></table></div><Takeaway note={note} onNote={onNote} editable={editable} /></div><p className="report-slide-note">{comparable ? `Change = ${period(data, month)} minus ${period(previous, previousMonth)}.` : 'Comparison hidden where an entity or period is missing. Available reported values remain visible.'} Click any amount to inspect QB accounts and ledger entries.</p></>
+    return <tr key={line.key} className={!line.kind ? 'report-matrix-total' : ''}><td>{line.kind && line.kind !== lines[index - 1]?.kind && <span className="report-kind">{KIND_NAMES[line.kind]}</span>}{line.label}</td>{ENTITIES.map((entity) => <td key={entity}>{cell(entity, data, month, line.metric)}</td>)}<td className="report-strong"><div>{cell('All', data, month, line.metric)}</div><div className="report-compare-inline"><span>Prior {cell('All', previous, previousMonth, line.metric)}</span><span>Δ {comparable && current != null && previousValue != null ? <AmountButton value={current - previousValue} label={`${line.label} change · ${period(data, month)} vs ${period(previous, previousMonth)}`} onClick={() => onOpen?.({ entity: 'All', month, metric: line.metric, rangeStart: isYtd ? 1 : undefined, compareMonth: isYtd ? undefined : previousMonth, compareYear: previous !== data ? previousYear : undefined, year: currentYear })} /> : '—'}</span></div></td></tr>
+  })}{!rows.length && <tr><td colSpan={6}>No cached P&amp;L groups for this period.</td></tr>}</tbody></table></div><Takeaway note={note} onNote={onNote} editable={editable} /></div><p className="report-slide-note">{comparable ? `Change = ${period(data, month)} minus ${period(previous, previousMonth)}.` : 'Comparison hidden where an entity or period is missing. Available reported values remain visible.'} Click any amount to inspect QB accounts and ledger entries.</p></>
 }
 
 function EntityStackedTrend({ data, month, metric, onOpen }: { data: PresentationFinancials; month: number; metric: 'revenue' | 'netIncome'; onOpen?: OpenDetail }) {
@@ -344,9 +344,15 @@ export function ReportClient({ initialYear, years }: { initialYear: number; year
 
   useEffect(() => {
     if (!available.length) return
-    setMonthB(available.at(-1)!)
-    setMonthA(available.at(-2) ?? available.at(-1)!)
-  }, [available])
+    // Present the most recent closed month by default; the current month can
+    // already have a partial QB cache and remains selectable in the toolbar.
+    const today = new Date()
+    const closed = year === today.getUTCFullYear() ? Math.max(1, today.getUTCMonth()) : 12
+    const eligible = available.filter((selected) => selected <= closed)
+    const latest = eligible.at(-1) ?? available.at(-1)!
+    setMonthB(latest)
+    setMonthA(available.filter((selected) => selected < latest).at(-1) ?? latest)
+  }, [available, year])
   useEffect(() => {
     try { setNotes(JSON.parse(localStorage.getItem(`tidelog-report-notes-${year}`) || '{}')) } catch { setNotes({}) }
   }, [year])
