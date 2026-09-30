@@ -17,30 +17,27 @@ type Entity = QboEntity | 'All'
 type View = 'mom' | 'ytd' | 'balanceSheet' | 'pnl' | 'slides'
 type Metric = TrendMetric
 type GroupKey = `${PnlKind}|${PnlGroup}`
-type SlideId = 'cover' | 'mom' | 'revenue' | 'net' | 'ytd' | 'revenue-mix' | 'operating' | 'compensation' | 'technology' | 'professional' | 'other-costs' | 'below-line' | 'bridge'
+type SlideId = 'cover' | 'mom' | 'revenue' | 'net' | 'ytd' | 'operating' | 'compensation' | 'technology' | 'general'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const ENTITY_COLORS: Record<QboEntity, string> = { Opco: '#3dbdae', Foundation: '#85a7f7', Juku: '#e9a156', Zagreus: '#b595e9' }
+const SLIDE_COLORS = ['#00a8a8', '#3177c9', '#735cc9', '#e59b42', '#228d72', '#d16f8a', '#617fa7', '#b2a054', '#537a84', '#8897a8']
 const KINDS: PnlKind[] = ['income', 'other-income', 'expense', 'other-expense', 'other']
 const KIND_NAMES: Record<PnlKind, string> = { income: 'Income', 'other-income': 'Other income', expense: 'Expenses', 'other-expense': 'Other expenses', other: 'Other QB sections' }
-const OPERATING: PnlGroup[] = ['professional', 'people-operations', 'travel', 'offsite', 'marketing', 'transaction-fees', 'office', 'other-operating', 'unclassified']
 const COMPENSATION: PnlGroup[] = ['employee-cash', 'employee-token', 'contractor-cash', 'contractor-token', 'benefits-severance']
 const TECHNOLOGY: PnlGroup[] = ['software', 'infrastructure', 'tech-audits']
-const BELOW_LINE: PnlGroup[] = ['intercompany', 'asset-gains', 'treasury-income', 'other-income', 'financing', 'other-nonoperating', 'depreciation', 'taxes', 'reconciliation']
+const ALL_GROUPS = Object.keys(PNL_GROUPS) as PnlGroup[]
+const GENERAL = ALL_GROUPS.filter((group) => !COMPENSATION.includes(group) && !TECHNOLOGY.includes(group))
 const SLIDES: Array<{ id: SlideId; title: string }> = [
   { id: 'cover', title: 'Financial review' },
   { id: 'mom', title: 'MoM comparison' },
   { id: 'revenue', title: 'Revenue trend' },
   { id: 'net', title: 'Net income trend' },
   { id: 'ytd', title: 'YTD comparison' },
-  { id: 'revenue-mix', title: 'Revenue composition' },
   { id: 'operating', title: 'Operating expenses' },
   { id: 'compensation', title: 'Compensation expenses' },
   { id: 'technology', title: 'Tech fees' },
-  { id: 'professional', title: 'Professional services' },
-  { id: 'other-costs', title: 'Other operating costs' },
-  { id: 'below-line', title: 'Other P&L items' },
-  { id: 'bridge', title: 'Reported P&L bridge' },
+  { id: 'general', title: 'G&A and other costs' },
 ]
 
 const money = (value: number | null | undefined) => value == null ? '—' : fmtUSD(value)
@@ -75,7 +72,7 @@ function Coverage({ data, year, month, entity = 'All' }: { data: PresentationFin
   return <div className="report-warning" role="status">{MONTHS[month - 1]} {year}: {row ? `reported ${row.presentEntities.join(', ')}` : 'no cached P&L'}{entity === 'All' && missing.length ? `; missing ${missing.join(', ')}` : ''}. Figures include available companies only.{reconciliation}</div>
 }
 
-type ReportDetail = { entity: Entity; month: number; metric: Metric; compareMonth?: number; rangeStart?: number }
+type ReportDetail = { entity: Entity; month: number; metric: Metric; compareMonth?: number; compareYear?: number; rangeStart?: number; year?: number }
 type OpenDetail = (detail: ReportDetail) => void
 
 function AmountButton({ value, label, onClick }: { value: number | null | undefined; label: string; onClick: () => void }) {
@@ -204,7 +201,7 @@ function YtdTrend({ data, entity, month, metric, onOpen }: { data: PresentationF
   </>
 }
 
-function ReportValueDrill({ data, detail, onClose }: { data: PresentationFinancials; detail: ReportDetail; onClose: () => void }) {
+function ReportValueDrill({ data, prior, detail, onClose, onOpen }: { data: PresentationFinancials; prior?: PresentationFinancials; detail: ReportDetail; onClose: () => void; onOpen: OpenDetail }) {
   const [activeMonth, setActiveMonth] = useState(detail.month)
   const [gl, setGl] = useState<{ entity: Entity; code: string; label: string } | null>(null)
   const firstMonth = detail.rangeStart ?? activeMonth
@@ -226,6 +223,8 @@ function ReportValueDrill({ data, detail, onClose }: { data: PresentationFinanci
   const residual = selectedTotal == null ? 0 : Math.round((selectedTotal - accountTotal) * 100) / 100
   const currentTotal = metricAmount(getFinancialMonth(data, detail.entity, detail.month), detail.metric)
   const priorTotal = detail.compareMonth ? metricAmount(getFinancialMonth(data, detail.entity, detail.compareMonth), detail.metric) : null
+  const priorPeriodMonth = detail.compareYear && detail.compareMonth ? detail.compareMonth : detail.month
+  const priorYearTotal = detail.compareYear && prior ? Array.from({ length: priorPeriodMonth - (detail.rangeStart ?? priorPeriodMonth) + 1 }, (_, index) => metricAmount(getFinancialMonth(prior, detail.entity, (detail.rangeStart ?? priorPeriodMonth) + index), detail.metric)).reduce<number>((sum, value) => sum + (value ?? 0), 0) : null
   const periodStart = `${data.year}-${String(firstMonth).padStart(2, '0')}-01`
   const periodEnd = `${data.year}-${String(activeMonth).padStart(2, '0')}-${new Date(Date.UTC(data.year, activeMonth, 0)).getUTCDate()}`
   useEffect(() => {
@@ -236,73 +235,96 @@ function ReportValueDrill({ data, detail, onClose }: { data: PresentationFinanci
   }, [gl, onClose])
   return <>
     {!gl && <div className="modal-overlay open" onClick={onClose}><div className="modal report-trend-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`${metricLabel(detail.metric)} breakdown`}><div className="modal-header"><div><div className="modal-title">{metricLabel(detail.metric)} · {scopeName(detail.entity)} · {detail.rangeStart ? `${MONTHS[detail.rangeStart - 1]}–` : ''}{MONTHS[detail.month - 1]} {data.year}</div><div className="modal-sub">QuickBooks reported P&amp;L · {getFinancialMonth(data, detail.entity, activeMonth)?.presentEntities.join(', ') || 'No cached entities'}</div></div><button className="modal-close" aria-label="Close breakdown" onClick={onClose}>×</button></div><div className="modal-body">
-      {detail.compareMonth && <div className="report-compare-values"><span>MoM change: <strong>{money(currentTotal != null && priorTotal != null ? currentTotal - priorTotal : null)}</strong></span><button className={activeMonth === detail.compareMonth ? 'active' : ''} onClick={() => setActiveMonth(detail.compareMonth!)}>{MONTHS[detail.compareMonth - 1]}: {money(priorTotal)}</button><button className={activeMonth === detail.month ? 'active' : ''} onClick={() => setActiveMonth(detail.month)}>{MONTHS[detail.month - 1]}: {money(currentTotal)}</button></div>}
+      {detail.compareMonth && !detail.compareYear && <div className="report-compare-values"><span>MoM change: <strong>{money(currentTotal != null && priorTotal != null ? currentTotal - priorTotal : null)}</strong></span><button className={activeMonth === detail.compareMonth ? 'active' : ''} onClick={() => setActiveMonth(detail.compareMonth!)}>{MONTHS[detail.compareMonth - 1]}: {money(priorTotal)}</button><button className={activeMonth === detail.month ? 'active' : ''} onClick={() => setActiveMonth(detail.month)}>{MONTHS[detail.month - 1]}: {money(currentTotal)}</button></div>}
+      {detail.compareYear && prior && <div className="report-compare-values"><span>Change vs prior period: <strong>{money(selectedTotal != null && priorYearTotal != null ? selectedTotal - priorYearTotal : null)}</strong></span><button onClick={() => onOpen({ entity: detail.entity, month: priorPeriodMonth, metric: detail.metric, rangeStart: detail.rangeStart, year: prior.year })}>{MONTHS[priorPeriodMonth - 1]} {prior.year}: {money(priorYearTotal)}</button><button className="active">{MONTHS[detail.month - 1]} {data.year}: {money(selectedTotal)}</button></div>}
       <div className="report-detail-total">{detail.rangeStart ? 'YTD reported value' : 'Reported value'} <strong>{money(selectedTotal)}</strong></div><div className="report-table-scroll"><table className="report-table"><thead><tr><th>Entity / QB account</th><th>Section</th><th>{detail.metric === 'netIncome' ? 'Net impact' : 'Amount'}</th></tr></thead><tbody>{[...grouped.values()].map((entry, index) => <tr key={`${entry.scope}-${entry.kind}-${entry.code}-${index}`}><td><span className="report-detail-entity">{entry.scope}</span>{entry.code ? <button className="report-row-button" onClick={() => setGl({ entity: entry.scope, code: entry.code!, label: entry.label })}>{entry.code} · {entry.label}</button> : `${entry.label} (no QB code)`}</td><td>{KIND_NAMES[entry.kind]}</td><td>{money(trendAccountContribution(entry.amount, entry.kind, detail.metric))}</td></tr>)}{Math.abs(residual) >= 0.005 && <tr><td>QB report subtotal difference</td><td>Reconciliation</td><td>{money(residual)}</td></tr>}{grouped.size === 0 && <tr><td colSpan={3}>No account lines for this value.</td></tr>}</tbody></table></div>{detail.metric === 'netIncome' && <p className="report-footnote">Net impact by account: income and other income add; expenses and other expenses subtract. Click an account to see its original QuickBooks ledger entries.</p>}</div></div></div>}
     <GlDrillModal open={gl !== null} onClose={() => setGl(null)} entity={gl?.entity ?? 'Opco'} accountNumber={gl?.code ?? ''} accountLabel={gl?.label ?? ''} periodStart={periodStart} periodEnd={periodEnd} />
   </>
 }
 
-function YtdCompare({ current, prior, year, month, compact = false }: { current: PresentationFinancials; prior?: PresentationFinancials; year: number; month: number; compact?: boolean }) {
-  return <div className="report-table-scroll"><table className="report-table"><thead><tr><th>Entity</th><th>{year - 1} YTD revenue</th><th>{year} YTD revenue</th><th>Revenue change</th><th>{year - 1} YTD net</th><th>{year} YTD net</th><th>Net change</th></tr></thead><tbody>
-    {([...ENTITIES, 'All'] as Entity[]).map((entity) => {
-      const a = getYtdSummary(prior, entity, month), b = getYtdSummary(current, entity, month)
-      const revA = a.months ? a.totals.revenue + a.totals.otherIncome : null
-      const revB = b.months ? b.totals.revenue + b.totals.otherIncome : null
-      const comparable = a.complete && b.complete
-      return <tr key={entity}><td><strong>{scopeName(entity)}</strong><small className="report-cell-note">{a.months}/{month} vs {b.months}/{month} months{entity === 'All' ? ' · partial if any entity is missing' : ''}</small></td><td>{money(revA)}</td><td>{money(revB)}</td><td>{comparable ? money(revB! - revA!) : '—'}</td><td>{money(a.months ? a.totals.netIncome : null)}</td><td>{money(b.months ? b.totals.netIncome : null)}</td><td>{comparable ? money(b.totals.netIncome - a.totals.netIncome) : '—'}</td></tr>
-    })}
-  </tbody></table>{!compact && <p className="report-footnote">YTD compares January through {MONTHS[month - 1]} in both years. Changes appear only when every month and entity in that row is available.</p>}</div>
+function sumMetric(data: PresentationFinancials | undefined, entity: Entity, month: number, metric: Metric, ytd: boolean): number | null {
+  if (!data) return null
+  const months = ytd ? Array.from({ length: month }, (_, index) => index + 1) : [month]
+  const rows = months.map((selected) => getFinancialMonth(data, entity, selected))
+  if (!rows.some(Boolean)) return null
+  return rows.reduce<number>((sum, row) => sum + (metricAmount(row, metric) ?? 0), 0)
 }
 
-function CategorySlide({ data, month, groups, title, sectionKinds, netEffect = false }: { data: PresentationFinancials; month: number; groups: readonly PnlGroup[]; title: string; sectionKinds?: readonly PnlKind[]; netEffect?: boolean }) {
-  const all = getFinancialMonth(data, 'All', month)
-  const keys = groupKeys([all]).filter((key) => {
-    const [kind, group] = key.split('|') as [PnlKind, PnlGroup]
-    return groups.includes(group) && (!sectionKinds || sectionKinds.includes(kind))
-  })
-  const total = keys.reduce((sum, key) => {
-    const kind = key.split('|')[0] as PnlKind
-    return sum + groupAmount(all, key) * (netEffect && (kind === 'expense' || kind === 'other-expense') ? -1 : 1)
-  }, 0)
-  return <><div className="report-slide-lead"><span>{netEffect ? 'Net income contribution' : title}</span><strong>{all ? money(total) : '—'}</strong><small>{netEffect ? 'Signed effect; QB balances below' : 'Reported balance'} · {MONTHS[month - 1]} {data.year}</small></div><div className="report-table-scroll"><table className="report-table"><thead><tr><th>QB section / subgroup</th>{ENTITIES.map((entity) => <th key={entity}>{entity}</th>)}<th>Reported total</th></tr></thead><tbody>
-    {keys.map((key) => { const [kind, group] = key.split('|') as [PnlKind, PnlGroup]; return <tr key={key}><td><span className="report-kind-inline">{KIND_NAMES[kind]}</span>{PNL_GROUPS[group]}</td>{ENTITIES.map((entity) => { const row = getFinancialMonth(data, entity, month); return <td key={entity}>{row ? money(groupAmount(row, key)) : '—'}</td> })}<td className="report-strong">{money(groupAmount(all, key))}</td></tr> })}
-    {!keys.length && <tr><td colSpan={6}>No values in this category for the selected month.</td></tr>}
-  </tbody></table></div></>
+function Takeaway({ note, onNote, editable }: { note: string; onNote?: (note: string) => void; editable: boolean }) {
+  return <aside className="report-takeaway"><strong>Key takeaways</strong>{editable ? <textarea aria-label="Key takeaways" value={note} onChange={(event) => onNote?.(event.target.value)} placeholder="Add the main findings for this period…" /> : <p>{note || 'Add key takeaways in the live presentation.'}</p>}</aside>
 }
 
-function BridgeSlide({ data, month }: { data: PresentationFinancials; month: number }) {
-  const all = getFinancialMonth(data, 'All', month)
-  const sections: Array<[string, (row: FinancialMonth) => number]> = [
-    ['Income', (row) => row.totals.revenue], ['Other income', (row) => row.totals.otherIncome],
-    ['Total revenue', (row) => row.totals.revenue + row.totals.otherIncome],
-    ['Expenses', (row) => row.totals.expense], ['Other expenses', (row) => row.totals.otherExpense],
-    ['Total expenses', (row) => row.totals.expense + row.totals.otherExpense],
-    ['Net income', (row) => row.totals.netIncome],
+function ComparisonSlide({ data, prior, month, mode, onOpen, note, onNote, editable }: { data: PresentationFinancials; prior?: PresentationFinancials; month: number; mode: 'mom' | 'ytd'; onOpen?: OpenDetail; note: string; onNote?: (note: string) => void; editable: boolean }) {
+  const previousMonth = mode === 'mom' ? (month === 1 ? 12 : month - 1) : month
+  const previous = mode === 'ytd' || month === 1 ? prior : data
+  const currentYear = data.year, previousYear = previous?.year ?? currentYear - 1
+  const isYtd = mode === 'ytd'
+  // Historical groups remain visible even if their balance is zero this month.
+  const rows = groupKeys([...data.months.filter((row) => row.entity === 'All' && row.month <= month), ...(previous?.months ?? []).filter((row) => row.entity === 'All' && row.month <= previousMonth)])
+  const lines: Array<{ key: string; label: string; kind?: PnlKind; metric: Metric }> = [
+    ...rows.map((key) => { const [kind, group] = key.split('|') as [PnlKind, PnlGroup]; return { key, label: PNL_GROUPS[group], kind, metric: `group:${key}` as Metric } }),
+    { key: 'total-revenue', label: 'Total revenue', metric: 'revenue' },
+    { key: 'total-expense', label: 'Total expenses', metric: 'expense' },
+    { key: 'net-income', label: 'Net income', metric: 'netIncome' },
   ]
-  return <><div className="report-slide-lead"><span>QuickBooks reported net income</span><strong>{money(all?.totals.netIncome)}</strong><small>Signed balance · no intercompany eliminations</small></div><div className="report-table-scroll"><table className="report-table"><thead><tr><th>P&amp;L section</th>{ENTITIES.map((entity) => <th key={entity}>{entity}</th>)}<th>Reported total</th></tr></thead><tbody>{sections.map(([label, value]) => <tr key={label}><td>{label}</td>{ENTITIES.map((entity) => { const row = getFinancialMonth(data, entity, month); return <td key={entity}>{money(row ? value(row) : null)}</td> })}<td className="report-strong">{money(all ? value(all) : null)}</td></tr>)}</tbody></table></div><p className="report-footnote">Net income = Income + Other income − Expenses − Other expenses. Intercompany charges remain included in the reported group.</p></>
+  const period = (source: PresentationFinancials | undefined, selectedMonth: number) => `${isYtd ? 'Jan–' : ''}${MONTHS[selectedMonth - 1]} ${source?.year ?? previousYear}`
+  const open = (entity: Entity, source: PresentationFinancials | undefined, selectedMonth: number, metric: Metric) => source && onOpen?.({ entity, month: selectedMonth, metric, rangeStart: isYtd ? 1 : undefined, year: source.year })
+  const cell = (entity: Entity, source: PresentationFinancials | undefined, selectedMonth: number, metric: Metric) => <AmountButton value={sumMetric(source, entity, selectedMonth, metric, isYtd)} label={`${scopeName(entity)} ${metricLabel(metric)} · ${period(source, selectedMonth)}`} onClick={() => open(entity, source, selectedMonth, metric)} />
+  const comparable = !!previous && (isYtd
+    ? Array.from({ length: month }, (_, index) => index + 1).every((selected) => {
+        const a = getFinancialMonth(data, 'All', selected), b = getFinancialMonth(previous, 'All', selected)
+        return !!a && !!b && a.presentEntities.join(',') === b.presentEntities.join(',')
+      })
+    : (() => { const a = getFinancialMonth(data, 'All', month), b = getFinancialMonth(previous, 'All', previousMonth); return !!a && !!b && a.presentEntities.join(',') === b.presentEntities.join(',') })())
+  return <><div className="report-slide-intro"><strong>{isYtd ? `Year to date · Jan–${MONTHS[month - 1]}` : `${MONTHS[month - 1]} by entity`}</strong><span>Opco · Foundation · Juku · Zagreus · USD as reported</span></div><div className="report-matrix-layout"><div className="report-table-scroll"><table className="report-table report-slide-matrix"><thead><tr><th>QB section / management subgroup</th>{ENTITIES.map((entity) => <th key={entity}>{entity}<small>{period(data, month)}</small></th>)}<th>Reported group<small>{period(data, month)}</small></th><th>Reported group<small>{period(previous, previousMonth)}</small></th><th>Change</th></tr></thead><tbody>{lines.map((line, index) => {
+    const current = sumMetric(data, 'All', month, line.metric, isYtd), previousValue = sumMetric(previous, 'All', previousMonth, line.metric, isYtd)
+    return <tr key={line.key} className={!line.kind ? 'report-matrix-total' : ''}><td>{line.kind && line.kind !== lines[index - 1]?.kind && <span className="report-kind">{KIND_NAMES[line.kind]}</span>}{line.label}</td>{ENTITIES.map((entity) => <td key={entity}>{cell(entity, data, month, line.metric)}</td>)}<td className="report-strong">{cell('All', data, month, line.metric)}</td><td>{cell('All', previous, previousMonth, line.metric)}</td><td>{comparable && current != null && previousValue != null ? <AmountButton value={current - previousValue} label={`${line.label} change · ${period(data, month)} vs ${period(previous, previousMonth)}`} onClick={() => onOpen?.({ entity: 'All', month, metric: line.metric, rangeStart: isYtd ? 1 : undefined, compareMonth: isYtd ? undefined : previousMonth, compareYear: previous !== data ? previousYear : undefined, year: currentYear })} /> : '—'}</td></tr>
+  })}{!rows.length && <tr><td colSpan={8}>No cached P&amp;L groups for this period.</td></tr>}</tbody></table></div><Takeaway note={note} onNote={onNote} editable={editable} /></div><p className="report-slide-note">{comparable ? `Change = ${period(data, month)} minus ${period(previous, previousMonth)}.` : 'Comparison hidden where an entity or period is missing. Available reported values remain visible.'} Click any amount to inspect QB accounts and ledger entries.</p></>
 }
 
-function SlideContent({ id, data, prior, monthA, monthB, year }: { id: SlideId; data: PresentationFinancials; prior?: PresentationFinancials; monthA: number; monthB: number; year: number }) {
+function EntityStackedTrend({ data, month, metric, onOpen }: { data: PresentationFinancials; month: number; metric: 'revenue' | 'netIncome'; onOpen?: OpenDetail }) {
+  const series = Array.from({ length: month }, (_, index) => ({ month: index + 1, values: ENTITIES.map((entity) => metricAmount(getFinancialMonth(data, entity, index + 1), metric)) }))
+  const extrema = series.map(({ values }) => ({ positive: values.reduce<number>((sum, value) => sum + Math.max(value ?? 0, 0), 0), negative: values.reduce<number>((sum, value) => sum + Math.min(value ?? 0, 0), 0) }))
+  const high = Math.max(1, ...extrema.map((item) => item.positive)), low = Math.min(0, ...extrema.map((item) => item.negative))
+  const width = 1140, height = 440, left = 90, right = 26, top = 38, bottom = 56
+  const y = (value: number) => top + (high - value) * (height - top - bottom) / (high - low)
+  const plotWidth = width - left - right, slot = plotWidth / month, barWidth = Math.min(slot * .6, 80)
+  return <div className="report-stacked-trend"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metricLabel(metric)} by entity, Jan–${MONTHS[month - 1]} ${data.year}`}>
+    {[low, low + (high - low) / 4, low + (high - low) / 2, low + (high - low) * .75, high].map((value, i) => <g key={i}><line x1={left} x2={width - right} y1={y(value)} y2={y(value)} stroke="#dbe4ee" strokeDasharray="4 5" /><text x={left - 12} y={y(value) + 4} textAnchor="end" fill="#728297" fontSize="12">{chartMoney(value)}</text></g>)}
+    {series.map(({ month: selected, values }, index) => { let positive = 0, negative = 0; const x = left + slot * index + (slot - barWidth) / 2; const total = metricAmount(getFinancialMonth(data, 'All', selected), metric); return <g key={selected}><text x={x + barWidth / 2} y={Math.max(18, y(extrema[index].positive) - 8)} textAnchor="middle" fill="#23344b" fontWeight="700" fontSize="12">{total == null ? '—' : chartMoney(total)}</text>{values.map((value, entityIndex) => { if (value == null || value === 0) return null; const start = value > 0 ? positive : negative; if (value > 0) positive += value; else negative += value; const end = start + value; const upper = Math.min(y(start), y(end)), segmentHeight = Math.max(1, Math.abs(y(start) - y(end))); const entity = ENTITIES[entityIndex]; return <g key={entity} role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className={onOpen ? 'report-svg-action' : undefined} onClick={() => onOpen?.({ entity, month: selected, metric })} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen?.({ entity, month: selected, metric }) } }}><rect x={x} y={upper} width={barWidth} height={segmentHeight} fill={ENTITY_COLORS[entity]} /><title>{entity} · {MONTHS[selected - 1]}: {money(value)}. Click for QB details.</title>{segmentHeight > 27 && barWidth > 46 && <text x={x + barWidth / 2} y={upper + segmentHeight / 2 + 4} textAnchor="middle" fill="#10243a" fontSize="11" fontWeight="700" pointerEvents="none">{chartMoney(value)}</text>}</g> })}<text x={x + barWidth / 2} y={height - 18} textAnchor="middle" fill="#52637c" fontSize="13">{MONTHS[selected - 1]}</text></g> })}
+  </svg><div className="report-legend">{ENTITIES.map((entity) => <span key={entity}><i style={{ background: ENTITY_COLORS[entity] }} />{entity}</span>)}</div><p className="report-slide-note">Stacked entity values sum to the reported group; negative balances extend below zero. Click a segment for accounts and entries.</p></div>
+}
+
+function ThreeMonthSlide({ data, prior, month, groups, title, onOpen }: { data: PresentationFinancials; prior?: PresentationFinancials; month: number; groups: readonly PnlGroup[]; title: string; onOpen?: OpenDetail }) {
+  const periods = [2, 1, 0].map((offset) => { const selected = month - offset; return selected > 0 ? { month: selected, source: data } : { month: selected + 12, source: prior } })
+  const keys = groupKeys([...data.months.filter((row) => row.entity === 'All'), ...(prior?.months ?? []).filter((row) => row.entity === 'All' && row.month >= 11)]).filter((key) => { const [kind, group] = key.split('|') as [PnlKind, PnlGroup]; return (kind === 'expense' || kind === 'other-expense') && groups.includes(group) })
+  const values = periods.map(({ source, month: selected }) => keys.map((key) => sumMetric(source, 'All', selected, `group:${key}`, false)))
+  const extrema = values.map((items) => ({ positive: items.reduce<number>((sum, amount) => sum + Math.max(amount ?? 0, 0), 0), negative: items.reduce<number>((sum, amount) => sum + Math.min(amount ?? 0, 0), 0) }))
+  const high = Math.max(1, ...extrema.map((item) => item.positive)), low = Math.min(0, ...extrema.map((item) => item.negative))
+  const width = 680, height = 450, top = 42, bottom = 48, left = 68, right = 20
+  const y = (value: number) => top + (high - value) * (height - top - bottom) / (high - low)
+  return <><div className="report-slide-intro"><strong>{title}</strong><span>{periods.map(({ source, month: selected }) => `${MONTHS[selected - 1]} ${source?.year ?? data.year - 1}`).join(' · ')} · reported group</span></div><div className="report-expense-layout"><div className="report-expense-chart"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${title}, last three months`}>
+    {[low, low + (high - low) / 4, low + (high - low) / 2, low + (high - low) * .75, high].map((tick, i) => <g key={i}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke="#e0e8ef" /><text x={left - 7} y={y(tick) + 4} textAnchor="end" fill="#718197" fontSize="11">{chartMoney(tick)}</text></g>)}
+    {periods.map(({ source, month: selected }, index) => { let positive = 0, negative = 0; const x = 130 + index * 185; const available = !!source && !!getFinancialMonth(source, 'All', selected); return <g key={index}><text x={x + 45} y={Math.max(25, y(extrema[index].positive) - 9)} textAnchor="middle" fontSize="15" fontWeight="700" fill="#243449">{available ? chartMoney(values[index].reduce<number>((sum, value) => sum + (value ?? 0), 0)) : '—'}</text>{keys.map((key, keyIndex) => { const amount = values[index][keyIndex]; if (!amount) return null; const start = amount > 0 ? positive : negative; if (amount > 0) positive += amount; else negative += amount; const end = start + amount, upper = Math.min(y(start), y(end)), segmentHeight = Math.max(1, Math.abs(y(start) - y(end))); return <g key={key} role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className={onOpen ? 'report-svg-action' : undefined} onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: `group:${key}`, year: source.year })} onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && source) { event.preventDefault(); onOpen?.({ entity: 'All', month: selected, metric: `group:${key}`, year: source.year }) } }}><rect x={x} y={upper} width={90} height={segmentHeight} fill={SLIDE_COLORS[keyIndex % SLIDE_COLORS.length]} /><title>{PNL_GROUPS[key.split('|')[1] as PnlGroup]} · {MONTHS[selected - 1]} {source?.year}: {money(amount)}</title>{segmentHeight > 23 && <text x={x + 45} y={upper + segmentHeight / 2 + 4} textAnchor="middle" fill="#fff" fontWeight="700" fontSize="11" pointerEvents="none">{chartMoney(amount)}</text>}</g> })}<text x={x + 45} y={height - 12} textAnchor="middle" fill="#33445c" fontWeight="700" fontSize="13">{MONTHS[selected - 1]} {source?.year ?? ''}</text></g> })}
+  </svg><div className="report-legend">{keys.map((key, index) => <span key={key}><i style={{ background: SLIDE_COLORS[index % SLIDE_COLORS.length] }} />{PNL_GROUPS[key.split('|')[1] as PnlGroup]}</span>)}</div></div><div className="report-table-scroll report-pivot"><table className="report-table"><thead><tr><th>Management subgroup</th>{periods.map(({ source, month: selected }, index) => <th key={index}>{MONTHS[selected - 1]} {source?.year ?? data.year - 1}</th>)}</tr></thead><tbody>{keys.map((key, index) => <tr key={key}><td><i className="report-pivot-swatch" style={{ background: SLIDE_COLORS[index % SLIDE_COLORS.length] }} />{PNL_GROUPS[key.split('|')[1] as PnlGroup]}</td>{periods.map(({ source, month: selected }, periodIndex) => <td key={periodIndex}><AmountButton value={values[periodIndex][index]} label={`${PNL_GROUPS[key.split('|')[1] as PnlGroup]} · ${MONTHS[selected - 1]} ${source?.year}`} onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: `group:${key}`, year: source.year })} /></td>)}</tr>)}<tr className="report-matrix-total"><td>Total {title}</td>{periods.map(({ source, month: selected }, index) => <td key={index}><AmountButton value={source && getFinancialMonth(source, 'All', selected) ? values[index].reduce<number>((sum, value) => sum + (value ?? 0), 0) : null} label={`${title} · ${MONTHS[selected - 1]} ${source?.year}`} onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: `bundle:${groups.join(',')}`, year: source.year })} /></td>)}</tr></tbody></table></div></div><p className="report-slide-note">Reported amounts across available entities. Select a value to see each entity, QB account and ledger entry. Negative expense credits extend below zero.</p></>
+}
+
+function SlideContent({ id, data, prior, monthB, year, note, onNote, editable, onOpen }: { id: SlideId; data: PresentationFinancials; prior?: PresentationFinancials; monthB: number; year: number; note: string; onNote?: (note: string) => void; editable: boolean; onOpen?: OpenDetail }) {
   if (id === 'cover') return <div className="report-cover"><span>ORCA · FINANCIAL REPORT</span><h2>Financial<br />review</h2><p>Opco · Foundation · Juku · Zagreus</p><small>{MONTHS[monthB - 1]} {year} · QuickBooks reported P&amp;L</small></div>
-  if (id === 'mom') return <><EntityComparison data={data} year={year} monthA={monthA} monthB={monthB} /><div className="report-slide-note">Current month {MONTHS[monthB - 1]} versus {MONTHS[monthA - 1]}. Missing entities are shown as gaps.</div></>
-  if (id === 'revenue' || id === 'net') return <><div className="report-slide-lead"><span>{id === 'revenue' ? 'Monthly revenue' : 'Monthly net income'}</span><strong>{money(metricAmount(getFinancialMonth(data, 'All', monthB), id === 'revenue' ? 'revenue' : 'netIncome'))}</strong><small>Latest reported month · {MONTHS[monthB - 1]} {year}</small></div><Trend data={data} entity="All" month={monthB} metric={id === 'revenue' ? 'revenue' : 'netIncome'} compact /></>
-  if (id === 'ytd') return <YtdCompare current={data} prior={prior} year={year} month={monthB} compact />
-  if (id === 'revenue-mix') return <CategorySlide data={data} month={monthB} groups={['protocol-revenue', 'managed-services', 'treasury-income', 'asset-gains', 'other-income', 'unclassified']} sectionKinds={['income', 'other-income']} title="Income and asset movements" />
-  if (id === 'operating') return <CategorySlide data={data} month={monthB} groups={[...COMPENSATION, ...TECHNOLOGY, ...OPERATING]} sectionKinds={['expense']} title="Operating expenses" />
-  if (id === 'compensation') return <CategorySlide data={data} month={monthB} groups={COMPENSATION} title="Cash, token and benefits" />
-  if (id === 'technology') return <CategorySlide data={data} month={monthB} groups={TECHNOLOGY} title="Software, infrastructure and audits" />
-  if (id === 'professional') return <CategorySlide data={data} month={monthB} groups={['professional', 'people-operations']} title="Professional services and people operations" />
-  if (id === 'other-costs') return <CategorySlide data={data} month={monthB} groups={['travel', 'offsite', 'marketing', 'transaction-fees', 'office', 'other-operating']} title="Travel, marketing, fees and office" />
-  if (id === 'below-line') return <CategorySlide data={data} month={monthB} groups={BELOW_LINE} title="Treasury, intercompany and other items" netEffect />
-  return <BridgeSlide data={data} month={monthB} />
+  if (id === 'mom' || id === 'ytd') return <ComparisonSlide data={data} prior={prior} month={monthB} mode={id} onOpen={onOpen} note={note} onNote={onNote} editable={editable} />
+  if (id === 'revenue' || id === 'net') return <><div className="report-slide-intro"><strong>{id === 'revenue' ? 'Revenue by entity' : 'Net income by entity'}</strong><span>Jan–{MONTHS[monthB - 1]} {year} · monthly reported P&amp;L</span></div><EntityStackedTrend data={data} month={monthB} metric={id === 'revenue' ? 'revenue' : 'netIncome'} onOpen={onOpen} /></>
+  if (id === 'operating') return <ThreeMonthSlide data={data} prior={prior} month={monthB} groups={ALL_GROUPS} title="Operating expenses" onOpen={onOpen} />
+  if (id === 'compensation') return <ThreeMonthSlide data={data} prior={prior} month={monthB} groups={COMPENSATION} title="Compensation expenses" onOpen={onOpen} />
+  if (id === 'technology') return <ThreeMonthSlide data={data} prior={prior} month={monthB} groups={TECHNOLOGY} title="Tech fees" onOpen={onOpen} />
+  return <ThreeMonthSlide data={data} prior={prior} month={monthB} groups={GENERAL} title="G&A and other costs" onOpen={onOpen} />
 }
 
-function Slide({ slide, data, prior, monthA, monthB, year, note, onNote, editable }: { slide: typeof SLIDES[number]; data: PresentationFinancials; prior?: PresentationFinancials; monthA: number; monthB: number; year: number; note: string; onNote?: (note: string) => void; editable: boolean }) {
+function Slide({ slide, data, prior, monthB, year, note, onNote, editable, onOpen }: { slide: typeof SLIDES[number]; data: PresentationFinancials; prior?: PresentationFinancials; monthB: number; year: number; note: string; onNote?: (note: string) => void; editable: boolean; onOpen?: OpenDetail }) {
   return <article className={`report-slide ${slide.id === 'cover' ? 'is-cover' : ''}`}>
     {slide.id !== 'cover' && <header className="report-slide-header"><span>ORCA · FINANCIAL REPORT</span><h2>{slide.title}</h2><small>{slide.id === 'ytd' ? `Jan–${MONTHS[monthB - 1]} ${year} vs ${year - 1}` : `${MONTHS[monthB - 1]} ${year}`} · Reported P&amp;L</small></header>}
-    <div className="report-slide-body"><SlideContent id={slide.id} data={data} prior={prior} monthA={monthA} monthB={monthB} year={year} /></div>
+    <div className="report-slide-body"><SlideContent id={slide.id} data={data} prior={prior} monthB={monthB} year={year} note={note} onNote={onNote} editable={editable} onOpen={onOpen} /></div>
     {slide.id !== 'cover' && <footer className="report-slide-footer"><span>{getFinancialMonth(data, 'All', monthB)?.presentEntities.join(' · ') || 'No QB cache'} · {coverage(getFinancialMonth(data, 'All', monthB))}</span><span>Amounts in USD · no eliminations</span></footer>}
-    {editable && slide.id !== 'cover' && <div className="report-speaker"><label htmlFor="report-slide-note">Speaker notes</label><textarea id="report-slide-note" value={note} onChange={(event) => onNote?.(event.target.value)} placeholder="Add your commentary for this slide…" /></div>}
+    {editable && slide.id !== 'cover' && slide.id !== 'mom' && slide.id !== 'ytd' && <div className="report-speaker"><label htmlFor="report-slide-note">Speaker notes</label><textarea id="report-slide-note" value={note} onChange={(event) => onNote?.(event.target.value)} placeholder="Add your commentary for this slide…" /></div>}
   </article>
 }
 
@@ -384,11 +406,11 @@ export function ReportClient({ initialYear, years }: { initialYear: number; year
       {view === 'slides' && <section className="report-deck" id="report-deck"><div className="report-deck-controls"><strong>{SLIDES[slideIndex].title}</strong><span>{slideIndex + 1} / {SLIDES.length}</span><button onClick={() => document.getElementById('report-deck')?.requestFullscreen?.()}>Fullscreen</button><button onClick={() => window.print()}>Export PDF</button></div>
         {priorError && <div className="report-warning">Prior-year P&amp;L unavailable. YTD comparison will show gaps.</div>}
         <Coverage data={data} year={year} month={monthB} />
-        <Slide slide={SLIDES[slideIndex]} data={data} prior={prior} monthA={monthA} monthB={monthB} year={year} note={notes[`${slideIndex}`] ?? ''} onNote={saveNote} editable />
+        <Slide slide={SLIDES[slideIndex]} data={data} prior={prior} monthB={monthB} year={year} note={notes[`${slideIndex}`] ?? ''} onNote={saveNote} onOpen={setDetail} editable />
         <div className="report-deck-nav"><button disabled={slideIndex === 0} onClick={() => setSlideIndex((index) => index - 1)}>← Previous</button><select aria-label="Select slide" value={slideIndex} onChange={(event) => setSlideIndex(Number(event.target.value))}>{SLIDES.map((slide, index) => <option key={slide.id} value={index}>{index + 1}. {slide.title}</option>)}</select><button disabled={slideIndex === SLIDES.length - 1} onClick={() => setSlideIndex((index) => index + 1)}>Next →</button></div>
-        <div className="report-print-deck">{SLIDES.map((slide, index) => <Slide key={slide.id} slide={slide} data={data} prior={prior} monthA={monthA} monthB={monthB} year={year} note={notes[`${index}`] ?? ''} editable={false} />)}</div>
+        <div className="report-print-deck">{SLIDES.map((slide, index) => <Slide key={slide.id} slide={slide} data={data} prior={prior} monthB={monthB} year={year} note={notes[`${index}`] ?? ''} editable={false} />)}</div>
       </section>}
-      {detail && <ReportValueDrill key={JSON.stringify(detail)} data={data} detail={detail} onClose={() => setDetail(null)} />}
+      {detail && <ReportValueDrill key={JSON.stringify(detail)} data={prior && detail.year === prior.year ? prior : data} prior={prior && detail.year === prior.year ? data : prior} detail={detail} onClose={() => setDetail(null)} onOpen={setDetail} />}
     </>}
   </main>
 }
