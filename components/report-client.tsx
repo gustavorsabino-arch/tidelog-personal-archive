@@ -56,6 +56,7 @@ const SLIDES: Array<{ id: SlideId; title: string }> = [
 const money = (value: number | null | undefined) => value == null ? '—' : fmtUSD(value)
 const chartMoney = (value: number) => fmtUSD(value, 0)
 const compactMoney = (value: number) => value === 0 ? '$0' : `${value < 0 ? '-' : ''}$${Math.abs(value) >= 1_000_000 ? `${(Math.abs(value) / 1_000_000).toFixed(1)}m` : Math.abs(value) >= 1_000 ? `${(Math.abs(value) / 1_000).toFixed(0)}k` : Math.abs(value).toFixed(0)}`
+const chartTotal = (value: number) => Math.abs(value) >= 1_000_000 ? `${value < 0 ? '-' : ''}$${(Math.abs(value) / 1_000_000).toFixed(3)}m` : compactMoney(value)
 const exact = (value: number | null | undefined) => value == null ? '—' : fmtUSD(value)
 const totalRevenue = (row: FinancialMonth | null) => row ? row.totals.revenue + row.totals.otherIncome : null
 const totalExpense = (row: FinancialMonth | null) => row ? row.totals.expense + row.totals.otherExpense : null
@@ -377,7 +378,7 @@ function ThreeMonthSlide({ data, prior, month, categories, title, onOpen }: { da
   const barWidth = Math.min(130, (width - left - right) / 5)
   const totalMetric = expenseMetric(categories.flatMap((category) => category.groups))
   return <><div className="report-slide-intro"><strong>{title}</strong><span>{periods.map(({ source, month: selected }) => MONTHS[selected - 1] + ' ' + (source?.year ?? data.year - 1)).join(' · ')} · reported group</span></div><div className="report-expense-layout"><div className="report-expense-chart"><svg ref={chartRef} viewBox={'0 0 ' + width + ' ' + height} role="img" aria-label={title + ', last three months'}>
-    {[high, high * .75, high * .5, high * .25, 0, ...(low < 0 ? [low] : [])].map((tick, index) => <g key={index}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke={tick === 0 ? '#9bb6be' : '#dce8ec'} strokeWidth={tick === 0 ? 1.5 : 1} strokeDasharray={tick === 0 ? undefined : '3 5'} /><text x={left - 9} y={y(tick) + 4} textAnchor="end" fill="#718597" fontSize="11">{compactMoney(tick)}</text></g>)}
+    {[high, high * .75, high * .5, high * .25, 0, ...(low < -high * .08 ? [low] : [])].map((tick, index) => <g key={index}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke={tick === 0 ? '#9bb6be' : '#dce8ec'} strokeWidth={tick === 0 ? 1.5 : 1} strokeDasharray={tick === 0 ? undefined : '3 5'} /><text x={left - 9} y={y(tick) + 4} textAnchor="end" fill="#718597" fontSize="11">{compactMoney(tick)}</text></g>)}
     {periods.map(({ source, month: selected }, index) => {
       let positive = 0, negative = 0
       const cx = center(index), x = cx - barWidth / 2
@@ -399,7 +400,7 @@ function ThreeMonthSlide({ data, prior, month, categories, title, onOpen }: { da
         })}
         <g role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className="report-area-hit" onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: totalMetric, label: title, year: source.year })} onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && source) { event.preventDefault(); onOpen?.({ entity: 'All', month: selected, metric: totalMetric, label: title, year: source.year }) } }}>
           <rect x={cx - 50} y={Math.max(7, y(extrema[index].positive) - 32)} width="100" height="28" fill="transparent" />
-          <text x={cx} y={Math.max(25, y(extrema[index].positive) - 12)} textAnchor="middle" fontSize="15" fontWeight="800" fill="#153b50">{available ? compactMoney(total) : '—'}</text>
+          <text x={cx} y={Math.max(25, y(extrema[index].positive) - 12)} textAnchor="middle" fontSize="15" fontWeight="800" fill="#153b50">{available ? chartTotal(total) : '—'}</text>
           <title>{title + ' · ' + MONTHS[selected - 1] + ' ' + source?.year + ': ' + money(total)}</title>
         </g>
         <text x={cx} y={height - 10} textAnchor="middle" fill="#354f60" fontWeight="700" fontSize="13">{MONTHS[selected - 1] + ' ' + (source?.year ?? '')}</text>
