@@ -827,10 +827,11 @@ tr:hover .qb-row-actions,
   .report-expense-chart{padding:7px}
   .report-expense-chart .report-legend{max-height:none;overflow:visible;justify-content:flex-start;padding:4px;font-size:10px;gap:5px 12px}
   .report-pivot{overflow:hidden;height:auto;max-height:100%!important;align-self:start}
-  .report-pivot .report-table{table-layout:fixed;font-size:11px}
+  .report-pivot .report-table{table-layout:fixed;font-size:10.5px}
   .report-pivot .report-table th:first-child,.report-pivot .report-table td:first-child{min-width:0;max-width:none;width:39%}
   .report-pivot .report-table th:not(:first-child){min-width:0}
-  .report-pivot .report-table td,.report-pivot .report-table th{padding:8px 4px;white-space:normal;line-height:1.2}
+  .report-pivot .report-table td,.report-pivot .report-table th{padding:4px 4px;white-space:normal;line-height:1.15}
+  .report-pivot .report-table td:first-child{font-family:var(--sans);font-weight:600}
   .report-pivot .report-value-button{font-size:10px;white-space:nowrap}
   .report-stacked-trend{padding:8px}
 }
