@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch } from '@/lib/api'
 import { fmtUSD } from '@/lib/format'
@@ -21,7 +21,7 @@ type SlideId = 'cover' | 'mom' | 'revenue' | 'net' | 'ytd' | 'operating' | 'comp
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const ENTITY_COLORS: Record<QboEntity, string> = { Opco: '#3dbdae', Foundation: '#85a7f7', Juku: '#e9a156', Zagreus: '#b595e9' }
-const SLIDE_COLORS = ['#00a8a8', '#3177c9', '#735cc9', '#e59b42', '#228d72', '#d16f8a', '#617fa7', '#b2a054', '#537a84', '#8897a8']
+const SLIDE_COLORS = ['#286aab', '#42a6b8', '#8069bd', '#e59a4d', '#2b9d8d', '#ce7690', '#5c83a4', '#ba9c49', '#62838d', '#92a8ad']
 const KINDS: PnlKind[] = ['income', 'other-income', 'expense', 'other-expense', 'other']
 const KIND_NAMES: Record<PnlKind, string> = { income: 'Income', 'other-income': 'Other income', expense: 'Expenses', 'other-expense': 'Other expenses', other: 'Other QB sections' }
 const COMPENSATION: PnlGroup[] = ['employee-cash', 'employee-token', 'contractor-cash', 'contractor-token', 'benefits-severance']
@@ -358,12 +358,54 @@ function ThreeMonthSlide({ data, prior, month, categories, title, onOpen }: { da
   const values = periods.map(({ source, month: selected }) => keys.map((key) => sumMetric(source, 'All', selected, expenseMetric(key.groups), false)))
   const extrema = values.map((items) => ({ positive: items.reduce<number>((sum, amount) => sum + Math.max(amount ?? 0, 0), 0), negative: items.reduce<number>((sum, amount) => sum + Math.min(amount ?? 0, 0), 0) }))
   const high = Math.max(1, ...extrema.map((item) => item.positive)), low = Math.min(0, ...extrema.map((item) => item.negative))
-  const width = 680, height = 330, top = 42, bottom = 48, left = 68, right = 20
+  const chartRef = useRef<SVGSVGElement>(null)
+  const [chartSize, setChartSize] = useState({ width: 760, height: 370 })
+  useEffect(() => {
+    const element = chartRef.current
+    if (!element || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width), height = Math.round(entry.contentRect.height)
+      if (width > 100 && height > 100) setChartSize((size) => size.width === width && size.height === height ? size : { width, height })
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const { width, height } = chartSize
+  const left = 64, right = 18, top = 44, bottom = 38
   const y = (value: number) => top + (high - value) * (height - top - bottom) / (high - low)
-  return <><div className="report-slide-intro"><strong>{title}</strong><span>{periods.map(({ source, month: selected }) => `${MONTHS[selected - 1]} ${source?.year ?? data.year - 1}`).join(' · ')} · reported group</span></div><div className="report-expense-layout"><div className="report-expense-chart"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${title}, last three months`}>
-    {[low, low + (high - low) / 4, low + (high - low) / 2, low + (high - low) * .75, high].map((tick, i) => <g key={i}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke="#e0e8ef" /><text x={left - 7} y={y(tick) + 4} textAnchor="end" fill="#718197" fontSize="11">{chartMoney(tick)}</text></g>)}
-    {periods.map(({ source, month: selected }, index) => { let positive = 0, negative = 0; const x = 125 + index * 185; const available = !!source && !!getFinancialMonth(source, 'All', selected); return <g key={index}><text x={x + 45} y={Math.max(25, y(extrema[index].positive) - 9)} textAnchor="middle" fontSize="12" fontWeight="700" fill="#243449">{available ? chartMoney(values[index].reduce<number>((sum, value) => sum + (value ?? 0), 0)) : '—'}</text>{keys.map((key, keyIndex) => { const amount = values[index][keyIndex]; if (!amount) return null; const start = amount > 0 ? positive : negative; if (amount > 0) positive += amount; else negative += amount; const end = start + amount, upper = Math.min(y(start), y(end)), segmentHeight = Math.max(1, Math.abs(y(start) - y(end))); return <g key={key.label} role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className={onOpen ? 'report-svg-action' : undefined} onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: expenseMetric(key.groups), label: key.label, year: source.year })} onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && source) { event.preventDefault(); onOpen?.({ entity: 'All', month: selected, metric: expenseMetric(key.groups), label: key.label, year: source.year }) } }}><rect x={x} y={upper} width={90} height={segmentHeight} fill={SLIDE_COLORS[keyIndex % SLIDE_COLORS.length]} /><title>{key.label} · {MONTHS[selected - 1]} {source?.year}: {money(amount)}</title>{segmentHeight > 32 && <text x={x + 45} y={upper + segmentHeight / 2 + 4} textAnchor="middle" fill="#fff" fontWeight="700" fontSize="9" pointerEvents="none">{chartMoney(amount)}</text>}</g> })}<text x={x + 45} y={height - 12} textAnchor="middle" fill="#33445c" fontWeight="700" fontSize="11">{MONTHS[selected - 1]} {source?.year ?? ''}</text></g> })}
-  </svg><div className="report-legend">{keys.map((key, index) => <span key={key.label}><i style={{ background: SLIDE_COLORS[index % SLIDE_COLORS.length] }} />{key.label}</span>)}</div></div><div className="report-table-scroll report-pivot"><table className="report-table"><thead><tr><th>Category</th>{periods.map(({ source, month: selected }, index) => <th key={index}>{MONTHS[selected - 1]}</th>)}</tr></thead><tbody>{keys.map((key, index) => <tr key={key.label}><td><i className="report-pivot-swatch" style={{ background: SLIDE_COLORS[index % SLIDE_COLORS.length] }} />{key.label}</td>{periods.map(({ source, month: selected }, periodIndex) => <td key={periodIndex}><AmountButton value={values[periodIndex][index]} display={values[periodIndex][index] == null ? undefined : chartMoney(values[periodIndex][index]!)} label={`${key.label} · ${MONTHS[selected - 1]} ${source?.year}`} onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: expenseMetric(key.groups), label: key.label, year: source.year })} /></td>)}</tr>)}<tr className="report-matrix-total"><td>Total {title}</td>{periods.map(({ source, month: selected }, index) => <td key={index}><AmountButton value={source && getFinancialMonth(source, 'All', selected) ? values[index].reduce<number>((sum, value) => sum + (value ?? 0), 0) : null} display={chartMoney(values[index].reduce<number>((sum, value) => sum + (value ?? 0), 0))} label={`${title} · ${MONTHS[selected - 1]} ${source?.year}`} onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: expenseMetric(categories.flatMap((category) => category.groups)), label: title, year: source.year })} /></td>)}</tr></tbody></table></div></div><p className="report-slide-note">Reported amounts across available entities. Select a value to see each entity, QB account and ledger entry. Negative expense credits extend below zero.</p></>
+  const center = (index: number) => left + (index + .5) * (width - left - right) / 3
+  const barWidth = Math.min(130, (width - left - right) / 5)
+  const totalMetric = expenseMetric(categories.flatMap((category) => category.groups))
+  return <><div className="report-slide-intro"><strong>{title}</strong><span>{periods.map(({ source, month: selected }) => MONTHS[selected - 1] + ' ' + (source?.year ?? data.year - 1)).join(' · ')} · reported group</span></div><div className="report-expense-layout"><div className="report-expense-chart"><svg ref={chartRef} viewBox={'0 0 ' + width + ' ' + height} role="img" aria-label={title + ', last three months'}>
+    {[high, high * .75, high * .5, high * .25, 0, ...(low < 0 ? [low] : [])].map((tick, index) => <g key={index}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke={tick === 0 ? '#9bb6be' : '#dce8ec'} strokeWidth={tick === 0 ? 1.5 : 1} strokeDasharray={tick === 0 ? undefined : '3 5'} /><text x={left - 9} y={y(tick) + 4} textAnchor="end" fill="#718597" fontSize="11">{compactMoney(tick)}</text></g>)}
+    {periods.map(({ source, month: selected }, index) => {
+      let positive = 0, negative = 0
+      const cx = center(index), x = cx - barWidth / 2
+      const available = !!source && !!getFinancialMonth(source, 'All', selected)
+      const total = values[index].reduce<number>((sum, value) => sum + (value ?? 0), 0)
+      return <g key={index}>
+        {keys.map((key, keyIndex) => {
+          const amount = values[index][keyIndex]
+          if (!amount) return null
+          const start = amount > 0 ? positive : negative
+          if (amount > 0) positive += amount; else negative += amount
+          const end = start + amount, upper = Math.min(y(start), y(end)), segmentHeight = Math.max(1, Math.abs(y(start) - y(end)))
+          const open = () => source && onOpen?.({ entity: 'All', month: selected, metric: expenseMetric(key.groups), label: key.label, year: source.year })
+          return <g key={key.label} role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className={onOpen ? 'report-svg-action' : undefined} onClick={open} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open() } }}>
+            <rect x={x} y={upper} width={barWidth} height={segmentHeight} fill={SLIDE_COLORS[keyIndex % SLIDE_COLORS.length]} />
+            <title>{key.label + ' · ' + MONTHS[selected - 1] + ' ' + source?.year + ': ' + money(amount)}</title>
+            {segmentHeight > 31 && <text x={cx} y={upper + segmentHeight / 2 + 4} textAnchor="middle" fill="#fff" fontWeight="700" fontSize="11" pointerEvents="none">{compactMoney(amount)}</text>}
+          </g>
+        })}
+        <g role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} className="report-area-hit" onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: totalMetric, label: title, year: source.year })} onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && source) { event.preventDefault(); onOpen?.({ entity: 'All', month: selected, metric: totalMetric, label: title, year: source.year }) } }}>
+          <rect x={cx - 50} y={Math.max(7, y(extrema[index].positive) - 32)} width="100" height="28" fill="transparent" />
+          <text x={cx} y={Math.max(25, y(extrema[index].positive) - 12)} textAnchor="middle" fontSize="15" fontWeight="800" fill="#153b50">{available ? compactMoney(total) : '—'}</text>
+          <title>{title + ' · ' + MONTHS[selected - 1] + ' ' + source?.year + ': ' + money(total)}</title>
+        </g>
+        <text x={cx} y={height - 10} textAnchor="middle" fill="#354f60" fontWeight="700" fontSize="13">{MONTHS[selected - 1] + ' ' + (source?.year ?? '')}</text>
+      </g>
+    })}
+  </svg></div><div className="report-table-scroll report-pivot"><table className="report-table"><thead><tr><th>Category</th>{periods.map(({ source, month: selected }, index) => <th key={index}>{MONTHS[selected - 1]}</th>)}</tr></thead><tbody>{keys.map((key, index) => <tr key={key.label}><td><i className="report-pivot-swatch" style={{ background: SLIDE_COLORS[index % SLIDE_COLORS.length] }} />{key.label}</td>{periods.map(({ source, month: selected }, periodIndex) => <td key={periodIndex}><AmountButton value={values[periodIndex][index]} display={values[periodIndex][index] == null ? undefined : chartMoney(values[periodIndex][index]!)} label={`${key.label} · ${MONTHS[selected - 1]} ${source?.year}`} onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: expenseMetric(key.groups), label: key.label, year: source.year })} /></td>)}</tr>)}<tr className="report-matrix-total"><td>Total {title}</td>{periods.map(({ source, month: selected }, index) => <td key={index}><AmountButton value={source && getFinancialMonth(source, 'All', selected) ? values[index].reduce<number>((sum, value) => sum + (value ?? 0), 0) : null} display={chartMoney(values[index].reduce<number>((sum, value) => sum + (value ?? 0), 0))} label={`${title} · ${MONTHS[selected - 1]} ${source?.year}`} onClick={() => source && onOpen?.({ entity: 'All', month: selected, metric: expenseMetric(categories.flatMap((category) => category.groups)), label: title, year: source.year })} /></td>)}</tr></tbody></table></div></div><p className="report-slide-note">Reported amounts across available entities. Select a value to see each entity, QB account and ledger entry. Negative expense credits extend below zero.</p></>
 }
 
 function SlideContent({ id, data, prior, monthB, year, note, onNote, editable, onOpen }: { id: SlideId; data: PresentationFinancials; prior?: PresentationFinancials; monthB: number; year: number; note: string; onNote?: (note: string) => void; editable: boolean; onOpen?: OpenDetail }) {
