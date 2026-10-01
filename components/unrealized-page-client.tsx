@@ -41,10 +41,10 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
 
   const asOf = yearFilter && monthFilter ? `${yearFilter}-${monthFilter}` : ''
   const swrKey = `/api/treasury/unrealized?entity=${entity}${asOf ? `&asOf=${asOf}` : ''}`
-  const { data, isLoading, error: swrError } = useSWR<UnrealizedResponse>(
+  const { data, isLoading, error: swrError, mutate } = useSWR<UnrealizedResponse>(
     swrKey,
     apiFetch<UnrealizedResponse>,
-    { revalidateOnFocus: false, dedupingInterval: 30_000 },
+    { revalidateOnFocus: false, dedupingInterval: 30_000, shouldRetryOnError: false },
   )
   const error = swrError ? (swrError instanceof Error ? swrError.message : String(swrError)) : null
 
@@ -158,7 +158,7 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
         </div>
       </div>
 
-      {error ? <div className="error-msg">{error}</div> : isLoading ? <LoadingSkeleton /> : (
+      {error ? <div className="error-msg">Could not load Unrealized: {error} <button onClick={() => mutate()}>Retry</button></div> : isLoading ? <LoadingSkeleton /> : (
         <>
           {missingPrices.length > 0 && (
             <div className="error-msg" style={{ marginBottom: 12 }}>

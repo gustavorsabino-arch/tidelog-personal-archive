@@ -10,7 +10,7 @@
 
 import { computeFIFOWithTrace } from '@/lib/fifo'
 import { getCurrentPrices, getClosingPrice } from '@/lib/prices'
-import { getTreasuryTransactionsAsc } from '@/lib/treasury-transactions'
+import { getTransactionMonths, getTreasuryTransactionsAsc } from '@/lib/treasury-transactions'
 import { ENTITIES, STABLE_TOKENS } from '@/lib/constants'
 import type {
   OpenLotView,
@@ -52,11 +52,6 @@ function endOfMonthUtc(yyyyMm: string): Date {
 function priorMonth(yyyyMm: string): string {
   const [y, m] = yyyyMm.split('-').map(Number)
   const d = new Date(Date.UTC(y, m - 2, 1))
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
-}
-
-function ymOfUnix(unix: number): string {
-  const d = new Date(unix * 1000)
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
 }
 
@@ -150,22 +145,20 @@ export async function getTreasuryUnrealized({
   //    entity::asset group, and internal-transfer detection stays scoped per
   //    entity, so concat-and-feed is correct.
   const entitiesToFetch = entity === ALL_ENTITIES_SENTINEL ? [...ENTITIES] : [entity]
-  const allTxs = (
-    await Promise.all(entitiesToFetch.map(async (e) => {
-      const txs = await getTreasuryTransactionsAsc(e)
+  const [allTxs, entityMonths] = await Promise.all([
+    Promise.all(entitiesToFetch.map(async (e) => {
+      // FIFO ignores stablecoins. Avoid loading their often much larger
+      // history while retaining the month picker from all transactions.
+      const txs = await getTreasuryTransactionsAsc(e, true)
       console.info(`[unrealized] query ${e}: ${txs.length} tx in ${Date.now() - startedAt}ms`)
       return txs
-    }))
-  ).flat()
+    })).then((rows) => rows.flat()),
+    Promise.all(entitiesToFetch.map((e) => getTransactionMonths({ entity: e }))),
+  ])
   console.info(`[unrealized] entity=${entity} tx=${allTxs.length} queryMs=${Date.now() - startedAt}`)
 
-  // monthsAvailable derives from ALL non-genesis blockTimes (genesis is a
-  // synthetic basis row, not user-meaningful as a snapshot point).
-  const monthSet = new Set<string>()
-  for (const t of allTxs) {
-    if (t.priceSource === 'genesis') continue
-    monthSet.add(ymOfUnix(t.blockTime))
-  }
+  // Keep the full month selector even though FIFO only loads non-stable txs.
+  const monthSet = new Set(entityMonths.flat())
   const monthsAvailable = [...monthSet].sort().reverse()
 
   // 2. Snapshot at asOf (or all txs for live).

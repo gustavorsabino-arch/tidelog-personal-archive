@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, exists, gte, lte, ne, notExists, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, exists, gte, lte, ne, notExists, notInArray, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
 import { transaction, transactionGain, txQbState, wallet, counterpartyGlMap, qbPost, walletTokenAccountCode } from '@/lib/db/schema'
@@ -513,12 +513,16 @@ export async function getTransactionMonths({
 
 export async function getTreasuryTransactionsAsc(
   entity: string,
+  excludeStables = false,
 ): Promise<Transaction[]> {
   const rows = await db
     .select({ txn: transaction, walletLabel: wallet.label })
     .from(transaction)
     .leftJoin(wallet, eq(wallet.address, transaction.walletAddress))
-    .where(eq(transaction.entityId, toDbEntity(entity)))
+    .where(and(
+      eq(transaction.entityId, toDbEntity(entity)),
+      excludeStables ? notInArray(transaction.asset, [...STABLE_TOKENS]) : undefined,
+    ))
     .orderBy(asc(transaction.blockTime))
   return rows.map((row) => rowToTransaction(row.txn, row.walletLabel ?? ''))
 }

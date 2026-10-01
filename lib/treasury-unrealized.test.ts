@@ -16,6 +16,9 @@ let mockHistoricalPrices: Record<string, Record<number, number>> = {}
 
 mock.module('@/lib/treasury-transactions', () => ({
   getTreasuryTransactionsAsc: async () => mockTxs,
+  getTransactionMonths: async () => [...new Set(mockTxs
+    .filter(t => t.priceSource !== 'genesis')
+    .map(t => t.date.slice(0, 7)))].sort().reverse(),
 }))
 mock.module('@/lib/prices', () => ({
   getCurrentPrices: async (tokens?: string[]) => {
