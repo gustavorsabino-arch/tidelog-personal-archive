@@ -5,6 +5,7 @@ import { appCatalog, appCatalogImport } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { logAudit } from '@/lib/audit'
 import { APP_SEED } from '@/lib/apps/seed-data'
+import { ARCHIVED_APP_SEED } from '@/lib/apps/archived-seed-data'
 
 export const runtime = 'nodejs'
 
@@ -14,10 +15,12 @@ function ensureSchema() {
   if (!schemaReady) {
     schemaReady = (async () => {
       await db.execute(sql`CREATE TABLE IF NOT EXISTS app.app_catalog (
-        app_name text PRIMARY KEY, description text, payment_term text,
+        app_name text PRIMARY KEY, status text NOT NULL DEFAULT 'current', description text, payment_term text,
         payment_method text, amount text, class_team text, account_owner text,
         updated_at timestamptz NOT NULL DEFAULT now(), updated_by text
       )`)
+      // Existing inventory predates the status field. Keep those rows Current.
+      await db.execute(sql`ALTER TABLE app.app_catalog ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'current'`)
       await db.execute(sql`CREATE TABLE IF NOT EXISTS app.app_catalog_import (
         key text PRIMARY KEY, imported_at timestamptz NOT NULL DEFAULT now()
       )`)
@@ -31,6 +34,9 @@ type Field = 'description' | 'paymentTerm' | 'paymentMethod' | 'amount' | 'class
 const fields: Field[] = ['description', 'paymentTerm', 'paymentMethod', 'amount', 'classTeam', 'accountOwner']
 function value(input: unknown): string | null {
   return typeof input === 'string' && input.trim() ? input.trim() : null
+}
+function statusValue(input: unknown): 'current' | 'archived' | null {
+  return input === 'current' || input === 'archived' ? input : null
 }
 function payload(body: Body) {
   return Object.fromEntries(fields.map((field) => [field, value(body[field])])) as Record<Field, string | null>
@@ -55,6 +61,9 @@ export async function GET(req: NextRequest) {
       const inserted = await tx.insert(appCatalogImport).values({ key: 'app-audit-current-2026-09-17' })
         .onConflictDoNothing().returning({ key: appCatalogImport.key })
       if (inserted.length) await tx.insert(appCatalog).values(APP_SEED.map((row) => ({ ...row, updatedBy: 'app-audit-seed' }))).onConflictDoNothing()
+      const archived = await tx.insert(appCatalogImport).values({ key: 'app-audit-archived-2026-09-17' })
+        .onConflictDoNothing().returning({ key: appCatalogImport.key })
+      if (archived.length) await tx.insert(appCatalog).values(ARCHIVED_APP_SEED.map((row) => ({ ...row, status: 'archived', updatedBy: 'app-audit-seed' }))).onConflictDoNothing()
       return tx.select().from(appCatalog).orderBy(asc(appCatalog.appName))
     })
     return NextResponse.json({ apps })
@@ -69,7 +78,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({})) as Body
     const appName = value(body.appName)
     if (!appName) return NextResponse.json({ error: 'App name is required' }, { status: 400 })
-    const [created] = await db.insert(appCatalog).values({ appName, ...payload(body), updatedBy: user.email })
+    const status = statusValue(body.status)
+    if (!status) return NextResponse.json({ error: 'Status must be Current or Archived' }, { status: 400 })
+    const [created] = await db.insert(appCatalog).values({ appName, status, ...payload(body), updatedBy: user.email })
       .onConflictDoNothing().returning()
     if (!created) return NextResponse.json({ error: 'App already exists' }, { status: 409 })
     await audit(user, 'app_catalog.created', appName)
@@ -86,8 +97,10 @@ export async function PATCH(req: NextRequest) {
     const originalName = value(body.originalName)
     const appName = value(body.appName)
     if (!originalName || !appName) return NextResponse.json({ error: 'App name is required' }, { status: 400 })
+    const status = statusValue(body.status)
+    if (!status) return NextResponse.json({ error: 'Status must be Current or Archived' }, { status: 400 })
     const [updated] = await db.update(appCatalog)
-      .set({ appName, ...payload(body), updatedAt: new Date(), updatedBy: user.email })
+      .set({ appName, status, ...payload(body), updatedAt: new Date(), updatedBy: user.email })
       .where(eq(appCatalog.appName, originalName)).returning()
     if (!updated) return NextResponse.json({ error: 'App not found' }, { status: 404 })
     await audit(user, 'app_catalog.updated', originalName)

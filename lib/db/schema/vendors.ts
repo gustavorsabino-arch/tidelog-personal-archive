@@ -21,6 +21,7 @@ export const vendorDefault = app.table('vendor_default', {
 /** App audit inventory, initially imported from the rows marked Current. */
 export const appCatalog = app.table('app_catalog', {
   appName: text('app_name').primaryKey(),
+  status: text('status').notNull().default('current'),
   description: text('description'),
   paymentTerm: text('payment_term'),
   paymentMethod: text('payment_method'),
