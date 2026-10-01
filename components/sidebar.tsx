@@ -15,8 +15,8 @@ const NAV_ITEMS = [
   { href: '/report', label: 'Report', color: '#D4A017', section: 'Views', pageKey: 'presentation' },
   { href: '/budget', label: 'Budget', color: '#D4A017', section: 'Views', pageKey: 'budget' },
   { href: '/approvals', label: 'Approvals', color: '#E4572E', section: 'Views', pageKey: 'approvals' },
+  { href: '/vendors', label: 'Vendors / Apps', color: '#2775ca', section: 'Views', pageKey: 'vendors' },
   { href: '/wallets', label: 'Wallets', color: '#888888', section: 'Config', pageKey: 'wallets' },
-  { href: '/vendors', label: 'Vendors', color: '#2775ca', section: 'Config', pageKey: 'vendors' },
   { href: '/reports', label: 'Reports', color: '#D4A017', section: 'Config', pageKey: 'reports' },
   { href: '/admin', label: 'Access Control', color: '#d93025', section: 'Config', pageKey: 'admin' },
 ]

@@ -17,3 +17,21 @@ export const vendorDefault = app.table('vendor_default', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   updatedBy: text('updated_by'),                  // email; 'book12-seed' for the initial load
 })
+
+/** App audit inventory, initially imported from the rows marked Current. */
+export const appCatalog = app.table('app_catalog', {
+  appName: text('app_name').primaryKey(),
+  description: text('description'),
+  paymentTerm: text('payment_term'),
+  paymentMethod: text('payment_method'),
+  amount: text('amount'),
+  classTeam: text('class_team'),
+  accountOwner: text('account_owner'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: text('updated_by'),
+})
+
+export const appCatalogImport = app.table('app_catalog_import', {
+  key: text('key').primaryKey(),
+  importedAt: timestamp('imported_at', { withTimezone: true }).notNull().defaultNow(),
+})
