@@ -28,7 +28,7 @@ function getVisibleNavItems(access: AccessMeResponse | null) {
 }
 
 function renderNavItem(item: typeof NAV_ITEMS[number], pathname: string) {
-  const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
+  const active = item.href === '/' ? pathname === '/' : pathname === item.href || pathname.startsWith(`${item.href}/`)
 
   return (
     <Link
