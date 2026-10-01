@@ -19,6 +19,9 @@ export function TreasuryReportClient() {
     `/api/treasury/overview?${query}`, apiFetch<TreasuryOverview>,
   )
   const total = data?.grandTotalUSD ?? 0
+  const snapshotAgeDays = data?.snapshotDate
+    ? Math.floor((Date.now() - Date.parse(`${data.snapshotDate}T00:00:00Z`)) / 86_400_000)
+    : null
   const entities = entity ? [entity] : [
     ...ENTITIES,
     ...Object.keys(data?.entityTotals ?? {}).filter((name) => !ENTITIES.some((known) => known === name)).sort(),
@@ -42,17 +45,18 @@ export function TreasuryReportClient() {
   return <div className="treasury-report">
     <header className="treasury-report-header">
       <div><div className="page-title">Treasury reports</div><div className="page-sub">Portfolio exposure and concentration from the same wallet balances as Overview.</div></div>
-      <div className="treasury-report-stamp">{data?.snapshotDate ? `Balances as of ${data.snapshotDate}` : 'Awaiting balance data'}{data?.fetchedAt ? <small>Last fetched {new Date(data.fetchedAt).toLocaleString()}</small> : null}</div>
+      <div className="treasury-report-stamp">{data?.snapshotDate ? `Latest saved balances: ${data.snapshotDate}` : 'Awaiting balance data'}{data?.fetchedAt ? <small>Last fetched {new Date(data.fetchedAt).toLocaleString()}</small> : null}</div>
     </header>
     <div className="controls-bar treasury-report-controls">
       <label>Entity<select className="fsel" value={entity} onChange={(event) => setEntity(event.target.value)}><option value="">All entities</option>{ENTITIES.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
       <label>As of<input className="fsearch" type="date" value={asOf} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setAsOf(event.target.value)} /></label>
       {asOf && <button className="fsel" type="button" onClick={() => setAsOf('')}>Today</button>}
-      <button className="fetch-btn" type="button" onClick={() => void mutate()} disabled={isValidating}>{isValidating ? '⟳ Updating…' : '⟳ Refresh'}</button>
+      <button className="fetch-btn" type="button" onClick={() => void mutate()} disabled={isValidating}>{isValidating ? '⟳ Reloading…' : '⟳ Reload report'}</button>
     </div>
     {error && <div className="status-bar"><span className="status-dot warn" /><span className="status-text">{error instanceof Error ? error.message : 'Could not load treasury balances'}</span></div>}
     {isLoading && !data ? <div className="card treasury-report-loading">Loading portfolio report…</div> : data ? <>
-      <div className="treasury-report-scope">{asOf ? 'Historical snapshot · Solana spot balances only. EVM, LPs and on-chain management positions are not available historically.' : 'Current snapshot · Finance-visible balances tracked in Overview. EVM balances, LPs and on-chain management positions are outside the current snapshot dataset.'}{unpriced.length ? ` Missing price for ${unpriced.join(', ')}; their USD contribution is zero in both Overview and Reports.` : ''}</div>
+      {!asOf && snapshotAgeDays != null && snapshotAgeDays > 1 && <div className="report-warning" role="status">Balance data is {snapshotAgeDays} days old (last recorded {data.snapshotDate}). USD values may use newer prices on those saved quantities. “Reload report” does not fetch new wallet balances.</div>}
+      <div className="treasury-report-scope">{asOf ? 'Historical snapshot · Solana spot balances only. EVM, LPs and decoded on-chain positions are not available historically.' : 'Latest saved snapshot · Finance-visible balances tracked in Overview. EVM balances, LPs and decoded protocol positions are outside this dataset; Treasury Management wallet balances below are included in the portfolio total.'}{unpriced.length ? ` Missing price for ${unpriced.join(', ')}; their USD contribution is zero in both Overview and Reports.` : ''}</div>
       <div className="treasury-report-kpis">
         <div className="card"><span>Total portfolio</span><strong>{amount(total)}</strong><small>{data.wallets.length} wallets · {entity || 'reported entities'}</small></div>
         <div className="card"><span>Stablecoins</span><strong>{amount(stable)}</strong><small>{share(stable, total)} of portfolio</small></div>
