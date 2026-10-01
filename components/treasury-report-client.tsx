@@ -19,13 +19,21 @@ export function TreasuryReportClient() {
     `/api/treasury/overview?${query}`, apiFetch<TreasuryOverview>,
   )
   const total = data?.grandTotalUSD ?? 0
-  const entities = entity ? [entity] : [...ENTITIES]
+  const entities = entity ? [entity] : [
+    ...ENTITIES,
+    ...Object.keys(data?.entityTotals ?? {}).filter((name) => !ENTITIES.some((known) => known === name)).sort(),
+  ]
   const assets = useMemo(() => Object.entries(data?.tokenTotals ?? {})
     .filter(([, row]) => row.amount !== 0 || row.usd !== 0)
     .sort((a, b) => b[1].usd - a[1].usd), [data])
   const wallets = useMemo(() => [...(data?.wallets ?? [])]
     .filter((w) => `${w.label} ${w.entity} ${w.address}`.toLowerCase().includes(walletSearch.trim().toLowerCase()))
     .sort((a, b) => b.totalUSD - a.totalUSD), [data, walletSearch])
+  // These balances are already included in Overview's portfolio total.
+  const protocolWallets = useMemo(() => (data?.wallets ?? [])
+    .filter((wallet) => /^Treasury Management\s*[-–]/i.test(wallet.label))
+    .sort((a, b) => b.totalUSD - a.totalUSD), [data])
+  const protocolTotal = protocolWallets.reduce((sum, wallet) => sum + wallet.totalUSD, 0)
   const bank = assets.reduce((sum, [token, row]) => sum + (BANK_TOKENS.has(token) ? row.usd : 0), 0)
   const stable = assets.reduce((sum, [token, row]) => sum + (STABLE_TOKENS.has(token) && !BANK_TOKENS.has(token) ? row.usd : 0), 0)
   const other = total - bank - stable
@@ -53,7 +61,7 @@ export function TreasuryReportClient() {
       </div>
       <div className="treasury-report-grid">
         <section className="card treasury-report-panel">
-          <h2>Allocation by entity</h2><p>Each entity reconciles to the Overview portfolio total.</p>
+          <h2>Allocation by entity</h2><p>All entity labels returned by Overview, including any unmapped wallets.</p>
           <div className="table-wrap"><table><thead><tr><th>Entity</th><th className="num">Wallets</th><th className="num">USD value</th><th className="num">Share</th></tr></thead><tbody>
             {entities.map((name) => { const row = data.entityTotals[name]; return <tr key={name}><td><span className="treasury-report-dot" style={{ background: ENTITY_COLORS[name] ?? 'var(--accent)' }} />{name}</td><td className="num">{row?.walletCount ?? 0}</td><td className="num">{amount(row?.totalUSD ?? 0)}</td><td className="num">{share(row?.totalUSD ?? 0, total)}</td></tr> })}
             <tr className="treasury-report-total"><td>Total</td><td className="num">{data.wallets.length}</td><td className="num">{amount(total)}</td><td className="num">{share(total, total)}</td></tr>
@@ -64,6 +72,13 @@ export function TreasuryReportClient() {
           {assets.length ? <div className="treasury-report-bars">{assets.slice(0, 8).map(([token, row]) => <div className="treasury-report-bar-row" key={token}><div><strong>{token}</strong><span>{amount(row.usd)} · {share(row.usd, total)}</span></div><div className="treasury-report-track"><div style={{ width: `${Math.max(0, Math.min(100, total > 0 ? row.usd / total * 100 : 0))}%`, background: TOKEN_COLORS[token] ?? TOKEN_COLORS.default }} /></div></div>)}</div> : <p>No token balances.</p>}
         </section>
       </div>
+      {protocolWallets.length > 0 && <section className="card treasury-report-panel">
+        <h2>Treasury management wallets</h2><p>{amount(protocolTotal)} across {protocolWallets.length} wallets ({share(protocolTotal, total)} of the portfolio). These balances are already included above; this is a breakdown, not an addition. Protocol receipt tokens are valued as they appear in Overview.</p>
+        <div className="table-wrap"><table><thead><tr><th>Wallet / protocol</th><th>Entity</th><th>Tracked assets</th><th className="num">USD value</th><th className="num">Share of portfolio</th></tr></thead><tbody>
+          {protocolWallets.map((wallet) => <tr key={wallet.address}><td>{wallet.label}</td><td>{wallet.entity}</td><td>{Object.keys(wallet.balances).filter((token) => wallet.balances[token] !== 0).join(', ') || '—'}</td><td className="num">{amount(wallet.totalUSD)}</td><td className="num">{share(wallet.totalUSD, total)}</td></tr>)}
+          <tr className="treasury-report-total"><td>Total (included in portfolio)</td><td /><td /><td className="num">{amount(protocolTotal)}</td><td className="num">{share(protocolTotal, total)}</td></tr>
+        </tbody></table></div>
+      </section>}
       <section className="card treasury-report-panel">
         <h2>Exposure by asset and entity</h2><p>USD values; token units shown beneath each asset. Column totals reconcile with the entity allocation above.</p>
         <div className="table-wrap"><table><thead><tr><th>Asset</th>{entities.map((name) => <th key={name} className="num">{name}</th>)}<th className="num">Total USD</th><th className="num">Share</th></tr></thead><tbody>
