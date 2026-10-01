@@ -135,6 +135,7 @@ export async function getTreasuryUnrealized({
   entity,
   asOf,
 }: GetUnrealizedParams): Promise<UnrealizedResponse> {
+  const startedAt = Date.now()
   const computedAt = new Date().toISOString()
 
   const asOfYm = asOf && YYYY_MM.test(asOf) ? asOf : null
@@ -150,8 +151,13 @@ export async function getTreasuryUnrealized({
   //    entity, so concat-and-feed is correct.
   const entitiesToFetch = entity === ALL_ENTITIES_SENTINEL ? [...ENTITIES] : [entity]
   const allTxs = (
-    await Promise.all(entitiesToFetch.map((e) => getTreasuryTransactionsAsc(e)))
+    await Promise.all(entitiesToFetch.map(async (e) => {
+      const txs = await getTreasuryTransactionsAsc(e)
+      console.info(`[unrealized] query ${e}: ${txs.length} tx in ${Date.now() - startedAt}ms`)
+      return txs
+    }))
   ).flat()
+  console.info(`[unrealized] entity=${entity} tx=${allTxs.length} queryMs=${Date.now() - startedAt}`)
 
   // monthsAvailable derives from ALL non-genesis blockTimes (genesis is a
   // synthetic basis row, not user-meaningful as a snapshot point).
@@ -171,6 +177,7 @@ export async function getTreasuryUnrealized({
   //    `unrealized` (we roll up from `openLots` ourselves so we can apply
   //    historical prices and compute lot-level detail).
   const { openLots: openLotsAtAsOf } = computeFIFOWithTrace(markSynthetic(txsAtAsOf), {})
+  console.info(`[unrealized] entity=${entity} lots=${openLotsAtAsOf.length} fifoMs=${Date.now() - startedAt}`)
 
   // 4. Same for priorAsOf when set — used only to compute priorValue per
   //    (walletAddr, asset). Skipped when not requested.
@@ -195,6 +202,7 @@ export async function getTreasuryUnrealized({
   //    - Falling back to live current price when asOf is the current month
   //      and historical isn't yet available.
   const { prices: livePrices, sources: liveSources, missing: missingLive } = await fetchPricesForAssets(assetsHeld, null)
+  console.info(`[unrealized] entity=${entity} assets=${assetsHeld.join(',')} pricesMs=${Date.now() - startedAt}`)
 
   let snapshotPrices = livePrices
   let snapshotSources: Record<string, PriceSourceTag> = liveSources

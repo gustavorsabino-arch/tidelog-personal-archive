@@ -158,7 +158,7 @@ export function UnrealizedPageClient({ initialEntity }: Props) {
         </div>
       </div>
 
-      {isLoading ? <LoadingSkeleton /> : error ? <div className="error-msg">{error}</div> : (
+      {error ? <div className="error-msg">{error}</div> : isLoading ? <LoadingSkeleton /> : (
         <>
           {missingPrices.length > 0 && (
             <div className="error-msg" style={{ marginBottom: 12 }}>
