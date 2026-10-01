@@ -40,7 +40,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ address:
     const walletResult = result.results?.[address]
     await logAudit({
       userId: user.id === 'dev-user' ? null : user.id,
-      action: 'admin.refetch_wallet.succeeded',
+      action: result.ok ? 'admin.refetch_wallet.succeeded' : 'admin.refetch_wallet.partial',
       resourceType: 'wallet',
       resourceId: address,
       metadata: {
@@ -53,12 +53,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ address:
     }).catch(() => {})
 
     return NextResponse.json({
-      ok: true,
+      ok: result.ok,
       walletAddr: address,
       inserted: result.inserted,
       mode: result.mode,
       elapsedMs: result.elapsedMs,
       result: walletResult ?? null,
+      gains: result.gains,
     })
   } catch (err) {
     const message = (err as Error).message

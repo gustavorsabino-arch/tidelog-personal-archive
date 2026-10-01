@@ -332,7 +332,8 @@ export default function WalletsPage() {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error ?? `HTTP ${res.status}`)
       }
-      const body = await res.json() as { wallets?: number; inserted?: number; failed?: number; elapsedMs?: number }
+      const body = await res.json() as { ok: boolean; wallets?: number; inserted?: number; failed?: number; gainsFailed?: number; elapsedMs?: number }
+      if (!body.ok) throw new Error(`Sync incomplete: ${body.failed ?? 0} wallet(s) and ${body.gainsFailed ?? 0} gain/loss update(s) failed.`)
       const sec = body.elapsedMs != null ? Math.max(1, Math.round(body.elapsedMs / 1000)) : null
       setNotice({
         type: 'success',

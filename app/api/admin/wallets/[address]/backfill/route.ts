@@ -69,6 +69,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ address
     })
     return NextResponse.json({ ok: false, error: errMsg, code: 'admin.backfill_failed' }, { status: 500 })
   }
+  if (!txResult.ok) {
+    return NextResponse.json({ ok: false, error: 'Transaction or gain/loss refresh was incomplete', details: txResult, code: 'admin.backfill_failed' }, { status: 500 })
+  }
 
   let balResult
   try {

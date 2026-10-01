@@ -51,6 +51,15 @@ test('accepts correct secret and returns job result', async () => {
   expect(body.processed).toBe(5)
 })
 
+test('reports an incomplete job as a failure', async () => {
+  const req = new Request('http://localhost/api/cron/test', {
+    headers: { authorization: 'Bearer correct-secret' },
+  })
+  const res = await runCron('test', req, async () => ({ ok: false, gainsFailed: 1 }))
+  expect(res.status).toBe(500)
+  expect((await res.json()).gainsFailed).toBe(1)
+})
+
 test('catches job errors and returns 500', async () => {
   const req = new Request('http://localhost/api/cron/test', {
     headers: { authorization: 'Bearer correct-secret' },

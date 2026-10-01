@@ -2,7 +2,7 @@ import { and, desc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { wallet, transaction } from '@/lib/db/schema'
 import { heliusRpc, heliusEnhanced, heliusGetTokenAccountsByOwner } from '@/lib/helius'
-import { FOCUS_SET, STABLE_TOKENS, getSym } from '@/lib/constants'
+import { ENTITIES, FOCUS_SET, STABLE_TOKENS, getSym } from '@/lib/constants'
 import { hydrateTransactionPrices } from '@/lib/transaction-pricing'
 import { recomputeEntityGains } from '@/lib/orca-gains-writer'
 import { toDisplayEntity } from '@/lib/entity'
@@ -414,7 +414,6 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
   const results: Record<string, WalletResult> = {}
   let totalInserted = 0
   let failed = 0
-  const entitiesWithInserts = new Set<string>()
 
   // Per-run price cache, shared across all wallets and pages. Keyed by
   // `${asset}::${blockTimeSec}` — point-in-time prices deduped within the run.
@@ -431,7 +430,6 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
       const r = await processWallet(w, { ...opts, logPrefix, priceCache })
       results[w.address] = r
       totalInserted += r.inserted
-      if (r.inserted > 0) entitiesWithInserts.add(w.entityId)
     } catch (err) {
       results[w.address] = {
         ok: false,
@@ -445,9 +443,12 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
     }
   }
 
+  // A previous run may have inserted transactions but failed before refreshing
+  // FIFO. Always reconcile derived SOL/ORCA rows, even when this fetch finds
+  // no new moves. Unrealized reads transactions directly on each request.
   const gainsResults: { entity: string; totals: Record<string, number>; error?: string }[] = []
-  for (const dbEntity of entitiesWithInserts) {
-    const displayEntity = toDisplayEntity(dbEntity)
+  const gainEntities = opts.walletAddr ? [toDisplayEntity(wallets[0].entityId)] : ENTITIES
+  for (const displayEntity of gainEntities) {
     try {
       const { totals } = await recomputeEntityGains(displayEntity)
       gainsResults.push({ entity: displayEntity, totals })
@@ -459,5 +460,16 @@ export async function fetchTransactionsJob(opts: { full?: boolean; walletAddr?: 
 
   const elapsedMs = Date.now() - jobStartedAt
   console.log(`[fetch-tx] job done: ${wallets.length} wallets, ${totalInserted} rows inserted, ${failed} failed, ${elapsedMs}ms`)
-  return { ok: true, wallets: wallets.length, inserted: totalInserted, failed, mode: opts.full ? 'full' : 'incremental', elapsedMs, results }
+  const gainsFailed = gainsResults.filter(g => g.error).length
+  return {
+    ok: failed === 0 && gainsFailed === 0,
+    wallets: wallets.length,
+    inserted: totalInserted,
+    failed,
+    gainsFailed,
+    gains: gainsResults,
+    mode: opts.full ? 'full' : 'incremental',
+    elapsedMs,
+    results,
+  }
 }

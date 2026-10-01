@@ -48,10 +48,10 @@ export async function runCron(
   try {
     const result = await job()
     await logAudit({
-      action: `cron.${name}.succeeded`,
+      action: `cron.${name}.${result.ok ? 'succeeded' : 'failed'}`,
       metadata: { durationMs: Date.now() - startedAt, ...result },
     })
-    return NextResponse.json(result)
+    return NextResponse.json(result, { status: result.ok ? 200 : 500 })
   } catch (err) {
     const msg = (err as Error).message
     await logAudit({

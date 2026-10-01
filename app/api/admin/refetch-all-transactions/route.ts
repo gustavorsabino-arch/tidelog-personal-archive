@@ -2,8 +2,6 @@ import { NextResponse } from 'next/server'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { logAudit } from '@/lib/audit'
 import { fetchTransactionsJob } from '@/lib/cron/fetch-transactions'
-import { recomputeEntityGains } from '@/lib/orca-gains-writer'
-import { ENTITIES } from '@/lib/constants'
 
 /**
  * GET /api/admin/refetch-all-transactions
@@ -32,29 +30,9 @@ export async function GET(req: Request) {
   try {
     const result = await fetchTransactionsJob()
 
-    // Defense-in-depth: ALWAYS recompute FIFO gains for every entity, not
-    // just those the fetch inserted new rows for. Fixes the drift observed
-    // 2026-08 where the ORCA Ledger showed txns with balanceAfter=0 because
-    // fetchTransactionsJob only recomputes when its own inserts touched the
-    // entity — a stale ledger from a broken previous cron never
-    // self-heals. Cron path (fetch-transactions.ts) is untouched.
-    // Errors here are per-entity swallowed — they don't fail the whole
-    // refetch, which already succeeded.
-    const recomputeStarted = Date.now()
-    const gainsResults: Record<string, { totals?: Record<string, number>; error?: string }> = {}
-    for (const entity of ENTITIES) {
-      try {
-        const { totals } = await recomputeEntityGains(entity)
-        gainsResults[entity] = { totals }
-      } catch (err) {
-        gainsResults[entity] = { error: (err as Error).message }
-      }
-    }
-    const recomputeMs = Date.now() - recomputeStarted
-
     await logAudit({
       userId: user.id === 'dev-user' ? null : user.id,
-      action: 'admin.refetch_all_transactions.succeeded',
+      action: result.ok ? 'admin.refetch_all_transactions.succeeded' : 'admin.refetch_all_transactions.partial',
       resourceType: 'transaction',
       resourceId: 'all',
       metadata: {
@@ -63,23 +41,20 @@ export async function GET(req: Request) {
         inserted: result.inserted,
         wallets: result.wallets,
         failed: result.failed,
-        gainsRecomputeMs: recomputeMs,
-        gainsResults,
+        gainsResults: result.gains,
       },
     }).catch(() => {})
 
     return NextResponse.json({
-      ok: true,
+      ok: result.ok,
       wallets: result.wallets,
       inserted: result.inserted,
       failed: result.failed,
       mode: result.mode,
       elapsedMs: result.elapsedMs,
       results: result.results,
-      gains: {
-        elapsedMs: recomputeMs,
-        results: gainsResults,
-      },
+      gains: result.gains,
+      gainsFailed: result.gainsFailed,
     })
   } catch (err) {
     const message = (err as Error).message

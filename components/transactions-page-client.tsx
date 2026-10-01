@@ -94,10 +94,19 @@ export function TransactionsPageClient({
     setSyncing(true)
     setSyncNote('Syncing from the blockchain — this can take a few minutes…')
     try {
-      const res = await apiFetch<{ ok: boolean; inserted?: number; failed?: number }>(
+      const res = await apiFetch<{
+        ok: boolean; inserted?: number; failed?: number; gainsFailed?: number;
+        gains?: { entity: string; error?: string }[]
+      }>(
         '/api/admin/cron/fetch-transactions',
         { method: 'POST' },
       )
+      if (!res.ok) {
+        const gainErrors = res.gains?.filter(g => g.error).map(g => `${g.entity}: ${g.error}`).join('; ')
+        setSyncNote(`✗ Sync incomplete — ${res.inserted ?? 0} transactions inserted, ${res.failed ?? 0} wallets failed, ${res.gainsFailed ?? 0} gain/loss updates failed${gainErrors ? `. ${gainErrors}` : ''}.`)
+        setSyncing(false)
+        return
+      }
       setSyncNote(`✓ Sync finished — ${res.inserted ?? 0} new transactions${res.failed ? `, ${res.failed} wallet(s) failed` : ''}. Reloading…`)
       setTimeout(() => window.location.reload(), 1800)
     } catch (e) {
