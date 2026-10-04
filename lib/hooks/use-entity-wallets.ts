@@ -16,7 +16,7 @@ export const WALLETS_KEY = '/api/wallets'
 
 export type WalletOption = { value: string; label: string }
 
-export function useEntityWallets(entity: string): {
+export function useEntityWallets(entity: string, internalOnly = false): {
   options: WalletOption[]
   loading: boolean
 } {
@@ -32,10 +32,10 @@ export function useEntityWallets(entity: string): {
   const options = useMemo<WalletOption[]>(
     () =>
       (data?.wallets ?? [])
-        .filter((w) => w.entity === entity)
+        .filter((w) => w.entity === entity && (!internalOnly || (w.type === 'internal' && !w.hiddenFromFinance)))
         .sort((a, b) => a.label.localeCompare(b.label))
         .map((w) => ({ value: w.address, label: w.label })),
-    [data, entity],
+    [data, entity, internalOnly],
   )
 
   return { options, loading: isLoading }

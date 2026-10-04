@@ -190,7 +190,7 @@ export function TransactionsPageClient({
   // Pagination — offset into the server-side sorted result set
   const [offset, setOffset] = useState(0)
 
-  const { options: walletOptions } = useEntityWallets(entity)
+  const { options: walletOptions } = useEntityWallets(entity, true)
   const { years: yearOptions, byYear: monthsByYear } = useTransactionMonths(entity)
 
   // Wave 2b — QB account catalog for the Counterparty GL dropdown.

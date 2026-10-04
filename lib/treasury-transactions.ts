@@ -208,7 +208,18 @@ export async function getTreasuryTransactions({
   await ensureApprovalsSchema().catch(() => {})
   const hasCpGlSnapshot = await hasPostedCounterpartyGlColumn().catch(() => false)
 
-  const conditions = [eq(transaction.entityId, toDbEntity(entity))]
+  // Fetching stops when a wallet becomes external, but its historical rows
+  // remain for audit. Only currently managed wallets belong in Transactions.
+  // Keep this in the shared WHERE so the page, count and totals agree.
+  const ownedWallet = alias(wallet, 'owned_wallet_filter')
+  const conditions = [
+    eq(transaction.entityId, toDbEntity(entity)),
+    exists(db.select({ x: sql`1` }).from(ownedWallet).where(and(
+      eq(ownedWallet.address, transaction.walletAddress),
+      eq(ownedWallet.type, 'internal'),
+      eq(ownedWallet.hiddenFromFinance, false),
+    ))),
+  ]
 
   const fromTs = from ? Number.parseInt(from, 10) : 0
   const toTs = to ? Number.parseInt(to, 10) : 0
