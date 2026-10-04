@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { transaction, txQbState, qbPost } from '@/lib/db/schema'
 import { logAudit } from '@/lib/audit'
 import { errorMessage } from '@/lib/errors'
+import { effectiveInternalPostId } from '@/lib/qb/internal-transfer'
 
 // PATCH /api/treasury/transactions/[id]/qb-state
 //   Body: any subset of { description, glAccountOverride, counterpartyGlOverride }
@@ -136,17 +137,10 @@ async function patchImpl(req: NextRequest, ctx: { params: Promise<{ id: string }
 
   if (isMaterialEdit || isDescriptionOnly) {
     const [row] = await db
-      .select({ postId: txQbState.postId, postingStatus: qbPost.postingStatus })
-      .from(txQbState)
-      .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
-      .where(
-        and(
-          eq(txQbState.txHash, t.txHash),
-          eq(txQbState.walletAddress, t.walletAddress),
-          eq(txQbState.direction, t.direction),
-          eq(txQbState.asset, t.asset),
-        ),
-      )
+      .select({ postId: qbPost.id, postingStatus: qbPost.postingStatus })
+      .from(transaction)
+      .leftJoin(qbPost, eq(qbPost.id, effectiveInternalPostId()))
+      .where(eq(transaction.id, id))
       .limit(1)
 
     if (row?.postId && row.postingStatus === 'posted') {

@@ -3,6 +3,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { db } from '@/lib/db'
 import { transaction, txQbState, qbPost } from '@/lib/db/schema'
+import { effectiveInternalPostId } from '@/lib/qb/internal-transfer'
 import { logAudit } from '@/lib/audit'
 
 const MAX_BULK = 1000
@@ -143,17 +144,10 @@ export async function PATCH(req: NextRequest) {
       // Material edit: flip any linked posted qb_post to posted_modified
       // vendorOverride + classOverride are always material (same rule as single route)
       const [row] = await tx
-        .select({ postId: txQbState.postId, postingStatus: qbPost.postingStatus })
-        .from(txQbState)
-        .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
-        .where(
-          and(
-            eq(txQbState.txHash, t.txHash),
-            eq(txQbState.walletAddress, t.walletAddress),
-            eq(txQbState.direction, t.direction),
-            eq(txQbState.asset, t.asset),
-          ),
-        )
+        .select({ postId: qbPost.id, postingStatus: qbPost.postingStatus })
+        .from(transaction)
+        .leftJoin(qbPost, eq(qbPost.id, effectiveInternalPostId()))
+        .where(eq(transaction.id, t.id))
         .limit(1)
 
       if (row?.postId && row.postingStatus === 'posted') {

@@ -6,6 +6,7 @@ import { STABLE_TOKENS } from '@/lib/constants'
 import { toDbEntity, toDisplayEntity } from '@/lib/entity'
 import { defaultDescription } from '@/lib/qb-state'
 import { resolveWalletGl } from '@/lib/qb/resolve-wallet-gl'
+import { effectiveInternalPostId } from '@/lib/qb/internal-transfer'
 import { loadPostingHistory, historyKey, type PostingHistoryEntry } from '@/lib/qb/posting-history'
 import { ensureApprovalsSchema, hasPostedCounterpartyGlColumn } from '@/lib/db/approvals-schema'
 import type { Transaction, TransactionsResponse } from '@/lib/types'
@@ -236,28 +237,22 @@ export async function getTreasuryTransactions({
   // doesn't collide with the page query's own tx_qb_state/qb_post joins). This
   // keeps page + count + summary consistent under the single shared `where`.
   if (qbStatus) {
-    const s = alias(txQbState, 'tx_qb_state_sf')
     const p = alias(qbPost, 'qb_post_sf')
-    const corr = and(
-      eq(s.txHash, transaction.txHash),
-      eq(s.walletAddress, transaction.walletAddress),
-      eq(s.direction, transaction.direction),
-      eq(s.asset, transaction.asset),
-    )
+    const linked = eq(p.id, effectiveInternalPostId())
     if (qbStatus === 'unposted') {
       // Unposted = no linked qb_post with a non-'unposted' status (the UI renders
       // null and 'unposted' identically).
       conditions.push(
         notExists(
-          db.select({ x: sql`1` }).from(s).innerJoin(p, eq(p.id, s.postId))
-            .where(and(corr, ne(p.postingStatus, 'unposted'))),
+          db.select({ x: sql`1` }).from(p)
+            .where(and(linked, ne(p.postingStatus, 'unposted'))),
         ),
       )
     } else {
       conditions.push(
         exists(
-          db.select({ x: sql`1` }).from(s).innerJoin(p, eq(p.id, s.postId))
-            .where(and(corr, eq(p.postingStatus, qbStatus))),
+          db.select({ x: sql`1` }).from(p)
+            .where(and(linked, eq(p.postingStatus, qbStatus))),
         ),
       )
     }
@@ -387,7 +382,7 @@ export async function getTreasuryTransactions({
     // Two-hop reach to qb_post: tx_qb_state holds the post_id FK. We already
     // LEFT JOIN tx_qb_state above on the tx's PK columns, so chaining here
     // gives us posting metadata for the row (or null if no qb_post linked).
-    .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
+    .leftJoin(qbPost, eq(qbPost.id, effectiveInternalPostId()))
     // Per-(wallet, token) GL mapping. PK is (walletAddress, tokenSymbol) so
     // each transaction row joins at most one row — no fan-out.
     .leftJoin(

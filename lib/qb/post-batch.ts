@@ -32,6 +32,7 @@ import { loadPostingHistory, historyKey, type PostingHistoryEntry } from './post
 import { defaultDescription } from '@/lib/qb-state'
 import { fmtNum } from '@/lib/format'
 import { STABLE_TOKENS } from '../constants.ts'
+import { isInternalTransferPair, type InternalTransferLeg } from './internal-transfer-match'
 
 // D13 — server-enforced hard cap. Mirror of the UI cap in
 // components/transactions-page-client.tsx; rejecting a >50 request here is
@@ -130,6 +131,7 @@ type LoadedTx = {
   // Resolved to QB Ids at post time via the catalog maps.
   effectiveVendor: string | null
   effectiveClass: string | null
+  internalPeer: { id: string; walletAddress: string; direction: 'in' | 'out'; postId: string | null; status: string | null; linkable: boolean } | null
 }
 
 async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
@@ -285,6 +287,7 @@ async function loadTxs(txIds: string[]): Promise<LoadedTx[]> {
     // time via catalog maps in postBatch.
     effectiveVendor: r.qbState?.vendorOverride ?? r.counterpartyVendorName ?? hist?.vendor ?? null,
     effectiveClass: r.qbState?.classOverride ?? r.counterpartyClassName ?? hist?.className ?? null,
+    internalPeer: null,
     // Override → computed default. Default mirrors lib/treasury-transactions
     // exactly (dir capitalized, qty abs, stable-token usd falls back to |qty|)
     // so the posted description equals the list's descriptionDefault.
@@ -447,11 +450,70 @@ export async function buildPostPlan(args: {
     )
   }
 
+  // Look up the reciprocal wallet leg once per hash. The hash alone can
+  // contain swaps or multiple movements; the matcher also checks the asset,
+  // entity, reversed addresses/direction and amount. Both preview and posting
+  // use this guard, including historical JEs linked to only one wallet.
+  const hashes = [...new Set(txs.map((t) => t.txHash))]
+  const peerRows = await db.select({
+    txn: transaction,
+    walletGl: wallet.accountCode,
+    overrideGl: txQbState.glAccountOverride,
+    tokenGl: walletTokenAccountCode.accountCode,
+    postId: txQbState.postId,
+    status: qbPost.postingStatus,
+  }).from(transaction)
+    .leftJoin(wallet, eq(wallet.address, transaction.walletAddress))
+    .leftJoin(txQbState, and(
+      eq(txQbState.txHash, transaction.txHash),
+      eq(txQbState.walletAddress, transaction.walletAddress),
+      eq(txQbState.direction, transaction.direction),
+      eq(txQbState.asset, transaction.asset),
+    ))
+    .leftJoin(walletTokenAccountCode, and(
+      eq(walletTokenAccountCode.walletAddress, transaction.walletAddress),
+      eq(walletTokenAccountCode.tokenSymbol, transaction.asset),
+    ))
+    .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
+    .where(inArray(transaction.txHash, hashes))
+
+  for (const t of txs) {
+    const leg: InternalTransferLeg = {
+      id: t.id, txHash: t.txHash, entityId: t.entityId,
+      walletAddress: t.walletAddress, counterpartyAddress: t.counterpartyAddress,
+      direction: t.direction, asset: t.asset, qty: t.qty, usd: t.usd,
+    }
+    const matching = peerRows.filter((p) => isInternalTransferPair(leg, {
+      id: p.txn.id, txHash: p.txn.txHash, entityId: p.txn.entityId,
+      walletAddress: p.txn.walletAddress, counterpartyAddress: p.txn.counterparty,
+      direction: p.txn.direction, asset: p.txn.asset,
+      qty: Number(p.txn.qty), usd: p.txn.usd == null ? null : Number(p.txn.usd),
+    }))
+    if (matching.length !== 1) continue
+    const p = matching[0]
+    const peerGl = resolveWalletGl({ override: p.overrideGl, perToken: p.tokenGl, default: p.walletGl }).code
+    const ownGl = resolveWalletGl({ override: t.glAccountOverride, perToken: t.perTokenAccountCode, default: t.walletAccountCode }).code
+    const cpGl = t.counterpartyGlOverride ?? t.counterpartyGlMapValue
+    t.internalPeer = { id: p.txn.id, walletAddress: p.txn.walletAddress,
+      direction: p.txn.direction, postId: p.postId, status: p.status,
+      // Guard against posting a JE whose counterparty line is not the other
+      // tracked wallet GL. Existing peer posts still block duplication.
+      linkable: Boolean(peerGl && ownGl && cpGl && peerGl === cpGl) }
+  }
+
   // Partition into skipped / eligible (D5: GL required; D14: voided posts are
   // re-eligible via post-batch — they get a NEW qb_post row).
   const skipped: PostBatchResult['skipped'] = []
   const eligible: LoadedTx[] = []
   for (const t of txs) {
+    if (t.internalPeer?.postId && ['unposted', 'posted', 'posted_modified', 'posted_manually'].includes(t.internalPeer.status ?? '')) {
+      skipped.push({ txId: t.id, reason: 'internal transfer already linked to a QuickBooks journal entry' })
+      continue
+    }
+    if (t.internalPeer && !t.internalPeer.linkable) {
+      skipped.push({ txId: t.id, reason: 'internal transfer wallet GL does not match the counterparty GL — review mappings' })
+      continue
+    }
     const walletGl = resolveWalletGl({
       override: t.glAccountOverride,
       perToken: t.perTokenAccountCode,
@@ -495,10 +557,21 @@ export async function buildPostPlan(args: {
     eligible.push(t)
   }
 
+  // When both wallet views were selected, emit just one JE. The other wallet
+  // will be linked to that same qb_post at reservation time.
+  const eligibleIds = new Set(eligible.map((t) => t.id))
+  const uniqueEligible = eligible.filter((t) => {
+    if (t.internalPeer?.linkable && eligibleIds.has(t.internalPeer.id) && t.id > t.internalPeer.id) {
+      skipped.push({ txId: t.id, reason: 'included in the matching internal transfer' })
+      return false
+    }
+    return true
+  })
+
   // Partition eligible into bulk (grouped by wallet+token+month) vs individual
   // (one group per tx).
-  const bulkEligible = eligible.filter((t) => t.walletIsBulkTreasury)
-  const individualEligible = eligible.filter((t) => !t.walletIsBulkTreasury)
+  const bulkEligible = uniqueEligible.filter((t) => t.walletIsBulkTreasury)
+  const individualEligible = uniqueEligible.filter((t) => !t.walletIsBulkTreasury)
   const groups: GroupSpec[] = [
     ...groupBulkTxs(bulkEligible),
     ...individualEligible.map((tx): IndividualGroup => ({ kind: 'individual', tx })),
@@ -643,6 +716,31 @@ async function linkGroupMembers(
 ): Promise<void> {
   const members = group.kind === 'individual' ? [group.tx] : group.members
   for (const m of members) {
+    const [own] = await tx.select({ postId: txQbState.postId, status: qbPost.postingStatus })
+      .from(txQbState).leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
+      .where(and(eq(txQbState.txHash, m.txHash),
+        eq(txQbState.walletAddress, m.walletAddress),
+        eq(txQbState.direction, m.direction), eq(txQbState.asset, m.asset))).limit(1)
+    if (own?.postId && ['unposted', 'posted', 'posted_modified', 'posted_manually'].includes(own.status ?? '')) {
+      throw new Error('Transaction already linked to a QuickBooks journal entry')
+    }
+    const peer = m.internalPeer?.linkable ? m.internalPeer : null
+    if (peer) {
+      // Recheck under the entity/month advisory lock. A second request may
+      // have reserved the reciprocal leg after the preview was loaded.
+      const [current] = await tx.select({ postId: txQbState.postId, status: qbPost.postingStatus })
+        .from(txQbState)
+        .leftJoin(qbPost, eq(qbPost.id, txQbState.postId))
+        .where(and(
+          eq(txQbState.txHash, m.txHash),
+          eq(txQbState.walletAddress, peer.walletAddress),
+          eq(txQbState.direction, peer.direction),
+          eq(txQbState.asset, m.asset),
+        )).limit(1)
+      if (current?.postId && ['unposted', 'posted', 'posted_modified', 'posted_manually'].includes(current.status ?? '')) {
+        throw new Error('Internal transfer already linked to a QuickBooks journal entry')
+      }
+    }
     await tx
       .insert(txQbState)
       .values({
@@ -682,6 +780,29 @@ async function linkGroupMembers(
            AND "direction" = ${m.direction}
            AND "asset" = ${m.asset}
       `)
+    }
+    if (peer) {
+      // Both wallet views point at the same JE. It already contains the debit
+      // and credit for their two GLs; creating another JE would double count.
+      await tx.insert(txQbState).values({
+        txHash: m.txHash, walletAddress: peer.walletAddress,
+        direction: peer.direction, asset: m.asset, entityId: m.entityId,
+        postId: pendingId,
+        postedGlAccount: m.counterpartyGlOverride ?? m.counterpartyGlMapValue,
+        updatedAt: new Date(), updatedBy: userId,
+      }).onConflictDoUpdate({
+        target: [txQbState.txHash, txQbState.walletAddress, txQbState.direction, txQbState.asset],
+        set: { postId: pendingId,
+          postedGlAccount: m.counterpartyGlOverride ?? m.counterpartyGlMapValue,
+          updatedAt: new Date(), updatedBy: userId },
+      })
+      if (writeCpGlSnapshot) {
+        await tx.execute(sql`
+          UPDATE "app"."tx_qb_state" SET "posted_counterparty_gl" = ${m.walletGl}
+          WHERE "tx_hash" = ${m.txHash} AND "wallet_address" = ${peer.walletAddress}
+            AND "direction" = ${peer.direction} AND "asset" = ${m.asset}
+        `)
+      }
     }
   }
 }
