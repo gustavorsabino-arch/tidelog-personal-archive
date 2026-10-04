@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { asc, eq, sql } from 'drizzle-orm'
+import { asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { vendorDefault } from '@/lib/db/schema'
 import { requirePermission } from '@/lib/auth/require-permission'
 import { ensureApprovalsSchema } from '@/lib/db/approvals-schema'
 import { logAudit } from '@/lib/audit'
-import { VENDOR_SEED } from '@/lib/vendors/seed-data'
+import { seedVendorDefaultsIfEmpty } from '@/lib/vendors/defaults'
 
 export const runtime = 'nodejs'
 
@@ -19,28 +19,13 @@ export const runtime = 'nodejs'
  * DELETE ?name=… — remove
  */
 
-async function seedIfEmpty(): Promise<number> {
-  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(vendorDefault)
-  if (n > 0) return 0
-  await db.insert(vendorDefault)
-    .values(VENDOR_SEED.map((v) => ({
-      vendorName: v.vendorName,
-      glAccount: v.glAccount,
-      glAccountName: v.glAccountName,
-      className: v.className,
-      updatedBy: 'book12-seed',
-    })))
-    .onConflictDoNothing()
-  return VENDOR_SEED.length
-}
-
 export async function GET(req: NextRequest) {
   const { deny } = await requirePermission('admin:manage_data', req)
   if (deny) return deny
 
   try {
     await ensureApprovalsSchema().catch(() => {})
-    const seeded = await seedIfEmpty()
+    const seeded = await seedVendorDefaultsIfEmpty()
     const vendors = await db.select().from(vendorDefault).orderBy(asc(vendorDefault.vendorName))
     return NextResponse.json({ vendors, seeded })
   } catch (err) {

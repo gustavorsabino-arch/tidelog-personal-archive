@@ -222,21 +222,6 @@ export function TransactionsPageClient({
     [allClasses],
   )
 
-  // Vendor master (Book12): vendor → GL account + class defaults. Picking a
-  // vendor auto-fills class + counterparty GL from here (into EMPTY slots
-  // only — an explicit override on the row is never clobbered).
-  const { data: vendorMasterData } = useSWR<{ vendors: { vendorName: string; glAccount: string; className: string | null }[] }>(
-    '/api/vendors',
-    apiFetch,
-  )
-  const vendorMaster = useMemo(() => {
-    const m = new Map<string, { glAccount: string; className: string | null }>()
-    for (const v of vendorMasterData?.vendors ?? []) {
-      m.set(v.vendorName.toLowerCase(), { glAccount: v.glAccount, className: v.className })
-    }
-    return m
-  }, [vendorMasterData])
-
   // Tracks the in-flight request so a newer fetch can cancel an older one.
   // Without this, responses can arrive out of order: e.g. selecting a year
   // fires a heavy "whole year" request, then selecting a month fires a light
@@ -384,12 +369,14 @@ export function TransactionsPageClient({
     try {
       const body: Record<string, unknown> = { txIds }
       for (const [k, v] of provided) body[k] = v === '' ? null : v
-      await apiFetch('/api/treasury/transactions/bulk-qb-state', {
+      const saved = await apiFetch<{ vendorMappingMissing: boolean }>('/api/treasury/transactions/bulk-qb-state', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       })
-      setRowError(null)
+      setRowError(saved.vendorMappingMissing
+        ? `Vendor “${body.vendorOverride}” was saved, but has no matching GL/Class in Vendors / Apps.`
+        : null)
       setEditModalOpen(false)
       setEditDraft({
         glAccountOverride: EDIT_UNCHANGED,
@@ -956,6 +943,7 @@ export function TransactionsPageClient({
           defaultValue={t.counterpartyVendorName ?? undefined}
           options={vendorOptions}
           placeholder="— vendor"
+          alwaysSave
           onSave={async (next) => {
             if (!t.id) {
               console.error('cannot save: transaction has no id', t)
@@ -968,20 +956,14 @@ export function TransactionsPageClient({
               )
               if (!ok) throw new Error('Save cancelled')
             }
-            // Vendor master auto-fill: picking a vendor that exists in
-            // Vendors brings its class + counterparty GL ALONG, replacing
-            // whatever the row showed before — the explicit pick carries the
-            // intent (GitHub → Timescale must not keep GitHub's class/GL).
-            // Fields the master does not define stay untouched.
-            const patchBody: Record<string, unknown> = { vendorOverride: next }
-            const master = next ? vendorMaster.get(next.toLowerCase()) : undefined
-            if (master?.className) patchBody.classOverride = master.className
-            if (master?.glAccount && t.counterparty) patchBody.counterpartyGlOverride = master.glAccount
-            await apiFetch(`/api/treasury/transactions/${t.id}/qb-state`, {
+            // The server reads the master at save time and writes vendor,
+            // class and GL together, even if this browser has no master cache.
+            const saved = await apiFetch<{ vendorDefaults: { glAccount: string; className: string | null } | null; vendorMappingMissing: boolean }>(`/api/treasury/transactions/${t.id}/qb-state`, {
               method: 'PATCH',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify(patchBody),
+              body: JSON.stringify({ vendorOverride: next }),
             })
+            const master = saved.vendorDefaults
             // Memorize for the future (same auto-memorize pattern as the GL
             // cell) so sibling and FUTURE rows of this counterparty inherit
             // vendor, class and GL immediately — not only after posting.
@@ -1009,7 +991,10 @@ export function TransactionsPageClient({
                 }),
               }).catch(() => {}) // memorization is best-effort
             }
-            fetchTransactions(offset)
+            setRowError(saved.vendorMappingMissing
+              ? `Vendor “${next}” was saved, but has no matching GL/Class in Vendors / Apps. Add its mapping there to fill those columns.`
+              : null)
+            await fetchTransactions(offset)
           }}
         />
       ),
@@ -1281,10 +1266,6 @@ export function TransactionsPageClient({
     ]
   }, [
     yearFilter, monthStartMs, fetchTransactions, offset, glOptions, vendorOptions, classOptions,
-    // Vendor cell's onSave reads the Book12 master for auto-fill — without
-    // this dep the closure keeps the pre-load EMPTY map and the first pick
-    // after page load silently skips the auto-fill.
-    vendorMaster,
     // Selection column re-renders when selection or visible-row state changes.
     selectedIds, allVisibleSelected, someVisibleSelected, visibleSelectableIds,
     toggleSelect, toggleSelectAllVisible,
@@ -1457,17 +1438,16 @@ export function TransactionsPageClient({
                         }
                         setBulkBusy(true)
                         try {
-                          // NO vendor-master class rider here: bulk applies
-                          // fields unconditionally to every row, so a class
-                          // ride-along would clobber hand-set per-row class
-                          // overrides (the single-cell path fills empty slots
-                          // only). Use the explicit "Set class…" control.
-                          await apiFetch('/api/treasury/transactions/bulk-qb-state', {
+                          // The server applies this vendor's finance-master
+                          // class/GL to each selected row in the same write.
+                          const saved = await apiFetch<{ vendorMappingMissing: boolean }>('/api/treasury/transactions/bulk-qb-state', {
                             method: 'PATCH',
                             headers: { 'content-type': 'application/json' },
                             body: JSON.stringify({ txIds, vendorOverride: next }),
                           })
-                          setRowError(null)
+                          setRowError(saved.vendorMappingMissing
+                            ? `Vendor “${next}” was saved, but has no matching GL/Class in Vendors / Apps.`
+                            : null)
                           fetchTransactions(offset)
                         } catch (err) {
                           setRowError(`Bulk vendor update failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1787,8 +1767,8 @@ export function TransactionsPageClient({
               <div>
                 <span className="modal-title">Edit {selectedIds.size} selected transaction{selectedIds.size === 1 ? '' : 's'}</span>
                 <div className="modal-sub" style={{ marginTop: 4 }}>
-                  Applies ONLY to the selected rows — nothing is memorized as a default,
-                  so other months are untouched.
+                  Applies only to selected rows. Picking a mapped Vendor also
+                  fills its Class and Counterparty GL on those rows.
                 </div>
               </div>
               <button className="modal-close" onClick={() => { if (!editBusy) setEditModalOpen(false) }} aria-label="Close">×</button>
@@ -1815,7 +1795,7 @@ export function TransactionsPageClient({
                 </label>
               ))}
               <div style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>
-                Fields left as “unchanged” are not touched. Posted rows in the selection
+                Other fields left as “unchanged” are not touched. Posted rows
                 will be marked stale and need re-posting.
               </div>
             </div>

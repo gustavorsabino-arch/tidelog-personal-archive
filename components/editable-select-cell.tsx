@@ -13,14 +13,15 @@ type Props = {
   options: SelectOption[]
   placeholder?: string
   disabled?: boolean
+  alwaysSave?: boolean                    // reapply a mapped vendor already selected
   // null means "clear my per-tx override; fall back to the default"
   onSave: (next: string | null) => Promise<void>
 }
 
 export function EditableSelectCell({
-  value, defaultValue, options, placeholder = '—', disabled, onSave,
+  value, defaultValue, options, placeholder = '—', disabled, alwaysSave = false, onSave,
 }: Props) {
-  const s = useEditableCellState({ value, defaultValue, onSave })
+  const s = useEditableCellState({ value, defaultValue, onSave, alwaysSave })
   const [query, setQuery] = useState('')
   const [highlightedIdx, setHighlightedIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)

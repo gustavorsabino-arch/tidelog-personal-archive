@@ -6,6 +6,7 @@ import { transaction, txQbState, qbPost } from '@/lib/db/schema'
 import { logAudit } from '@/lib/audit'
 import { errorMessage } from '@/lib/errors'
 import { effectiveInternalPostId } from '@/lib/qb/internal-transfer'
+import { findVendorDefaults } from '@/lib/vendors/defaults'
 
 // PATCH /api/treasury/transactions/[id]/qb-state
 //   Body: any subset of { description, glAccountOverride, counterpartyGlOverride }
@@ -81,6 +82,8 @@ async function patchImpl(req: NextRequest, ctx: { params: Promise<{ id: string }
     return NextResponse.json({ error: 'transaction not found' }, { status: 404 })
   }
   const t = txRow[0]
+  const selectedVendor = parsed.find(p => p.key === 'vendorOverride' && p.provided)?.value
+  const vendorDefaults = selectedVendor ? await findVendorDefaults(selectedVendor) : null
   const now = new Date()
   const updatedBy = user?.id ?? null
 
@@ -88,6 +91,14 @@ async function patchImpl(req: NextRequest, ctx: { params: Promise<{ id: string }
   const setMap: Record<string, unknown> = { updatedAt: now, updatedBy }
   for (const p of parsed) {
     if (p.provided) setMap[p.key] = p.value
+  }
+  if (vendorDefaults) {
+    if (!parsed.some(p => p.key === 'classOverride' && p.provided) && vendorDefaults.className) {
+      setMap.classOverride = vendorDefaults.className
+    }
+    if (t.counterparty && !parsed.some(p => p.key === 'counterpartyGlOverride' && p.provided)) {
+      setMap.counterpartyGlOverride = vendorDefaults.glAccount
+    }
   }
 
   // Build insert values — provided fields use the value, non-provided default to null
@@ -109,6 +120,10 @@ async function patchImpl(req: NextRequest, ctx: { params: Promise<{ id: string }
   for (const p of parsed) {
     if (p.provided) insertValues[p.key] = p.value
   }
+  if (vendorDefaults) {
+    if ('classOverride' in setMap) insertValues.classOverride = setMap.classOverride
+    if ('counterpartyGlOverride' in setMap) insertValues.counterpartyGlOverride = setMap.counterpartyGlOverride
+  }
 
   await db.insert(txQbState)
     .values(insertValues as typeof txQbState.$inferInsert)
@@ -122,7 +137,7 @@ async function patchImpl(req: NextRequest, ctx: { params: Promise<{ id: string }
     action: 'tx_qb_state.update',
     resourceType: 'transaction',
     resourceId: id,
-    metadata: { fields: parsed.filter(p => p.provided).map(p => p.key) },
+    metadata: { fields: Object.keys(setMap).filter(k => k !== 'updatedAt' && k !== 'updatedBy'), vendorMappingMissing: !!selectedVendor && !vendorDefaults },
   }).catch(() => { /* swallow */ })
 
   // Two-tier dirty marker (D3): material edits on a posted row flip status
@@ -173,5 +188,5 @@ async function patchImpl(req: NextRequest, ctx: { params: Promise<{ id: string }
     }
   }
 
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({ ok: true, vendorDefaults, vendorMappingMissing: !!selectedVendor && !vendorDefaults })
 }

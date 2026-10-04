@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { transaction, txQbState, qbPost } from '@/lib/db/schema'
 import { effectiveInternalPostId } from '@/lib/qb/internal-transfer'
 import { logAudit } from '@/lib/audit'
+import { findVendorDefaults } from '@/lib/vendors/defaults'
 
 const MAX_BULK = 1000
 export const maxDuration = 300
@@ -87,6 +88,10 @@ export async function PATCH(req: NextRequest) {
   }
 
   const providedFields = parsed.filter(p => p.provided)
+  const selectedVendor = parsed.find(p => p.key === 'vendorOverride' && p.provided)?.value
+  const vendorDefaults = selectedVendor ? await findVendorDefaults(selectedVendor) : null
+  const hasClassOverride = providedFields.some(p => p.key === 'classOverride')
+  const hasCounterpartyOverride = providedFields.some(p => p.key === 'counterpartyGlOverride')
 
   // Fetch all requested transactions in one query
   const txRows = await db
@@ -115,6 +120,10 @@ export async function PATCH(req: NextRequest) {
       for (const p of providedFields) {
         setMap[p.key] = p.value
       }
+      if (vendorDefaults) {
+        if (!hasClassOverride && vendorDefaults.className) setMap.classOverride = vendorDefaults.className
+        if (t.counterparty && !hasCounterpartyOverride) setMap.counterpartyGlOverride = vendorDefaults.glAccount
+      }
 
       const insertValues: Record<string, unknown> = {
         txHash: t.txHash,
@@ -132,6 +141,10 @@ export async function PATCH(req: NextRequest) {
       }
       for (const p of providedFields) {
         insertValues[p.key] = p.value
+      }
+      if (vendorDefaults) {
+        if ('classOverride' in setMap) insertValues.classOverride = setMap.classOverride
+        if ('counterpartyGlOverride' in setMap) insertValues.counterpartyGlOverride = setMap.counterpartyGlOverride
       }
 
       await tx.insert(txQbState)
@@ -164,8 +177,8 @@ export async function PATCH(req: NextRequest) {
     userId: user?.id ?? null,
     action: 'tx_qb_state.bulk_update',
     resourceType: 'transaction',
-    metadata: { fields: providedFieldKeys, txIds: foundTxIds, updated: foundTxIds.length, flipped: flippedCount },
+    metadata: { fields: providedFieldKeys, vendorDefaultsApplied: !!vendorDefaults, vendorMappingMissing: !!selectedVendor && !vendorDefaults, txIds: foundTxIds, updated: foundTxIds.length, flipped: flippedCount },
   }).catch(() => { /* swallow */ })
 
-  return NextResponse.json({ updated: txRows.length, skipped })
+  return NextResponse.json({ updated: txRows.length, skipped, vendorDefaults, vendorMappingMissing: !!selectedVendor && !vendorDefaults })
 }

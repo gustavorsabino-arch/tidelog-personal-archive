@@ -5,6 +5,7 @@ type Args = {
   value: string | null
   defaultValue: string | undefined
   onSave: (next: string | null) => Promise<void>
+  alwaysSave?: boolean
 }
 
 /**
@@ -24,7 +25,7 @@ type Args = {
  * collapse-to-null consistently when the user types/picks something equal
  * to the computed default.
  */
-export function useEditableCellState({ value, defaultValue, onSave }: Args) {
+export function useEditableCellState({ value, defaultValue, onSave, alwaysSave = false }: Args) {
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(value ?? defaultValue ?? '')
   const [saving, setSaving] = useState(false)
@@ -61,7 +62,7 @@ export function useEditableCellState({ value, defaultValue, onSave }: Args) {
         const matchesDefault = trimmed === (defaultValue ?? '')
         next = isEmpty || matchesDefault ? null : trimmed
       }
-      if (next !== value) await onSave(next)
+      if (next !== value || alwaysSave) await onSave(next)
       setJustSaved(true)
       setTimeout(() => setJustSaved(false), 900)
       setEditing(false)
