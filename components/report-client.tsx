@@ -12,9 +12,13 @@ import type { QboEntity } from '@/lib/qb/config'
 import { GlDrillModal } from '@/components/gl-drill-modal'
 import { PnlPageClient } from '@/components/pnl-page-client'
 import BalanceSheetPageClient from '@/components/balance-sheet-page-client'
+import dynamic from 'next/dynamic'
+import { TreasuryReportClient } from '@/components/treasury-report-client'
+
+const OrcaBuybackClient = dynamic(() => import('@/components/orca-buyback-client').then((mod) => mod.OrcaBuybackClient))
 
 type Entity = QboEntity | 'All'
-type View = 'mom' | 'ytd' | 'balanceSheet' | 'pnl' | 'slides'
+type View = 'mom' | 'ytd' | 'balanceSheet' | 'pnl' | 'slides' | 'treasury' | 'buyback'
 type Metric = TrendMetric
 type GroupKey = `${PnlKind}|${PnlGroup}`
 type SlideId = 'cover' | 'mom' | 'revenue' | 'net' | 'ytd' | 'operating' | 'compensation' | 'technology' | 'general'
@@ -428,9 +432,9 @@ function Slide({ slide, data, prior, monthB, year, note, onNote, editable, onOpe
   </article>
 }
 
-export function ReportClient({ initialYear, years }: { initialYear: number; years: number[] }) {
+export function ReportClient({ initialYear, years, initialView = 'mom' }: { initialYear: number; years: number[]; initialView?: View }) {
   const [year, setYear] = useState(initialYear)
-  const [view, setView] = useState<View>('mom')
+  const [view, setView] = useState<View>(initialView)
   const [entity, setEntity] = useState<Entity>('All')
   const [monthA, setMonthA] = useState(1)
   const [monthB, setMonthB] = useState(8)
@@ -438,7 +442,7 @@ export function ReportClient({ initialYear, years }: { initialYear: number; year
   const [detail, setDetail] = useState<ReportDetail | null>(null)
   const [slideIndex, setSlideIndex] = useState(0)
   const [notes, setNotes] = useState<Record<string, string>>({})
-  const { data, error, isLoading } = useSWR<PresentationFinancials>(view === 'balanceSheet' || view === 'pnl' ? null : `/api/report/financials?year=${year}`, apiFetch)
+  const { data, error, isLoading } = useSWR<PresentationFinancials>(view === 'balanceSheet' || view === 'pnl' || view === 'treasury' || view === 'buyback' ? null : `/api/report/financials?year=${year}`, apiFetch)
   const { data: prior, error: priorError } = useSWR<PresentationFinancials>(view === 'slides' ? `/api/report/financials?year=${year - 1}` : null, apiFetch)
   const available = useMemo(() => [...new Set((data?.months ?? []).filter((row) => row.entity === 'All').map((row) => row.month))].sort((a, b) => a - b), [data])
 
@@ -483,18 +487,20 @@ export function ReportClient({ initialYear, years }: { initialYear: number; year
   }, [choices, metric])
 
   return <main className="report-page">
-    <div className="page-header"><div><div className="page-title">Report</div><div className="page-sub">QuickBooks P&amp;L · management categories · C-level presentation</div></div></div>
-    <div className="report-toolbar"><div className="report-tabs" role="tablist" aria-label="Report views">{([['mom', 'MoM Comparison'], ['ytd', 'YTD Trend'], ['balanceSheet', 'Balance Sheet'], ['pnl', 'P&L'], ['slides', 'Presentation']] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={view === id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}</div>
-      {view !== 'balanceSheet' && view !== 'pnl' && <><label>Year <select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
+    <div className="page-header"><div><div className="page-title">Financial Reports</div><div className="page-sub">QuickBooks P&amp;L · treasury exposure · ORCA buyback reconciliation</div></div></div>
+    <div className="report-toolbar"><div className="report-tabs" role="tablist" aria-label="Financial reports">{([['mom', 'MoM Comparison'], ['ytd', 'YTD Trend'], ['balanceSheet', 'Balance Sheet'], ['pnl', 'P&L'], ['slides', 'Presentation'], ['treasury', 'Treasury'], ['buyback', 'ORCA Buy Back']] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={view === id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}</div>
+      {view !== 'balanceSheet' && view !== 'pnl' && view !== 'treasury' && view !== 'buyback' && <><label>Year <select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
       {view !== 'slides' && <label>Entity <select value={entity} onChange={(event) => setEntity(event.target.value as Entity)}><option value="All">Reported group</option>{ENTITIES.map((name) => <option key={name}>{name}</option>)}</select></label>}
       {view === 'mom' && <label>Compare <select value={monthA} onChange={(event) => setMonthA(Number(event.target.value))}>{MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select></label>}
       <label>{view === 'ytd' ? 'Through' : 'Month'} <select value={monthB} onChange={(event) => setMonthB(Number(event.target.value))}>{MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select></label></>}
     </div>
     {view === 'balanceSheet' && <BalanceSheetPageClient embedded />}
     {view === 'pnl' && <PnlPageClient initialEntity={entity} initialMode="ytd" initialYear={year} initialMonth={monthB} initialData={null} availableYears={years} embedded />}
-    {isLoading && !data && <div className="report-empty">Loading cached QuickBooks P&amp;Ls…</div>}
-    {error && <div className="report-warning" role="alert">Could not load P&amp;L data: {error instanceof Error ? error.message : String(error)}</div>}
-    {data && <>
+    {view === 'treasury' && <TreasuryReportClient />}
+    {view === 'buyback' && <OrcaBuybackClient />}
+    {isLoading && !data && view !== 'treasury' && view !== 'buyback' && <div className="report-empty">Loading cached QuickBooks P&amp;Ls…</div>}
+    {error && view !== 'treasury' && view !== 'buyback' && <div className="report-warning" role="alert">Could not load P&amp;L data: {error instanceof Error ? error.message : String(error)}</div>}
+    {data && view !== 'treasury' && view !== 'buyback' && <>
       {view === 'mom' && <section className="report-panel"><div className="report-section-head"><div><span>MONTHLY COMPARISON</span><h2>{entity === 'All' ? '' : `${entity} · `}{MONTHS[monthA - 1]} vs {MONTHS[monthB - 1]} {year}</h2></div><p>QB values as reported · signed credits and losses</p></div><Coverage data={data} year={year} month={monthB} entity={entity} />
         {entity === 'All' ? <>
           <EntityComparison data={data} year={year} monthA={monthA} monthB={monthB} onOpen={setDetail} />

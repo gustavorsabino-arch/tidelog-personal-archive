@@ -7,17 +7,15 @@ import { getAllowedPages, type AccessMeResponse } from '@/lib/access-model'
 
 const NAV_ITEMS = [
   { href: '/', label: 'Overview', color: '#06D6A0', section: 'Views', pageKey: 'overview' },
-  { href: '/treasury-management', label: 'On-Chain Treasury Mgmt', color: '#118AB2', section: 'Views', pageKey: 'treasury-management' },
   { href: '/transactions', label: 'Transactions', color: '#2775ca', section: 'Views', pageKey: 'transactions' },
   { href: '/gain-loss', label: 'Gain / Loss', color: '#D4A017', section: 'Views', pageKey: 'gain-loss' },
   { href: '/unrealized', label: 'Unrealized', color: '#9945ff', section: 'Views', pageKey: 'unrealized' },
   { href: '/orca-ledger', label: 'ORCA Ledger', color: '#00A8A8', section: 'Views', pageKey: 'orca-ledger' },
-  { href: '/report', label: 'Report', color: '#D4A017', section: 'Views', pageKey: 'presentation' },
+  { href: '/report', label: 'Financial Reports', color: '#D4A017', section: 'Views', pageKey: 'presentation' },
   { href: '/budget', label: 'Budget', color: '#D4A017', section: 'Views', pageKey: 'budget' },
   { href: '/approvals', label: 'Approvals', color: '#E4572E', section: 'Views', pageKey: 'approvals' },
   { href: '/vendors', label: 'Vendors / Apps', color: '#2775ca', section: 'Views', pageKey: 'vendors' },
   { href: '/wallets', label: 'Wallets', color: '#888888', section: 'Config', pageKey: 'wallets' },
-  { href: '/reports', label: 'Reports', color: '#D4A017', section: 'Config', pageKey: 'reports' },
   { href: '/admin', label: 'Access Control', color: '#d93025', section: 'Config', pageKey: 'admin' },
 ]
 

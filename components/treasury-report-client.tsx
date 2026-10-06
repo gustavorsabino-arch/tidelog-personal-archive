@@ -44,7 +44,7 @@ export function TreasuryReportClient() {
 
   return <div className="treasury-report">
     <header className="treasury-report-header">
-      <div><div className="page-title">Treasury reports</div><div className="page-sub">Portfolio exposure and concentration from the same wallet balances as Overview.</div></div>
+      <div><div className="page-title">Treasury</div><div className="page-sub">Portfolio exposure and concentration from the same wallet balances as Overview.</div></div>
       <div className="treasury-report-stamp">{data?.snapshotDate ? `Latest saved balances: ${data.snapshotDate}` : 'Awaiting balance data'}{data?.fetchedAt ? <small>Last fetched {new Date(data.fetchedAt).toLocaleString()}</small> : null}</div>
     </header>
     <div className="controls-bar treasury-report-controls">
