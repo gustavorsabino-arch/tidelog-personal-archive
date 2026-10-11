@@ -1,4 +1,4 @@
-import { like } from 'drizzle-orm'
+import { and, eq, like } from 'drizzle-orm'
 import { type QboEntity } from './config'
 
 const MONTH_ABBREV = [
@@ -25,10 +25,28 @@ export function formatIndividualDocNumber(blockTime: Date, seq: number): string 
   return `TL-${mon}-JE${seqStr}`
 }
 
-export function formatBulkDocNumber(token: string, blockTime: Date): string {
+export function formatBulkDocNumber(token: string, blockTime: Date, sequence?: number): string {
   const yyyy = blockTime.getUTCFullYear()
   const mm = String(blockTime.getUTCMonth() + 1).padStart(2, '0')
-  return `BULK-${token}-${yyyy}-${mm}`
+  const prefix = `BULK-${token}-${yyyy}-${mm}`
+  return sequence == null ? prefix : `${prefix}-${String(sequence).padStart(2, '0')}`
+}
+
+// Call under the entity/month posting advisory lock. Existing legacy bulk
+// numbers have no suffix; each new JE gets its own DocNumber and Request-Id.
+export async function getNextBulkSequence(entity: QboEntity, token: string, blockTime: Date): Promise<number> {
+  const prefix = formatBulkDocNumber(token, blockTime)
+  const [{ db }, { qbPost }, { toDbEntity }] = await Promise.all([
+    import('@/lib/db'), import('@/lib/db/schema'), import('@/lib/entity'),
+  ])
+  const rows = await db.select({ docNumber: qbPost.docNumber }).from(qbPost)
+    .where(and(eq(qbPost.entityId, toDbEntity(entity)), like(qbPost.docNumber, `${prefix}-%`)))
+  let max = 0
+  for (const row of rows) {
+    const suffix = row.docNumber.slice(prefix.length + 1)
+    if (/^\d+$/.test(suffix)) max = Math.max(max, Number(suffix))
+  }
+  return max + 1
 }
 
 export function parseDocSequence(docNumber: string, prefix: string): number | null {
@@ -80,3 +98,4 @@ export async function getNextIndividualSequence(
 
   return maxSeq + 1
 }
+

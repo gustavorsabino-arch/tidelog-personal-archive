@@ -10,6 +10,8 @@ describe('doc-number', () => {
 
   it('formats bulk JE: BULK-{TOKEN}-{YYYY-MM}', () => {
     expect(formatBulkDocNumber('USDC', new Date('2026-02-15'))).toBe('BULK-USDC-2026-02')
+    expect(formatBulkDocNumber('USDC', new Date('2026-02-15'), 1)).toBe('BULK-USDC-2026-02-01')
+    expect(formatBulkDocNumber('USDC', new Date('2026-02-15'), 2)).toBe('BULK-USDC-2026-02-02')
   })
 
   it('parses sequence number from existing doc numbers (for max-per-month query)', () => {
@@ -19,3 +21,4 @@ describe('doc-number', () => {
     expect(parseDocSequence('BULK-USDC-2026-02', 'TL-Feb')).toBe(null)
   })
 })
+

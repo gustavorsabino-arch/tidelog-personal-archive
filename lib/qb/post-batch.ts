@@ -18,6 +18,7 @@ import { buildJournalEntry, gainLossGlForEntity, UnresolvedAccountError, type Tx
 import { readCachedAccountCatalogByNumber, readCachedClassCatalogByName, readCachedVendorCatalogByName } from './cache-reads.ts'
 import {
   formatBulkDocNumber,
+  getNextBulkSequence,
   formatIndividualDocNumber,
   getNextIndividualSequence,
 } from './doc-number.ts'
@@ -32,6 +33,7 @@ import { loadPostingHistory, historyKey, type PostingHistoryEntry } from './post
 import { defaultDescription } from '@/lib/qb-state'
 import { fmtNum } from '@/lib/format'
 import { STABLE_TOKENS } from '../constants.ts'
+import { isTransferPair, type TransferLeg } from './transfer-pair'
 
 // D13 — server-enforced hard cap. Mirror of the UI cap in
 // components/transactions-page-client.tsx; rejecting a >50 request here is
@@ -447,24 +449,33 @@ export async function buildPostPlan(args: {
     )
   }
 
-  // A hash has one posting status across all wallet views of this QB entity.
-  // Check existing links before validating GL fields so another view of an
-  // already posted hash cannot offer a second journal entry.
+  // A hash can contain several distinct transfers. Only the exact reciprocal
+  // wallet movement inherits posting status from its opposite leg.
   const hashes = [...new Set(txs.map((t) => t.txHash))]
-  const linkedRows = await db.select({ txHash: txQbState.txHash })
-    .from(txQbState)
+  const linkedRows = await db.select({ txn: transaction, status: qbPost.postingStatus })
+    .from(transaction)
+    .innerJoin(txQbState, and(eq(txQbState.txHash, transaction.txHash),
+      eq(txQbState.walletAddress, transaction.walletAddress),
+      eq(txQbState.direction, transaction.direction), eq(txQbState.asset, transaction.asset)))
     .innerJoin(qbPost, eq(qbPost.id, txQbState.postId))
-    .where(and(eq(txQbState.entityId, dbEntity), inArray(txQbState.txHash, hashes),
+    .where(and(eq(transaction.entityId, dbEntity), inArray(transaction.txHash, hashes),
       inArray(qbPost.postingStatus, ['unposted', 'posted', 'posted_modified', 'posted_manually'])))
-  const linkedHashes = new Set(linkedRows.map((row) => row.txHash))
+  const leg = (t: LoadedTx): TransferLeg => ({
+    id: t.id, txHash: t.txHash, entityId: t.entityId, walletAddress: t.walletAddress,
+    counterpartyAddress: t.counterpartyAddress, direction: t.direction, asset: t.asset, qty: t.qty,
+  })
+  const linkedLegs = linkedRows.map(({ txn }) => ({
+    id: txn.id, txHash: txn.txHash, entityId: txn.entityId, walletAddress: txn.walletAddress,
+    counterpartyAddress: txn.counterparty, direction: txn.direction, asset: txn.asset, qty: Number(txn.qty),
+  }))
 
   // Partition into skipped / eligible (D5: GL required; D14: voided posts are
   // re-eligible via post-batch — they get a NEW qb_post row).
   const skipped: PostBatchResult['skipped'] = []
   const eligible: LoadedTx[] = []
   for (const t of txs) {
-    if (linkedHashes.has(t.txHash)) {
-      skipped.push({ txId: t.id, reason: 'hash already linked to a QuickBooks journal entry' })
+    if (linkedLegs.some((other) => isTransferPair(leg(t), other))) {
+      skipped.push({ txId: t.id, reason: 'matching internal transfer already linked to a QuickBooks journal entry' })
       continue
     }
     const walletGl = resolveWalletGl({
@@ -510,16 +521,14 @@ export async function buildPostPlan(args: {
     eligible.push(t)
   }
 
-  // One posting per hash, including when multiple wallet views are selected.
-  const seenHashes = new Set<string>()
-  const uniqueEligible = eligible.filter((t) => {
-    if (seenHashes.has(t.txHash)) {
-      skipped.push({ txId: t.id, reason: 'included in the same hash posting' })
-      return false
-    }
-    seenHashes.add(t.txHash)
-    return true
-  })
+  // When both reciprocal legs are selected, the JE is built from one side.
+  // Other movements in the same on-chain operation remain independent.
+  const uniqueEligible: LoadedTx[] = []
+  for (const t of eligible) {
+    if (uniqueEligible.some((other) => isTransferPair(leg(t), leg(other)))) {
+      skipped.push({ txId: t.id, reason: 'included in the matching internal transfer' })
+    } else uniqueEligible.push(t)
+  }
 
   // Partition eligible into bulk (grouped by wallet+token+month) vs individual
   // (one group per tx).
@@ -677,15 +686,27 @@ async function linkGroupMembers(
     if (own?.postId && ['unposted', 'posted', 'posted_modified', 'posted_manually'].includes(own.status ?? '')) {
       throw new Error('Transaction already linked to a QuickBooks journal entry')
     }
-    // Recheck under the entity/month advisory lock, including other wallet
-    // views that may have been reserved since the preview.
+    // Recheck the reciprocal leg under the advisory lock. Another deposit
+    // with the same hash and direction is a separate accounting movement.
     const [current] = await tx.select({ postId: txQbState.postId })
-      .from(txQbState).innerJoin(qbPost, eq(qbPost.id, txQbState.postId))
-      .where(and(eq(txQbState.txHash, m.txHash), eq(txQbState.entityId, m.entityId),
+      .from(transaction)
+      .innerJoin(txQbState, and(eq(txQbState.txHash, transaction.txHash),
+        eq(txQbState.walletAddress, transaction.walletAddress),
+        eq(txQbState.direction, transaction.direction), eq(txQbState.asset, transaction.asset)))
+      .innerJoin(qbPost, eq(qbPost.id, txQbState.postId))
+      .where(and(eq(transaction.txHash, m.txHash), eq(transaction.entityId, m.entityId),
+        eq(transaction.asset, m.asset), ne(transaction.direction, m.direction),
+        sql`(${transaction.walletAddress} = ${m.counterpartyAddress} or
+          (left(${transaction.walletAddress}, 2) = '0x' and left(${m.counterpartyAddress}, 2) = '0x'
+            and lower(${transaction.walletAddress}) = lower(${m.counterpartyAddress})))`,
+        sql`(${transaction.counterparty} = ${m.walletAddress} or
+          (left(${transaction.counterparty}, 2) = '0x' and left(${m.walletAddress}, 2) = '0x'
+            and lower(${transaction.counterparty}) = lower(${m.walletAddress})))`,
+        sql`abs(abs(${transaction.qty}) - ${Math.abs(m.qty)}) <= greatest(0.000001, 0.000000001 * ${Math.abs(m.qty)})`,
         inArray(qbPost.postingStatus, ['unposted', 'posted', 'posted_modified', 'posted_manually'])))
       .limit(1)
     if (current) {
-      throw new Error('Hash already linked to a QuickBooks journal entry')
+      throw new Error('Matching internal transfer already linked to a QuickBooks journal entry')
     }
     await tx
       .insert(txQbState)
@@ -790,7 +811,7 @@ async function reserveAndBuildJob(
             group.tx.blockTime,
             await getNextIndividualSequence(entity, group.tx.blockTime),
           )
-        : formatBulkDocNumber(group.token, group.monthDate)
+        : formatBulkDocNumber(group.token, group.monthDate, await getNextBulkSequence(entity, group.token, group.monthDate))
     await tx.update(qbPost).set({ docNumber: doc }).where(eq(qbPost.id, pending.id))
     await linkGroupMembers(tx, group, pending.id, userId, writeCpGlSnapshot)
     return { pendingId: pending.id, docNumber: doc }
@@ -816,9 +837,7 @@ async function reserveAndBuildJob(
 
   // Intuit idempotency key MUST be a URL query parameter (requestid=…); the
   // header form is not honored. Unique per company; ≤50 chars.
-  const requestId = (group.kind === 'individual' ? `tl-${group.tx.txHash}` : `tl-${docNumber}`)
-    .replace(/[^a-zA-Z0-9-]/g, '')
-    .slice(0, 50)
+  const requestId = `tl-${pendingId}`
 
   return { entity, pendingId, docNumber, jeBody: JSON.stringify(je), requestId, txnDate: je.TxnDate, memberTxIds }
 }
@@ -910,6 +929,14 @@ export async function reconcileEntity(
 
   const docNumbers: string[] = []
   for (const row of rows) {
+    // Legacy BULK-{TOKEN}-{MONTH} numbers were reused across wallets. A QB
+    // lookup by that DocNumber cannot establish which group's JE it found.
+    // Leave ambiguous reservations pending for explicit accounting review.
+    const sameDoc = await db.select({ id: qbPost.id }).from(qbPost)
+      .where(and(eq(qbPost.entityId, dbEntity), eq(qbPost.docNumber, row.docNumber),
+        inArray(qbPost.postingStatus, ['unposted', 'posted', 'posted_modified', 'posted_manually'])))
+      .limit(2)
+    if (sameDoc.length > 1) continue
     const found = await findJournalEntryByDocNumberOnly(entity, row.docNumber).catch(() => null)
     if (!found) continue
     await db.update(qbPost)
