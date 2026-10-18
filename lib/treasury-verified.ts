@@ -148,7 +148,7 @@ export async function getVerifiedHistoricalBalances(date: string, addresses: str
   })
   await db.execute(sql`
     INSERT INTO app.treasury_verified_snapshot (date, wallet_addresses, balances, fetched_at)
-    VALUES (${date}::date, ${JSON.stringify(ordered)}::jsonb, ${JSON.stringify(results)}::jsonb, ${fetchedAt})
+    VALUES (${date}::date, ${JSON.stringify(ordered)}::jsonb, ${JSON.stringify(results)}::jsonb, ${fetchedAt.toISOString()}::timestamptz)
     ON CONFLICT (date) DO UPDATE SET wallet_addresses = EXCLUDED.wallet_addresses,
       balances = EXCLUDED.balances, fetched_at = EXCLUDED.fetched_at
   `)

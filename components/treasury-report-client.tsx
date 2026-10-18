@@ -23,7 +23,10 @@ export function TreasuryReportClient() {
     { refreshInterval: (latest) => latest && 'status' in latest ? latest.retryAfterMs : 0 },
   )
   const progress = response && 'status' in response ? response : null
-  const data = response && !('status' in response) ? response : null
+  // Never render the previous snapshot under a newly selected historical date.
+  // SWR can retain its last successful response when the new request fails.
+  const data = response && !('status' in response) && (!asOf || response.snapshotDate === asOf)
+    ? response : null
   const total = data?.grandTotalUSD ?? 0
   const snapshotAgeDays = data?.snapshotDate
     ? Math.floor((Date.now() - Date.parse(`${data.snapshotDate}T00:00:00Z`)) / 86_400_000)
