@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import useSWR from 'swr'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiPost } from '@/lib/api'
 import { BANK_TOKENS, ENTITIES, ENTITY_COLORS, STABLE_TOKENS, TOKEN_COLORS } from '@/lib/constants'
 import { fmtNum, fmtUSD } from '@/lib/format'
 import type { TreasuryOverview } from '@/lib/types'
@@ -14,6 +14,8 @@ export function TreasuryReportClient() {
   const [entity, setEntity] = useState('')
   const [asOf, setAsOf] = useState('')
   const [walletSearch, setWalletSearch] = useState('')
+  const [refreshingBalances, setRefreshingBalances] = useState(false)
+  const [refreshMessage, setRefreshMessage] = useState('')
   const query = new URLSearchParams({ ...(entity ? { entity } : {}), ...(asOf ? { as_of: asOf } : {}) })
   const { data, error, isLoading, isValidating, mutate } = useSWR<TreasuryOverview>(
     `/api/treasury/overview?${query}`, apiFetch<TreasuryOverview>,
@@ -41,22 +43,41 @@ export function TreasuryReportClient() {
   const stable = assets.reduce((sum, [token, row]) => sum + (STABLE_TOKENS.has(token) && !BANK_TOKENS.has(token) ? row.usd : 0), 0)
   const other = total - bank - stable
   const unpriced = assets.filter(([token, row]) => !STABLE_TOKENS.has(token) && row.amount !== 0 && data?.prices[token] == null).map(([token]) => token)
+  async function refreshOnchain() {
+    setRefreshingBalances(true)
+    setRefreshMessage('')
+    try {
+      const result = await apiPost<{ succeeded: number; failed: number; skipped?: number }>('/api/admin/cron/fetch-balances', {})
+      setRefreshMessage(`${result.succeeded} Solana wallet(s) fetched; ${result.failed} failed; ${result.skipped ?? 0} unsupported.`)
+      await mutate()
+    } catch (err) {
+      setRefreshMessage(err instanceof Error ? err.message : 'Could not fetch on-chain balances')
+    } finally {
+      setRefreshingBalances(false)
+    }
+  }
 
   return <div className="treasury-report">
     <header className="treasury-report-header">
       <div><div className="page-title">Treasury</div><div className="page-sub">Portfolio exposure and concentration from the same wallet balances as Overview.</div></div>
-      <div className="treasury-report-stamp">{data?.snapshotDate ? `Latest saved balances: ${data.snapshotDate}` : 'Awaiting balance data'}{data?.fetchedAt ? <small>Last fetched {new Date(data.fetchedAt).toLocaleString()}</small> : null}</div>
+      <div className="treasury-report-stamp">{data?.snapshotDate ? (asOf ? `On-chain date: ${data.snapshotDate}` : `Newest saved record: ${data.snapshotDate}`) : 'Awaiting balance data'}{data?.fetchedAt ? <small>{asOf ? 'Verified' : 'Most recently fetched'} {new Date(data.fetchedAt).toLocaleString()}</small> : null}</div>
     </header>
     <div className="controls-bar treasury-report-controls">
       <label>Entity<select className="fsel" value={entity} onChange={(event) => setEntity(event.target.value)}><option value="">All entities</option>{ENTITIES.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-      <label>As of<input className="fsearch" type="date" value={asOf} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setAsOf(event.target.value)} /></label>
+      <label>As of (UTC close)<input className="fsearch" type="date" value={asOf} max={new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)} onChange={(event) => setAsOf(event.target.value)} /></label>
       {asOf && <button className="fsel" type="button" onClick={() => setAsOf('')}>Today</button>}
       <button className="fetch-btn" type="button" onClick={() => void mutate()} disabled={isValidating}>{isValidating ? '⟳ Reloading…' : '⟳ Reload report'}</button>
+      {!asOf && <button className="fetch-btn" type="button" onClick={() => void refreshOnchain()} disabled={refreshingBalances}>{refreshingBalances ? 'Fetching wallets…' : 'Fetch Solana balances now'}</button>}
     </div>
+    {refreshMessage && <div className="report-warning" role="status">{refreshMessage}</div>}
     {error && <div className="status-bar"><span className="status-dot warn" /><span className="status-text">{error instanceof Error ? error.message : 'Could not load treasury balances'}</span></div>}
     {isLoading && !data ? <div className="card treasury-report-loading">Loading portfolio report…</div> : data ? <>
-      {!asOf && snapshotAgeDays != null && snapshotAgeDays > 1 && <div className="report-warning" role="status">Balance data is {snapshotAgeDays} days old (last recorded {data.snapshotDate}). USD values may use newer prices on those saved quantities. “Reload report” does not fetch new wallet balances.</div>}
-      <div className="treasury-report-scope">{asOf ? 'Historical snapshot · Solana spot balances only. EVM, LPs and decoded on-chain positions are not available historically.' : 'Latest saved snapshot · Finance-visible balances tracked in Overview. EVM balances, LPs and decoded protocol positions are outside this dataset; Treasury Management wallet balances below are included in the portfolio total.'}{unpriced.length ? ` Missing price for ${unpriced.join(', ')}; their USD contribution is zero in both Overview and Reports.` : ''}</div>
+      {!asOf && snapshotAgeDays != null && snapshotAgeDays > 1 && <div className="report-warning" role="status">Newest balance record is {snapshotAgeDays} days old ({data.snapshotDate}); other wallets can be older. USD values may use newer prices on those saved quantities. “Reload report” does not fetch wallet balances.</div>}
+      <div className="treasury-report-scope">{asOf ? 'Historical on-chain check · All tracked Solana spot balances queried for the selected UTC close, including zeroes. Uses today’s wallet classification. EVM, LPs, decoded protocol positions and manual balances are excluded. Helius may undercount a mint held in multiple token accounts.' : 'Latest saved snapshot · Solana wallet balances plus manually tracked bank/protocol positions; manual values are not on-chain verified. EVM balances, LPs and decoded protocol positions are outside this dataset.'}{unpriced.length ? ` Missing price for ${unpriced.join(', ')}; their USD contribution is zero in both Overview and Reports.` : ''}</div>
+      {data.coverage && <div className="report-warning" role="status">{asOf ? 'Historical Solana coverage' : 'Saved Solana coverage'}: {data.coverage.verifiedSolWallets}/{data.coverage.expectedSolWallets} internal wallets · {data.coverage.manualWallets} manual and {data.coverage.otherChainWallets} other-chain wallets {asOf ? 'excluded' : 'tracked separately or unsupported'}.
+        {data.coverage.newInternalWallets.length > 0 && <details><summary>{data.coverage.newInternalWallets.length} internal wallet(s) added since July 2026 — inspect balance coverage</summary><ul>{data.coverage.newInternalWallets.map((w, index) => <li key={`${w.label}-${index}`}>{w.label} ({w.chain}) · latest saved balance: {w.latestBalanceDate ?? 'none'}</li>)}</ul></details>}
+        {data.coverage.newExternalWallets.length > 0 && <details><summary>{data.coverage.newExternalWallets.length} wallet(s) added since July are marked external and excluded</summary><ul>{data.coverage.newExternalWallets.map((w, index) => <li key={`${w.label}-${index}`}>{w.label} ({w.chain})</li>)}</ul></details>}
+      </div>}
       <div className="treasury-report-kpis">
         <div className="card"><span>Total portfolio</span><strong>{amount(total)}</strong><small>{data.wallets.length} wallets · {entity || 'reported entities'}</small></div>
         <div className="card"><span>Stablecoins</span><strong>{amount(stable)}</strong><small>{share(stable, total)} of portfolio</small></div>

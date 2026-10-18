@@ -5,15 +5,16 @@ import { buildTreasuryOverview } from '@/lib/overview'
 import { toDisplayEntity } from '@/lib/entity'
 import { getCurrentPrices, getClosingPrice } from '@/lib/prices'
 import { FOCUS_TOKENS, STABLE_TOKENS } from '@/lib/constants'
+import { getVerifiedHistoricalBalances } from '@/lib/treasury-verified'
 import type { BalanceSnapshot, Prices, TreasuryOverview, PriceMeta, PriceSourceTag, PriceKind, Wallet } from '@/lib/types'
 
 /**
  * Treasury overview, optionally as-of a historical date.
  *
  * - `asOf` null/undefined → latest snapshot, current prices (existing behavior).
- * - `asOf = "YYYY-MM-DD"` → latest snapshot per (wallet, token) where date ≤ asOf,
- *   priced with DefiLlama historical at that date's midnight UTC. Stablecoins
- *   stay at $1 via the same code path used everywhere else.
+ * - `asOf = "YYYY-MM-DD"` → Helius historical on-chain balance of each tracked
+ *   token at 23:59:59 UTC, priced at the historical daily close. Incomplete
+ *   sets fail rather than quietly carrying stale balances forward.
  *
  * Coverage caveat: `balance_snapshot` is Solana-only (the EVM cron is a stub),
  * so EVM wallets render as empty at any historical date. Whirlpool LPs and
@@ -27,9 +28,8 @@ export async function getTreasuryOverview(
   // Validate asOf shape before letting it near the SQL builder.
   const asOfDate = asOf && /^\d{4}-\d{2}-\d{2}$/.test(asOf) ? asOf : null
 
-  // Latest snapshot per (wallet, token), bounded by asOf when set. Per-wallet
-  // partitioning is required — filtering by a single global max(date) would
-  // silently drop any wallet whose newest snapshot isn't on that exact date.
+  // The latest view still uses the saved Overview snapshots. Historical
+  // reporting follows a separate verified on-chain path below.
   const balanceQuery = db
     .select({
       date: balanceSnapshot.date,
@@ -40,7 +40,7 @@ export async function getTreasuryOverview(
       rn: sql<number>`(row_number() over (partition by ${balanceSnapshot.walletAddress}, ${balanceSnapshot.token} order by ${balanceSnapshot.date} desc))::int`.as('rn'),
     })
     .from(balanceSnapshot)
-    .where(asOfDate ? sql`${balanceSnapshot.date} <= ${asOfDate}` : sql`true`)
+    .where(sql`true`)
     .then((rows) => rows.filter((r) => r.rn === 1).map(({ rn: _rn, ...rest }) => rest))
 
   const kind: PriceKind = asOfDate ? 'close' : 'live'
@@ -48,23 +48,38 @@ export async function getTreasuryOverview(
     ? getHistoricalPricesAtDate(asOfDate)
     : getCurrentPrices()
 
-  const [walletRows, balanceRows, priceResult] = await Promise.all([
+  const [walletRows, savedRows, priceResult] = await Promise.all([
     db.select().from(wallet).orderBy(wallet.label),
     balanceQuery,
     pricesPromise,
   ])
   const currentPrices: Prices = priceResult.prices
   const priceSources = priceResult.sources
-
-  // For historical view, the displayed snapshot date is the chosen asOf even
-  // if no row matches it — finance team wants to know "the report is as of X".
-  const latestDate = asOfDate ?? (balanceRows[0]?.date ?? null)
+  const financeWallets = walletRows.filter((w) => w.type === 'internal' && !w.hiddenFromFinance &&
+    (!entityFilter || toDisplayEntity(w.entityId) === entityFilter))
+  const solWallets = financeWallets.filter((w) => w.chain === 'SOL')
+  const manualWallets = financeWallets.filter((w) => w.chain === 'MANUAL')
+  const otherChainWallets = financeWallets.filter((w) => w.chain !== 'SOL' && w.chain !== 'MANUAL')
+  const historical = asOfDate
+    ? await getVerifiedHistoricalBalances(asOfDate,
+        walletRows.filter((w) => w.type === 'internal' && !w.hiddenFromFinance && w.chain === 'SOL').map((w) => w.address))
+    : null
+  const balanceRows = historical ? historical.balances : savedRows
+  const latestDate = asOfDate ?? savedRows.reduce<string | null>((latest, row) =>
+    !latest || row.date > latest ? row.date : latest, null)
 
   const balances: BalanceSnapshot['balances'] = {}
   for (const row of balanceRows) {
     const walletBalances = balances[row.walletAddress] ?? {}
     walletBalances[row.token] = Number(row.amount)
     balances[row.walletAddress] = walletBalances
+  }
+  if (historical) {
+    for (const row of historical.balances) {
+      if (Number(row.amount) > 0 && !STABLE_TOKENS.has(row.token) && !currentPrices[row.token]) {
+        throw new Error(`Historical closing price missing for ${row.token}`)
+      }
+    }
   }
 
   const prices: Prices = currentPrices
@@ -74,7 +89,7 @@ export async function getTreasuryOverview(
     priceMeta[token] = { source, kind }
   }
 
-  const mostRecentFetched = balanceRows.reduce<Date | null>((acc, row) => {
+  const mostRecentFetched = savedRows.reduce<Date | null>((acc, row) => {
     const t = row.fetchedAt
     if (!acc || (t && t > acc)) return t
     return acc
@@ -82,12 +97,12 @@ export async function getTreasuryOverview(
 
   const snapshot: BalanceSnapshot = {
     date: latestDate ?? '',
-    fetchedAt: mostRecentFetched ? mostRecentFetched.toISOString() : '',
+    fetchedAt: historical?.fetchedAt ?? (mostRecentFetched ? mostRecentFetched.toISOString() : ''),
     prices,
     balances,
   }
 
-  const registry: Wallet[] = walletRows.map((w) => ({
+  const registry: Wallet[] = (historical ? walletRows.filter((w) => w.chain === 'SOL') : walletRows).map((w) => ({
     address: w.address,
     label: w.label,
     chain: w.chain,
@@ -101,7 +116,34 @@ export async function getTreasuryOverview(
     updatedAt: w.updatedAt.toISOString(),
   }))
 
-  return { ...buildTreasuryOverview(registry, snapshot, prices, entityFilter ?? null), priceMeta }
+  const lastSavedDateByWallet = new Map<string, string>()
+  for (const row of savedRows) {
+    const previous = lastSavedDateByWallet.get(row.walletAddress)
+    if (!previous || row.date > previous) lastSavedDateByWallet.set(row.walletAddress, row.date)
+  }
+  const newInternalWallets = financeWallets
+    .filter((w) => w.createdAt >= new Date('2026-08-01T00:00:00Z'))
+    .map((w) => ({ label: w.label, chain: w.chain, latestBalanceDate: lastSavedDateByWallet.get(w.address) ?? null }))
+  const newExternalWallets = walletRows
+    .filter((w) => w.type === 'external' && w.createdAt >= new Date('2026-08-01T00:00:00Z') &&
+      (!entityFilter || toDisplayEntity(w.entityId) === entityFilter))
+    .map((w) => ({ label: w.label, chain: w.chain }))
+  const coveredSolWallets = solWallets.filter((w) => lastSavedDateByWallet.has(w.address)).length
+  return {
+    ...buildTreasuryOverview(registry, snapshot, prices, entityFilter ?? null), priceMeta,
+    coverage: {
+      source: historical ? 'helius-historical' as const : 'saved-snapshot' as const,
+      expectedSolWallets: solWallets.length,
+      verifiedSolWallets: historical ? solWallets.length : coveredSolWallets,
+      manualWallets: manualWallets.length,
+      otherChainWallets: otherChainWallets.length,
+      newInternalWallets,
+      newExternalWallets,
+      limitations: historical
+        ? ['Six tracked Solana spot assets only', 'Current wallet ownership/classification is applied to past dates', 'Helius may undercount wallets with multiple token accounts for the same mint']
+        : ['Saved balances can be stale', 'Manual bank and protocol positions are not verified on-chain'],
+    },
+  }
 }
 
 // Closing prices (23:59:59 UTC) for all FOCUS_TOKENS on the as-of date, via the
@@ -121,3 +163,4 @@ async function getHistoricalPricesAtDate(
   }
   return { prices, sources }
 }
+

@@ -194,6 +194,16 @@ export interface TreasuryOverview {
   snapshotDate: string | null
   fetchedAt: string | null
   grandTotalUSD: number
+  coverage?: {
+    source: 'helius-historical' | 'saved-snapshot'
+    expectedSolWallets: number
+    verifiedSolWallets: number
+    manualWallets: number
+    otherChainWallets: number
+    newInternalWallets: Array<{ label: string; chain: string; latestBalanceDate: string | null }>
+    newExternalWallets: Array<{ label: string; chain: string }>
+    limitations: string[]
+  }
 }
 
 export interface GainLossEntry {
@@ -493,3 +503,4 @@ export interface UnrealizedResponse {
   missingPrices: string[]
   computedAt: string
 }
+

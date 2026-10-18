@@ -1,7 +1,7 @@
 import { db } from '@/lib/db'
 import { token, balanceSnapshot } from '@/lib/db/schema'
 import { heliusRpc } from '@/lib/helius'
-import { getSym } from '@/lib/constants'
+import { FOCUS_TOKENS, getSym } from '@/lib/constants'
 
 export type WalletRow = {
   address: string
@@ -43,7 +43,14 @@ async function fetchWalletBalance(address: string): Promise<Record<string, numbe
     ),
   ])
 
-  balances.SOL = (balRes?.result?.value || 0) / 1e9
+  // Never convert an upstream RPC failure into a zero-balance snapshot.
+  // The historical/current report relies on a successful fetch being complete.
+  if (typeof balRes?.result?.value !== 'number' ||
+      tokResults.some((response) => !Array.isArray(response?.result?.value))) {
+    throw new Error('Incomplete Solana balance RPC response')
+  }
+
+  balances.SOL = balRes.result.value / 1e9
 
   for (const tokRes of tokResults) {
     for (const acc of (tokRes?.result?.value || [])) {
@@ -85,8 +92,11 @@ export async function fetchSolBalances(wallets: WalletRow[]): Promise<FetchBalan
       }
 
       const { address, balances } = r.value
-      const rows = Object.entries(balances)
-        .filter(([sym, amt]) => tokenSet.has(sym) && amt > 0)
+      // Persist zero for tracked mints too: otherwise the previous positive
+      // snapshot survives forever when a wallet sends all of a token away.
+      const rows = FOCUS_TOKENS
+        .filter((sym) => tokenSet.has(sym))
+        .map((sym) => [sym, balances[sym] ?? 0] as const)
         .map(([sym, amt]) => ({
           date: today,
           walletAddress: address,
@@ -116,3 +126,4 @@ export async function fetchSolBalances(wallets: WalletRow[]): Promise<FetchBalan
 
   return { succeeded, failed }
 }
+
