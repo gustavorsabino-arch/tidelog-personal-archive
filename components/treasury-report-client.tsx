@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { apiFetch, apiPost } from '@/lib/api'
-import { BANK_TOKENS, ENTITIES, ENTITY_COLORS, STABLE_TOKENS, TOKEN_COLORS } from '@/lib/constants'
+import { BANK_TOKENS, ENTITIES, ENTITY_COLORS, FOCUS_TOKENS, STABLE_TOKENS, TOKEN_COLORS } from '@/lib/constants'
 import { fmtNum, fmtUSD } from '@/lib/format'
 import type { TreasuryOverview } from '@/lib/types'
 
@@ -78,7 +78,7 @@ export function TreasuryReportClient() {
     </div>
     {refreshMessage && <div className="report-warning" role="status">{refreshMessage}</div>}
     {error && <div className="status-bar"><span className="status-dot warn" /><span className="status-text">{error instanceof Error ? error.message : 'Could not load treasury balances'}</span></div>}
-    {progress ? <div className="card treasury-report-loading" role="status">Verifying historical on-chain balances: {progress.completed} of {progress.total} wallet assets. The report will appear when all balances are checked.{progress.retryAfterMs >= 30_000 ? ' Helius is limiting requests; retrying after its cooldown.' : ''}</div> : isLoading && !data ? <div className="card treasury-report-loading">Loading portfolio report…</div> : data ? <>
+    {progress ? <div className="card treasury-report-loading" role="status">Verifying {progress.completed} of {progress.total} balance checks ({progress.total / FOCUS_TOKENS.length} Solana wallets × {FOCUS_TOKENS.length} assets). The report will appear when all balances are checked.{progress.retryAfterMs >= 30_000 ? ' Helius is limiting requests; retrying after its cooldown.' : ''}</div> : isLoading && !data ? <div className="card treasury-report-loading">Loading portfolio report…</div> : data ? <>
       {!asOf && snapshotAgeDays != null && snapshotAgeDays > 1 && <div className="report-warning" role="status">Newest balance record is {snapshotAgeDays} days old ({data.snapshotDate}); other wallets can be older. USD values may use newer prices on those saved quantities. “Reload report” does not fetch wallet balances.</div>}
       <div className="treasury-report-scope">{asOf ? 'Historical on-chain check · All tracked Solana spot balances queried for the selected UTC close, including zeroes. Uses today’s wallet classification. EVM, LPs, decoded protocol positions and manual balances are excluded. Helius may undercount a mint held in multiple token accounts.' : 'Latest saved snapshot · Solana wallet balances plus manually tracked bank/protocol positions; manual values are not on-chain verified. EVM balances, LPs and decoded protocol positions are outside this dataset.'}{unpriced.length ? ` Missing price for ${unpriced.join(', ')}; their USD contribution is zero in both Overview and Reports.` : ''}</div>
       {data.coverage && <div className="report-warning" role="status">{asOf ? 'Historical Solana coverage' : 'Saved Solana coverage'}: {data.coverage.verifiedSolWallets}/{data.coverage.expectedSolWallets} internal wallets · {data.coverage.manualWallets} manual and {data.coverage.otherChainWallets} other-chain wallets {asOf ? 'excluded' : 'tracked separately or unsupported'}.

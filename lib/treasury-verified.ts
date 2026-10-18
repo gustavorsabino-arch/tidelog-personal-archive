@@ -112,8 +112,9 @@ export async function getVerifiedHistoricalBalances(date: string, addresses: str
   const row = cached[0]
   const tasks = ordered.flatMap((address) => FOCUS_TOKENS.map((token) => ({ address, token })))
   const expectedKeys = new Set(tasks.map(({ address, token }) => `${address}:${token}`))
-  const sameWallets = row && JSON.stringify(row.wallet_addresses) === JSON.stringify(ordered)
-  const saved = sameWallets && Array.isArray(row.balances) ? row.balances as HistoricalBalance[] : []
+  // Reuse previously verified wallet/token pairs when an external wallet is
+  // removed or a new internal wallet is added. The checkpoint is date-scoped.
+  const saved = row && Array.isArray(row.balances) ? row.balances as HistoricalBalance[] : []
   const byKey = new Map<string, HistoricalBalance>()
   for (const entry of saved) {
     if (entry && expectedKeys.has(`${entry.walletAddress}:${entry.token}`) &&

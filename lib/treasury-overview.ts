@@ -55,17 +55,22 @@ export async function getTreasuryOverview(
   ])
   const currentPrices: Prices = priceResult.prices
   const priceSources = priceResult.sources
-  const financeWallets = walletRows.filter((w) => w.type === 'internal' && !w.hiddenFromFinance &&
+  // Some addresses are marked internal for transaction workflows even though
+  // their owning entity is External. They are not ORCA treasury assets.
+  const treasuryWalletRows = walletRows.filter((w) => toDisplayEntity(w.entityId) !== 'External')
+  const treasuryAddresses = new Set(treasuryWalletRows.map((w) => w.address))
+  const treasurySavedRows = savedRows.filter((row) => treasuryAddresses.has(row.walletAddress))
+  const financeWallets = treasuryWalletRows.filter((w) => w.type === 'internal' && !w.hiddenFromFinance &&
     (!entityFilter || toDisplayEntity(w.entityId) === entityFilter))
   const solWallets = financeWallets.filter((w) => w.chain === 'SOL')
   const manualWallets = financeWallets.filter((w) => w.chain === 'MANUAL')
   const otherChainWallets = financeWallets.filter((w) => w.chain !== 'SOL' && w.chain !== 'MANUAL')
   const historical = asOfDate
     ? await getVerifiedHistoricalBalances(asOfDate,
-        walletRows.filter((w) => w.type === 'internal' && !w.hiddenFromFinance && w.chain === 'SOL').map((w) => w.address))
+        treasuryWalletRows.filter((w) => w.type === 'internal' && !w.hiddenFromFinance && w.chain === 'SOL').map((w) => w.address))
     : null
-  const balanceRows = historical ? historical.balances : savedRows
-  const latestDate = asOfDate ?? savedRows.reduce<string | null>((latest, row) =>
+  const balanceRows = historical ? historical.balances : treasurySavedRows
+  const latestDate = asOfDate ?? treasurySavedRows.reduce<string | null>((latest, row) =>
     !latest || row.date > latest ? row.date : latest, null)
 
   const balances: BalanceSnapshot['balances'] = {}
@@ -89,7 +94,7 @@ export async function getTreasuryOverview(
     priceMeta[token] = { source, kind }
   }
 
-  const mostRecentFetched = savedRows.reduce<Date | null>((acc, row) => {
+  const mostRecentFetched = treasurySavedRows.reduce<Date | null>((acc, row) => {
     const t = row.fetchedAt
     if (!acc || (t && t > acc)) return t
     return acc
@@ -102,7 +107,7 @@ export async function getTreasuryOverview(
     balances,
   }
 
-  const registry: Wallet[] = (historical ? walletRows.filter((w) => w.chain === 'SOL') : walletRows).map((w) => ({
+  const registry: Wallet[] = (historical ? treasuryWalletRows.filter((w) => w.chain === 'SOL') : treasuryWalletRows).map((w) => ({
     address: w.address,
     label: w.label,
     chain: w.chain,
@@ -117,7 +122,7 @@ export async function getTreasuryOverview(
   }))
 
   const lastSavedDateByWallet = new Map<string, string>()
-  for (const row of savedRows) {
+  for (const row of treasurySavedRows) {
     const previous = lastSavedDateByWallet.get(row.walletAddress)
     if (!previous || row.date > previous) lastSavedDateByWallet.set(row.walletAddress, row.date)
   }
@@ -163,4 +168,3 @@ async function getHistoricalPricesAtDate(
   }
   return { prices, sources }
 }
-
